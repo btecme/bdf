@@ -4,7 +4,7 @@
 
 | BDF milestone | Status | Evidence / next gate |
 |---|---|---|
-| BDF-00: reproducible fork baseline | BUILD-001 evidence recorded, baseline **not green**; review pending | Rust 1.99.0 pinned; desktop and CLI build, fmt, clippy, layers, assets and parity pass; headless and real-desktop smoke pass ([evidence](bdf-evidence/BUILD-001.md)). 13 to 16 `pdfcraft-ui-egui` tests fail, 14 identically at the pristine baseline (open-worker timing). wasm, cargo-deny, the font build, hosted CI, BDF release identity and immutable release dependencies remain unrun or open. |
+| BDF-00: reproducible fork baseline | BUILD-001 reviewed, **changes requested**; baseline not green | [Codex review](bdf-evidence/BUILD-001-codex-review.md) verified 109 artifact hashes and reproduced two UI failures. Fourteen failures have pristine-baseline evidence; two intermittent cases need further diagnosis. [Bounded follow-up](bdf-build-001-followup.md): fix async test synchronization and rerun scoped gates. BUILD-002 remains pending; other unverified baseline gates and BDF release identity remain open. |
 
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (BDF-00: BUILD-001 Windows baseline evidence, scoped UI tests fail on the baseline itself; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -168,6 +168,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | BUILD-001 Codex review completed; correction requested and BUILD-002 kept pending. |
 | 2026-10-13 | minor | BDF-00: BUILD-001 baseline evidence (Windows build and gates pass; scoped UI tests fail on the baseline itself); upstream estimates unchanged. |
 | 2026-10-13 | minor | BDF-00 links implementation spec and bounded kickoff; no implementation status or upstream estimate advanced. |
 | 2026-10-13 | minor | Added BDF-00 fork baseline row and desktop-first planning links; upstream estimates unchanged. |

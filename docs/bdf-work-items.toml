@@ -8,18 +8,20 @@ spec = "docs/bdf-build-spec.md"
 kickoff = "docs/bdf-claude-kickoff.md"
 baseline_commit = "7437bde378f43856eada40af25b983812e615e8a"
 default_status = "pending"
-# Status vocabulary: pending -> pending_review (implemented, evidence recorded, awaiting Codex review and the
-# owner) -> verified (cited evidence rerun on the reviewed revision, spec section 9). Nothing is verified yet.
+# Status vocabulary: pending -> pending_review -> changes_requested or verified.
+# Verified requires cited evidence rerun on the reviewed revision (spec section 9). Nothing is verified yet.
 
 [[work_item]]
 id = "BUILD-001"
 title = "Establish and verify the fork baseline"
-status = "pending_review"
+status = "changes_requested"
+review = "docs/bdf-evidence/BUILD-001-codex-review.md"
+followup = "docs/bdf-build-001-followup.md"
 evidence = "docs/bdf-evidence/BUILD-001.md"
 evidence_baseline_commit = "7437bde378f43856eada40af25b983812e615e8a"
 evidence_tested_tree = "fa724bcbdddf10ce17c58e7cee78c878f24de981"
 baseline_green = false
-status_note = "Built, linted and smoke-tested on Windows 11 x64, but 13 to 16 pdfcraft-ui-egui tests fail on every run and at the pristine baseline (open-worker timing, see the evidence). wasm, deny, fonts, hosted CI, MSRV and the other checks in the evidence are unrun. BUILD-002 is conditionally ready."
+status_note = "Codex verified all 109 evidence artifact hashes and independently reproduced two targeted UI failures. 14 failures have pristine-baseline evidence; two intermittent cases need further diagnosis. Fix bounded asynchronous test synchronization without weakening assertions and rerun scoped gates. Baseline is not green; BUILD-002 remains pending. wasm, deny, fonts, hosted CI and MSRV remain unverified."
 priority = "P0"
 depends_on = []
 prd_milestone = "BDF-00"
