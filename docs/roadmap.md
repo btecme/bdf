@@ -4,8 +4,9 @@
 
 | BDF milestone | Status | Evidence / next gate |
 |---|---|---|
-| BDF-00: reproducible fork baseline | Review/build handoff prepared; implementation pending | [Build specification](bdf-build-spec.md), [work items](bdf-work-items.toml) and [BUILD-001 kickoff](bdf-claude-kickoff.md) ready. Restricted visual branding removed. Rust toolchain, build/tests, Cargo asset checks, BDF release identity and immutable release dependencies remain to verify or implement. |
+| BDF-00: reproducible fork baseline | BUILD-001 evidence recorded, baseline **not green**; review pending | Rust 1.99.0 pinned; desktop and CLI build, fmt, clippy, layers, assets and parity pass; headless and real-desktop smoke pass ([evidence](bdf-evidence/BUILD-001.md)). 13 to 16 `pdfcraft-ui-egui` tests fail, 14 identically at the pristine baseline (open-worker timing). wasm, cargo-deny, the font build, hosted CI, BDF release identity and immutable release dependencies remain unrun or open. |
 
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (BDF-00: BUILD-001 Windows baseline evidence, scoped UI tests fail on the baseline itself; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M4: Extract and Split preserve shared Type 3 glyph resources; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M2: packed TIFF-predictor RGB rows retain their byte boundaries; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -167,6 +168,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | BDF-00: BUILD-001 baseline evidence (Windows build and gates pass; scoped UI tests fail on the baseline itself); upstream estimates unchanged. |
 | 2026-10-13 | minor | BDF-00 links implementation spec and bounded kickoff; no implementation status or upstream estimate advanced. |
 | 2026-10-13 | minor | Added BDF-00 fork baseline row and desktop-first planning links; upstream estimates unchanged. |
 | 2026-10-12 | minor | M13: CLI check directory identity, with overlap and symlink regressions; estimates unchanged |

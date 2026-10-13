@@ -148,6 +148,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-13 (BDF BUILD-001 baseline):** First Windows 11 x64 build of the fork: Rust 1.99.0 installed per user and pinned in `rust-toolchain.toml`; `pdfcraft` and `pdfcraft-cli` build with `--locked -j 2`; fmt, clippy `-D warnings` on three crates, `cargo xtask layers`, `assets` (the generator reproduces the pending `ATTRIBUTION.md` byte for byte) and `parity` pass. A synthetic PDF opens, renders, rotates, undoes, redoes, saves and reopens headlessly with checked pixels, and the real desktop does the same through the opt-in control channel. **The baseline is not green:** 13 to 16 `pdfcraft-ui-egui` tests that wait only a few frames for the asynchronous open worker (#1493) fail, 14 of them identically on the pristine baseline commit. wasm, cargo-deny, the optional font build, MSRV 1.95 and hosted CI are unrun. Evidence and limits: [docs/bdf-evidence/BUILD-001.md](docs/bdf-evidence/BUILD-001.md); the work item is `pending_review`. Upstream estimates unchanged.
+
 - **2026-10-13 (BDF build handoff):** Prepared the [build specification](docs/bdf-build-spec.md), [17 dependency-ordered work items](docs/bdf-work-items.toml) and [bounded Claude Code kickoff](docs/bdf-claude-kickoff.md). Contracts cover service layering, local grants/revisions, durable saves, resource limits, workers and desktop acceptance. Start with BUILD-001 baseline verification; all implementation tasks remain pending or deferred. No implementation/runtime gate was newly passed; upstream readiness estimates unchanged.
 
 - **2026-10-13 (BDF foundation review and PRD):** Completed a targeted source review and [desktop-first PRD draft](docs/bdf-prd-draft.md), with [findings and verification limits](docs/bdf-foundation-review.md). Owner direction: Windows 11, local-first, general-office core; web follows. Removed restricted ArtCraft visual marks and the attributed marked screenshot under AGENTS.md. Remaining repository asset hashes/license-file existence and diff whitespace passed; Cargo is unavailable, so build, tests and prescribed asset/parity gates remain unverified. No upstream feature/readiness estimates changed.
@@ -428,6 +430,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | BDF BUILD-001: Windows baseline builds and passes its gates; scoped UI tests fail (open-worker timing), so the baseline is not green; evidence recorded, review pending. Estimates unchanged. |
 | 2026-10-13 | minor | BDF implementation spec and baseline-first handoff prepared; implementation remains pending. |
 | 2026-10-13 | minor | BDF foundation review and desktop-first PRD draft; restricted fork branding removed; source-level review only, Rust gates unverified. |
 | 2026-10-12 | minor | M3/#1364 candidate: absolute local GoToR links require desktop consent or headless allow_absolute; existing relative navigation and validation retained. Estimates unchanged. |
