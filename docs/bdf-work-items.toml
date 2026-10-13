@@ -1,0 +1,272 @@
+# BDF build plan. Planning status is not proof of implementation or release readiness.
+# Evidence must name the actual reviewed commit and real commands/artifacts.
+schema_version = 1
+spec_version = "0.1"
+updated = "2026-10-13"
+target = "Windows 11 x64 desktop"
+spec = "docs/bdf-build-spec.md"
+kickoff = "docs/bdf-claude-kickoff.md"
+baseline_commit = "7437bde378f43856eada40af25b983812e615e8a"
+default_status = "pending"
+
+[[work_item]]
+id = "BUILD-001"
+title = "Establish and verify the fork baseline"
+status = "pending"
+priority = "P0"
+depends_on = []
+prd_milestone = "BDF-00"
+findings = ["F12"]
+requirements = ["CORE-01", "CORE-06", "CORE-10"]
+touch = ["rust-toolchain.toml (if introduced after verification)", ".github/workflows/ci.yml", "docs/development.md", "existing review and branding changes"]
+deliverables = [
+  "Record git/worktree state; preserve existing edits and identify the reviewed snapshot without assuming HEAD contains them.",
+  "Verify official Rust/MSVC/Windows SDK prerequisites; select and pin a toolchain compatible with workspace MSRV after a successful build, and align CI.",
+  "Build desktop and CLI with the lockfile; run bounded scoped checks and obtain hosted workspace results.",
+  "Run the prescribed Cargo attribution generator/check for the pending cleanup; verify absence of restricted marks and retain licenses/credits.",
+  "Run the inherited synthetic headless smoke and the real desktop with opt-in control; capture inspect and page/UI render evidence.",
+  "Write docs/bdf-evidence/BUILD-001.md with actual commands, versions, outcomes and unresolved baseline failures."
+]
+acceptance = [
+  "Desktop/CLI build and executable paths are recorded; a synthetic PDF opens, renders and saves/reopens.",
+  "Relevant fmt/clippy/test/layer/asset/parity outcomes are recorded without skipped checks being called passed.",
+  "Attribution regeneration agrees with the prior fallback output; About UI has plain upstream credit and no restricted images.",
+  "A verified snapshot is available for Codex review; no baseline failure is hidden by deleting or weakening a test."
+]
+stop_conditions = ["Missing build prerequisites: report exact missing prerequisite and setup path; no claimed green baseline.", "Reproducible crash/data loss: add a synthetic reproducer and triage before feature work."]
+
+[[work_item]]
+id = "BUILD-002"
+title = "Measure fidelity/resources and prove worker feasibility"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-001"]
+prd_milestone = "BDF-01"
+findings = ["F10"]
+requirements = ["CORE-01", "CORE-02", "CORE-06"]
+touch = ["xtask", "crates/render", "crates/engine", "docs/bdf-evidence", "docs/adr"]
+deliverables = [
+  "Create a provenance-controlled initial 100-case corpus and semantic/visual acceptance matrix; generate fixtures from source under ignored output directories.",
+  "Measure PRD latency and process-tree memory classes, including 30 timing runs and ten open/edit/close cycles.",
+  "Run independent reader/raster oracle checks as external processes; record tolerances and material discrepancies.",
+  "Prototype bounded out-of-process open/render, cancellation and failure recovery; evaluate safe Windows wrappers/IPC/resource controls.",
+  "Record renderer retain/adapt/replace and worker architecture decisions without starting an unrelated rewrite."
+]
+acceptance = ["Fixture hashes/provenance and exact commands are reproducible.", "Budgets are ratified or explicitly revised with measurements; no average hides an outlier class.", "Worker crash/hang does not erase the parent's accepted state; residual in-process parsing risks are listed."]
+stop_conditions = ["Forbidden/unclear asset provenance: exclude/remove it and report.", "No compliant safe-wrapper design for required isolation: document the architecture blocker; no unsafe shortcut."]
+
+[[work_item]]
+id = "BUILD-003"
+title = "Own release infrastructure and define the core capability inventory"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-001", "BUILD-002"]
+prd_milestone = "BDF-00"
+findings = ["F07", "F11", "F12"]
+requirements = ["CORE-01", "CORE-10", "CORE-11"]
+touch = [".github/workflows/ci.yml", ".github/workflows/release.yml", "crates/engine/src/catalog.rs", "crates/engine/src/commands.rs", "crates/automation/src/tools.rs", "crates/ui-egui/src/updates.rs", "docs/adr"]
+deliverables = [
+  "Pin reviewed workflow/action dependencies; minimize permissions and remove reliance on upstream release signing identity.",
+  "Add explicit hosted parity and BDF qualification job contracts without introducing misleading green no-op checks.",
+  "Inventory every released operation, parameter mode and inherited bypass route; specify the desktop-core profile.",
+  "Record BDF display/support/update/settings/portable identity migration; do not mass-rename Rust packages.",
+  "Keep network/MCP off by default; do not invent a production support URL or silently import credentials."
+]
+acceptance = ["Release execution cannot change through an unreviewed remote branch ref.", "CI-required jobs and repository protection setup are documented and distinguished from observed run results.", "Core inventory has command/tool mappings and explicit excluded modes; unknown capability defaults to denied."]
+stop_conditions = ["Signing identity or distribution endpoint unavailable: package qualification remains pending, not faked."]
+
+[[work_item]]
+id = "BUILD-004"
+title = "Unify durable persistence and preserve failure state"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-003"]
+prd_milestone = "BDF-02"
+findings = ["F02"]
+requirements = ["CORE-06", "CORE-08", "CORE-10"]
+touch = ["crates/platform/src/staging.rs", "crates/platform/src/persistence.rs (new)", "crates/ui-egui/src/editing.rs", "crates/ui-egui/src/recovery.rs", "crates/automation/src/lib.rs"]
+deliverables = ["Shared platform byte-persistence service with exclusive staging, flush, evaluated replacement and private permissions.", "Both desktop/headless saves use it; preserve dirty/recovery state on precommit failure.", "Differentiate committed-save/refresh-failure, and handle a later edit arriving during save.", "Fault-injection seams and regression evidence, including baseline failure for headless flush handling."]
+acceptance = ["Short write/full disk/failed flush/rename/locked target keep original bytes and working edits.", "UI and headless routes apply the same persistence semantics.", "Restrictive target ACLs are preserved; sensitive staging data is never temporarily public.", "Commit succeeded but refresh failed is reported accurately and retains recovery."]
+stop_conditions = ["Required replacement/ACL primitive cannot be implemented with approved safe dependencies: report it rather than using unsafe code or a non-atomic copy fallback."]
+
+[[work_item]]
+id = "BUILD-005"
+title = "Protect local credentials and bound control/MCP framing"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-004"]
+prd_milestone = "BDF-02"
+findings = ["F01", "F04", "F05"]
+requirements = ["CORE-10", "CORE-11"]
+touch = ["crates/platform/src/private_files.rs (new)", "apps/pdfcraft/src/main.rs", "crates/ui-egui/src/control.rs", "crates/automation/src/mcp.rs", "apps/pdfcraft-cli/tests"]
+deliverables = ["Verify private endpoint/token files before publishing any secret.", "Bound connections, auth/read deadlines, message sizes and queues with actionable refusals.", "Use bounded MCP reads before parsing; cover compact meta calls and resources as well as ordinary tools.", "Test credential exposure with two Windows accounts and permissive inherited ACLs; retain opt-in/loopback defaults."]
+acceptance = ["Unprivileged second account cannot read/authenticate with the token; insecure credential destinations refuse.", "Idle unauthenticated clients and over-limit lines cannot grow threads/memory without bound.", "Exact-limit valid requests work, over-limit ones fail before full allocation, malformed framing does not stop later valid requests.", "No token appears in logs, errors, command lines or screenshots."]
+stop_conditions = ["Actual two-account Windows test unavailable: record the missing evidence and keep release gate open."]
+
+[[work_item]]
+id = "BUILD-006"
+title = "Detect file conflicts and qualify root confinement"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-004", "BUILD-005"]
+prd_milestone = "BDF-02"
+findings = ["F03", "F06"]
+requirements = ["CORE-06", "CORE-10"]
+touch = ["crates/platform/src/file_identity.rs (new)", "crates/platform/src/confinement.rs (new)", "crates/automation/src/lib.rs", "crates/ui-egui/src/editing.rs", "apps/pdfcraft-cli/tests/run_root.rs"]
+deliverables = ["Track file identity/content fingerprint from open/last save and compare at commit.", "Implement create-new/replace-tracked/replace-confirmed modes with explicit inspected-version authority.", "Revalidate implicit stored targets and test directory junction/symlink changes throughout I/O.", "Record the Windows locking/handle strategy and its adversarial assumptions; do not claim canonicalization alone solves races."]
+acceptance = ["Open externally modified file then save refuses with conflict and preserves both versions.", "Identical size/timestamp but different bytes is detected.", "Explicit-path and implicit-path saves, nested tools and multi-output operations honor the same scope.", "Junction/symlink/race tests verify sentinel files outside root remain unchanged; unavailable race evidence is not marked passed."]
+stop_conditions = ["Remaining exploitable root escape under the stated threat model: keep agent write access gated and request architecture resolution."]
+
+[[work_item]]
+id = "BUILD-007"
+title = "Introduce the shared application service and revision contracts"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-006"]
+prd_milestone = "BDF-04"
+findings = ["F08"]
+requirements = ["CORE-06", "CORE-08", "CORE-10"]
+touch = ["crates/app-service (new)", "Cargo.toml", "xtask/src/layers.rs", "crates/engine", "crates/automation", "crates/ui-egui"]
+deliverables = ["Typed requests/results/errors and shared operation descriptors; minimal service open/query/rotate/history/save slice.", "Content revision separate from render generation and saved snapshot identity.", "Private session ownership with read-only facade; update layering tests for only specified edges.", "Schema migration/version negotiation and predictable rejection of stale agent mutations."]
+acceptance = ["No UI dependency below L7; no service/automation dependency cycle.", "Undo/redo advance revision while dirty state correctly recognizes saved content.", "A stale operation leaves bytes/history unchanged; late worker results do not update a newer document.", "Retain existing page-number/coordinate conventions and errors through all adapters."]
+stop_conditions = ["Proposed boundary requires general layer exceptions or duplicate sessions as authority: revise design before widening migration."]
+
+[[work_item]]
+id = "BUILD-008"
+title = "Implement local principals, grants, release policy and audit"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-005", "BUILD-007"]
+prd_milestone = "BDF-04"
+findings = ["F08"]
+requirements = ["CORE-10", "CORE-11"]
+touch = ["crates/app-service/src/actors.rs", "crates/app-service/src/grants.rs", "crates/app-service/src/capabilities.rs", "crates/app-service/src/audit.rs", "apps/pdfcraft", "apps/pdfcraft-cli"]
+deliverables = ["Authenticate local user and distinct delegated clients without trusting actor strings.", "Read-only default grants with resource/action/output scopes, expiry and revocation.", "Service policy intersects OS/user/grant/PDF rights and release capability modes; undiscovered operations default to denied.", "Private bounded local grant/audit storage and explicit trust policy for document scripts."]
+acceptance = ["Read-only agent cannot mutate, write/export, print or use undo to gain denied effects.", "Revocation during queued/running work blocks data delivery and uncommitted effects.", "Core-only policy rejects deferred feature modes despite known tool names.", "Audit captures actor/revisions/effects without content, secrets or default full paths."]
+stop_conditions = ["Unauthenticated same-user impersonation route or scope escalation exists: do not release agent access."]
+
+[[work_item]]
+id = "BUILD-009"
+title = "Migrate and qualify the first vertical slice across adapters"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-008"]
+prd_milestone = "BDF-03"
+findings = ["F08", "F11"]
+requirements = ["CORE-01", "CORE-06", "CORE-08", "CORE-10"]
+touch = ["crates/ui-egui", "crates/automation", "apps/pdfcraft-cli/tests", "crates/app-service/tests"]
+deliverables = ["UI/CLI/MCP open/view/rotate/undo/redo/save/close all dispatch through app-service.", "MCP compact/meta, command dispatch, batches/resources and UI control have no direct-session or policy bypass.", "Per-surface allowed/denied/conflict/fault test matrix and headless scripts/renders.", "Delete superseded duplicate orchestration rather than maintaining two production sources of truth."]
+acceptance = ["Spec §2 workflow passes across every adapter, with independent save/reopen evidence.", "Refusals preserve document bytes, history, outputs and recovery.", "Visible availability and server execution agree on the release profile."]
+stop_conditions = ["Any production alternate entry point bypasses service policy: complete migration before expanding features."]
+
+[[work_item]]
+id = "BUILD-010"
+title = "Integrate bounded jobs, worker supervision and recovery"
+status = "pending"
+priority = "P0"
+depends_on = ["BUILD-002", "BUILD-009"]
+prd_milestone = "BDF-02"
+findings = ["F05", "F10"]
+requirements = ["CORE-01", "CORE-02", "CORE-06", "CORE-10"]
+touch = ["apps/pdfcraft-worker (new after feasibility)", "crates/platform/src/workers.rs", "crates/app-service/src/jobs.rs", "crates/app-service/src/limits.rs", "crates/ui-egui/src/recovery.rs"]
+deliverables = ["Bounded admission before copying; aggregate memory/input/cache/history accounting.", "Finite queues/deadlines, cancellable jobs and private versioned worker IPC.", "Parent-owned recoverable state; worker kill/restart cannot commit stale candidates.", "Private hashed/checkpointed recovery, visible failures and encrypted-document confidentiality policy."]
+acceptance = ["Worker crash/OOM/hang leaves UI/session alive with accepted work recoverable.", "Cancellation meets ratified bounds and reports committed external effects honestly.", "Oversized PDFs/results/queues reject before unbounded allocation.", "Every residual in-process hostile-input path has containment evidence; process separation is not falsely labelled a security sandbox."]
+stop_conditions = ["Unbounded parent allocations or unrecoverable in-process parsing remain: keep stability gate open."]
+
+[[work_item]]
+id = "BUILD-011"
+title = "Qualify viewing/search and simplify the desktop workspace"
+status = "pending"
+priority = "P1"
+depends_on = ["BUILD-010"]
+prd_milestone = "BDF-03"
+findings = []
+requirements = ["CORE-01", "CORE-02", "CORE-08", "CORE-10"]
+touch = ["crates/ui-egui/src/home.rs", "crates/ui-egui/src/canvas.rs", "crates/ui-egui/src/panels.rs", "crates/automation", "crates/app-service", "apps/pdfcraft"]
+deliverables = ["Compact document-first toolbar/navigation and visible active tool; hide unavailable default catalogue entries.", "Qualify Explorer/drop/picker/recent opening, password handling, tabs, page labels/bookmarks/thumbnails and fit/zoom/pan.", "Qualify embedded-text selection/copy/search with partial failures, scans and representative Unicode.", "Real keyboard/screen-reader/mixed-DPI/GPU fallback evidence; add headless mappings for missing user-facing capabilities."]
+acceptance = ["First-page/interaction/memory targets pass for ratified office/scan/plan classes.", "Core controls are reachable at 1280x720 and 100/150/200% scaling.", "Narrator/NVDA and keyboard-only review tasks complete; no material unexplained render discrepancy."]
+stop_conditions = ["Renderer/UI cannot meet a ratified requirement: bounded prototype/ADR, not an incidental rewrite."]
+
+[[work_item]]
+id = "BUILD-012"
+title = "Qualify annotations and AcroForm workflows"
+status = "pending"
+priority = "P1"
+depends_on = ["BUILD-011"]
+prd_milestone = "BDF-03"
+findings = []
+requirements = ["CORE-03", "CORE-04", "CORE-06", "CORE-08", "CORE-10"]
+touch = ["crates/ui-egui", "crates/annot", "crates/forms", "crates/engine", "crates/app-service", "crates/automation"]
+deliverables = ["Core markup shapes, comment list/author/properties/edit/delete and correct action grouping.", "Existing AcroForm filling/tab/multiline/choice/appearance behavior with source-font preservation where supported.", "Draft text counts as unsaved/recoverable work; tool/tab switching cannot lose it.", "Off-by-default untrusted scripts and explicit calculated-form/XFA limitations; no silent incomplete value claims."]
+acceptance = ["Review and form workflows save/reopen in an independent reader with values/appearance/geometry intact.", "Allowed/denied annotation/form operations match across UI and all headless routes.", "Undo/redo and failed saves preserve drafts and prior committed content."]
+stop_conditions = ["A form requires unsupported scripts/layout: reject/explain the case; do not claim full form compatibility."]
+
+[[work_item]]
+id = "BUILD-013"
+title = "Qualify page assembly and Windows printing"
+status = "pending"
+priority = "P1"
+depends_on = ["BUILD-012"]
+prd_milestone = "BDF-03"
+findings = []
+requirements = ["CORE-05", "CORE-07", "CORE-08", "CORE-10"]
+touch = ["crates/organize", "crates/print", "crates/engine", "crates/ui-egui", "crates/app-service", "crates/automation"]
+deliverables = ["Page-range preview, rotate/move/delete/blank insert, PDF-only merge/split/extract with links/bookmarks/forms/labels retained or explicitly disclosed.", "Deterministic duplicate-field handling and signed/encrypted input implications.", "Authorized cancellable Windows print job with actual-size/fit/range/printer preview and spool progress."]
+acceptance = ["Assembly workflow passes semantic and independent-reader/raster checks.", "Physical printer and PDF destination verify dimensions and page count/order; failures/cancel do not freeze UI.", "Bulk outputs avoid unconfirmed overwrite and remain scoped; best-effort results declare committed files."]
+stop_conditions = ["Only print-to-PDF tested: physical printer evidence remains an open release requirement."]
+
+[[work_item]]
+id = "BUILD-014"
+title = "Qualify attached agents and local diagnostics"
+status = "pending"
+priority = "P1"
+depends_on = ["BUILD-010", "BUILD-013"]
+prd_milestone = "BDF-04"
+findings = ["F08"]
+requirements = ["CORE-10", "CORE-11"]
+touch = ["crates/app-service", "crates/automation", "crates/platform", "apps/pdfcraft", "apps/pdfcraft-cli", "crates/ui-egui"]
+deliverables = ["Explicit owner-authenticated local session attachment; detached/attached identifiers and revision semantics.", "Grant inspect/revoke UI with clear action/resource scope and no default registration/listener.", "Bounded local health/version/log diagnostics with previewable sanitized export.", "Product-neutral capability/job/audit contracts inside BDF; no standalone support framework or unrestricted shell."]
+acceptance = ["Attached agent changes share current undo/revision history and are identified; stale edits and revoked grants refuse.", "Detached save cannot silently overwrite another session's newer disk version.", "Default diagnostics exclude document content, credentials and full paths; sharing/export is explicit."]
+stop_conditions = ["Attachment requires weakening OS ownership/loopback policy: revise IPC design."]
+
+[[work_item]]
+id = "BUILD-015"
+title = "Qualify desktop v1 artifacts and pilot release"
+status = "pending"
+priority = "P1"
+depends_on = ["BUILD-003", "BUILD-011", "BUILD-012", "BUILD-013", "BUILD-014"]
+prd_milestone = "BDF-05"
+findings = ["F07", "F11", "F12"]
+requirements = ["CORE-01", "CORE-02", "CORE-03", "CORE-04", "CORE-05", "CORE-06", "CORE-07", "CORE-08", "CORE-10", "CORE-11"]
+touch = ["packaging/windows", ".github/workflows", "xtask", "docs", "app resources and distribution config"]
+deliverables = ["Expand corpus to at least 500 qualification cases, run pilot workflows and bounded fuzz campaigns.", "BDF signing/provenance/SBOM/checksums and owned support/update identity; no inherited misleading product routing.", "Clean install/upgrade/rollback/uninstall/portable and state migration tests; preserve documents and unresolved recovery.", "Release evidence report with Codex review on the rebased commit; no open P0/P1 defects in released scope."]
+acceptance = ["All PRD release gates pass on actual packaged Windows artifacts.", "Performance and at least 90% unassisted pilot task completion targets pass or receive an explicit documented scope decision.", "Required hosted jobs are green; signing/distribution credentials are verified, not simulated.", "Human release authorization is obtained after the concrete artifact/evidence is ready."]
+stop_conditions = ["Any required gate fails or is unavailable: no production release claim."]
+
+[[work_item]]
+id = "BUILD-016"
+title = "Qualify optional visible signature appearance"
+status = "deferred_optional"
+priority = "P2"
+depends_on = ["BUILD-012"]
+prd_milestone = "BDF-03"
+findings = []
+requirements = ["CORE-09"]
+touch = ["crates/ui-egui", "crates/annot", "crates/app-service", "crates/automation"]
+deliverables = ["Typed/drawn signature/initial appearance only, with private reusable state and truthful labels."]
+acceptance = ["Placement/undo/save/reopen are correct; no cryptographic validity claim.", "Assets/fonts satisfy provenance policy; saved signature data stays private."]
+stop_conditions = ["Would delay core desktop qualification: keep deferred."]
+
+[[work_item]]
+id = "BUILD-017"
+title = "Resume web qualification after desktop"
+status = "deferred"
+priority = "P2"
+depends_on = ["BUILD-015"]
+prd_milestone = "BDF-06"
+findings = ["F09", "F10", "F11"]
+requirements = ["CORE-01", "CORE-06", "CORE-10"]
+touch = ["apps/pdfcraft-web", "crates/ui-egui", "crates/app-service", "packaging/web", ".github/workflows"]
+deliverables = ["Host persistence acknowledgment bound to request/document revision, browser recovery/worker/backpressure and web-app/runtime CI."]
+acceptance = ["Dropped/failed/delayed host saves keep dirty state; obsolete acknowledgments cannot clear newer edits.", "Bounded acquisition/queues and local-first privacy pass actual Edge/Chrome runtime checks."]
+stop_conditions = ["Desktop not qualified: do not make this work part of its critical path."]

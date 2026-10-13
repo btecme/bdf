@@ -1,5 +1,11 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **BDF fork planning, 2026-10-13:** Windows 11 desktop is the priority; documents stay local and general-office workflows lead. The [BDF PRD](bdf-prd-draft.md) defines separate release gates and the [foundation review](bdf-foundation-review.md) records source-confirmed findings and unverified risks. Upstream milestones and readiness estimates below have not been remeasured.
+
+| BDF milestone | Status | Evidence / next gate |
+|---|---|---|
+| BDF-00: reproducible fork baseline | Review/build handoff prepared; implementation pending | [Build specification](bdf-build-spec.md), [work items](bdf-work-items.toml) and [BUILD-001 kickoff](bdf-claude-kickoff.md) ready. Restricted visual branding removed. Rust toolchain, build/tests, Cargo asset checks, BDF release identity and immutable release dependencies remain to verify or implement. |
+
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M4: Extract and Split preserve shared Type 3 glyph resources; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M2: packed TIFF-predictor RGB rows retain their byte boundaries; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -161,6 +167,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | BDF-00 links implementation spec and bounded kickoff; no implementation status or upstream estimate advanced. |
+| 2026-10-13 | minor | Added BDF-00 fork baseline row and desktop-first planning links; upstream estimates unchanged. |
 | 2026-10-12 | minor | M13: CLI check directory identity, with overlap and symlink regressions; estimates unchanged |
 | 2026-10-12 | minor | M4: shared Type 3 glyph resources survive extraction, with save/reopen and independent raster regressions; estimates unchanged |
 | 2026-10-12 | minor | M2: packed TIFF-predictor RGB row boundaries, with decoding and page-render regressions; estimates unchanged |
