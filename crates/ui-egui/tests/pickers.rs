@@ -632,7 +632,15 @@ fn a_startup_url_does_not_replace_another_documents_password_prompt() {
         assert!(h.state().views.is_empty());
         assert_eq!(h.state().startup_inbox.lock().unwrap().len(), 1, "startup bytes wait for the prompt");
         h.state_mut().submit_password((!cancel).then(|| "test-password".into()));
-        h.run_steps(2);
+        if cancel {
+            // Cancelling is immediate; the queued startup file then opens on the next frame.
+            wait_until(&mut h, "late.pdf opens in the background after the prompt is cancelled", |app| view_named(app, "late.pdf") == Some(0));
+        } else {
+            // The password is checked on the open worker, and the queued startup file follows it.
+            wait_until(&mut h, "local-encrypted.pdf opens, then late.pdf follows in the background", |app| {
+                view_named(app, "local-encrypted.pdf") == Some(0) && view_named(app, "late.pdf") == Some(1)
+            });
+        }
         assert!(h.state().password_prompt.is_none());
         assert!(h.state().startup_inbox.lock().unwrap().is_empty());
         assert_eq!(h.state().active, if cancel { None } else { Some(0) });

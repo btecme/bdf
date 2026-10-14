@@ -4,6 +4,8 @@ Status: **evidence recorded, baseline not green, pending Codex review.** Run on 
 
 **Addendum, 2026-10-14 (rev 0.2):** [section 12](#12-follow-up-asynchronous-test-synchronization-rev-02) records the test-synchronization correction requested by the [Codex review](BUILD-001-codex-review.md). It supersedes the test and BUILD-002 verdict rows below. Sections 1 to 11 are the original rev 0.1 record and are kept unchanged, including their red results.
 
+**Addendum, 2026-10-14 (rev 0.3):** [section 13](#13-follow-up-fixing-d1-to-d3-rev-03) fixes the three behaviour changes (D1 to D3) that section 12 reported and left open, and supersedes section 12's status (the scoped suite is now green). It also corrects one sentence of section 12.5.
+
 ## 1. Verdict
 
 | Question | Answer |
@@ -248,7 +250,7 @@ cargo test --locked -p pdfcraft-ui-egui --lib open_worker_defects -j 2   # 3 fai
 
 | ID | Behaviour | Reproducer failure | Reach |
 |---|---|---|---|
-| D1 | `open_then_run` (`lib.rs`, "a tool chosen with no document asks for a file and then runs on it") calls `open_path`, which now only schedules the open, and then checks `views.len() > before`, which is false. For a plain (unencrypted) file the tool never runs after the pick opens. | `d1_…`: the picked file opens, then `dialog` is `None`, not the Export dialog | The ordinary desktop flow (a tool chosen from Home or the palette with nothing open). Confirmed by the deterministic test only, not in the real desktop (the native picker cannot be driven). The encrypted-file path still works because it hands `then` to the password prompt. |
+| D1 | `open_then_run` (`lib.rs`, "a tool chosen with no document asks for a file and then runs on it") calls `open_path`, which now only schedules the open, and then checks `views.len() > before`, which is false. For a plain (unencrypted) file the tool never runs after the pick opens. | `d1_…`: the picked file opens, then `dialog` is `None`, not the Export dialog | The ordinary desktop flow (a tool chosen from Home or the palette with nothing open). Confirmed by the deterministic test only, not in the real desktop (the native picker cannot be driven). ~~The encrypted-file path still works because it hands `then` to the password prompt.~~ **Corrected in section 13.5: this was wrong; the encrypted path never got `then` either.** |
 | D2 | A startup file queued behind a password prompt is released as soon as the password is submitted, while the unlock is still in flight. It opens first, ahead of the document being unlocked. | `d2_…`: after the submit, the startup inbox is empty and the tabs are `[late.pdf]` | By my reading, `startup_inbox` is fed only by the web host (`apps/pdfcraft-web`), which has no worker, so the shipped desktop cannot reach it; unverified. The existing test expects the unlocked document to be tab 0 and in front; it ends with `[late.pdf, local-encrypted.pdf]` and the unlocked document active as tab 1. |
 | D3 | The same window can lose a file: a second, encrypted startup file asks for its password while the first unlock is in flight, and the first unlock's commit (`finish_open`, `self.password_prompt = None`) clears that prompt. The second file then neither opens nor asks again. | `d3_…`: `second.pdf` was asking while the unlock was in flight; afterwards tabs `[first.pdf]` and no prompt | Same reach as D2. It is the more serious one because an open request disappears silently. |
 
@@ -259,6 +261,67 @@ The synchronized variants of those two tests (they fail on the behaviour, not on
 ### 12.6 Hashes and status
 
 Key files under `target/bdf-evidence/BUILD-001-sync/` are listed in its `MANIFEST.sha256` (hash in the final report). `commands.tsv` has every command with its exit code and duration. Status: BUILD-001 `pending_review`; Codex should rerun section 12.3 and the reproducers. The known-green baseline gate is **not** met: the scoped suite has 2 failures that are product behaviour, no hosted run exists, and wasm, advisory, optional-font and MSRV checks are unavailable. BUILD-002 is not started.
+
+## 13. Follow-up: fixing D1 to D3 (rev 0.3)
+
+Status: **D1, D2 and D3 are fixed in production code, each with a regression test that failed before the fix and an individual mutation check. The scoped suite is green for the first time: 1,220 passed, 0 failed, 6 ignored, in two full runs. BUILD-001 stays `pending_review`; `baseline_green` stays false, because wasm, advisory, hosted, optional-font and MSRV checks are still unavailable. BUILD-002 is not started.** Run on 2026-10-14. Evidence is under `target/bdf-evidence/BUILD-001-fix/` (ignored). Paths below are relative to it.
+
+### 13.1 Trees and commits
+
+| What | Identity |
+|---|---|
+| Base commit | `33e8d5e299f445e11facac632d1e254be4d83c1c`, tree `5560a025cbb1415a2b616a847f0980711c2ce227`, `crates/ui-egui` subtree `2685374b91f763716bce5351f4a5a44de824bdda` |
+| Tested code | `crates/ui-egui` subtree `cb36d5e26d3c688fabef1adf01f17266a3b371a1`; full tree before these documents `8ba09f24d8b831add84d3e2be03204db27c553a1` (`01-tested-tree.txt`). `git rev-parse <fix commit>:crates/ui-egui` must equal the subtree id. |
+| Fix commit | the commit that adds this section (named in the final report; a commit cannot name itself) |
+
+The diff changes `crates/ui-egui/src/lib.rs` (+44 / −12), adds `crates/ui-egui/src/open_worker_regression_tests.rs` (`eda44b695ffdec6144af23c419daaaea5dfd4d5ab2abfe52f69f35173fb7da1a`), and adds the same bounded waits to two integration tests. Nothing else in production changed.
+
+### 13.2 The three fixes
+
+| ID | Cause | Change |
+|---|---|---|
+| D1 | `open_then_run` ran its follow-up tool right after `open_path`, which now only schedules the open, so the tool never ran (and never reached the password prompt either) | New private `open_path_then(path, then)`. The inline path keeps the old check; the asynchronous path puts the command in the scheduled `OpenRequest`, which already carried `then` through the commit and through a password prompt. `open_path` calls it with `None`, and `open_then_run` with its command. A file that fails to open runs nothing. |
+| D2 | The startup inbox was released as soon as the password prompt was gone, which is when the password is *submitted*, while the unlock is still in flight | The inbox's existing "don't replace a pending interaction" guard now also requires that no open is in flight (`open_in_flight()`: `pending_opens` is non-empty; the browser has no worker, so it is always false there). |
+| D3 | `finish_open` set `password_prompt = None` unconditionally, so an unlock finishing discarded another document's prompt | It clears the prompt only when the prompt's name and path are the document it just opened. |
+
+Four-zoom review of the diff: no new `unwrap`, indexing or arithmetic; every function is total; the public surface is unchanged (`open_path` is still the only public entry); no layering, automation or wasm API change. Not compile-checked for `wasm32` (section 13.4).
+
+### 13.3 Proof
+
+All runs use `--locked -j 2` with finite timeouts; `commands.tsv` has each command, exit code and duration.
+
+- **Regression tests, before the fix** (`fix-01-…`): 6 new tests in `open_worker_regression_tests.rs`, **5 failed and 1 passed**. The failures are the three behaviours, for the stated reasons: the tool never runs after the open (plain and encrypted), the startup file opens while the unlock is held, and the second file's prompt is cleared. The one that passes is the guard that a tool does not run when the picked file does not open.
+- **After the fix** (`fix-04-…`): the 6 new tests plus the existing gated worker test, 7 passed; 15 further repeats, 0 failures (`lib-open-worker-run01…15`).
+- **The two integration tests that stayed red in rev 0.2**, `a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it` and `a_startup_url_does_not_replace_another_documents_password_prompt`, got the same bounded waits as the others (assertions untouched) and pass (`fix-05-…`). They failed in 12 of 12 runs before.
+- **Mutation check** (`mutate-D1-…`, `mutate-D2-…`, `mutate-D3-lib.log`): each fix reverted alone, `lib.rs` restored byte-identical afterwards.
+
+| Fix reverted | Tests that fail |
+|---|---|
+| D1 (`open_then_run` passes `None`) | the plain and the encrypted D1 unit tests, and `a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it` |
+| D2 (the in-flight guard removed) | `a_startup_file_waits_behind_an_unlock_that_is_still_in_flight` and `a_startup_url_does_not_replace_another_documents_password_prompt` |
+| D3 (the unconditional clear restored) | `an_unlock_finishing_keeps_another_documents_password_prompt` (the startup variant stays green because the D2 guard also protects it) |
+
+- **The three original reproducers** (`BUILD-001-sync/defect-reproducers/open_worker_defects.rs`), applied by hand to the fixed code: 3 passed (`fix-06-…`); they failed 3 of 3 before (rev 0.2, `defect-01-reproducers.log`). The committed `BUILD-001-defect-reproducers.patch` no longer applies as it is, because the module line it patches against now has a neighbour; the permanent regression tests supersede it.
+- **Six affected binaries plus the helper self-tests**, 10 normal runs, 1 single-threaded and 1 with 6 busy CPU workers (`fixed-run01…`): 263 passed and **0 failed in every run**. The same set before this fix always failed 2 (`BUILD-001-sync/after-*`).
+- **Full scoped suite** `cargo test --locked --no-fail-fast -p pdfcraft-ui-egui -p pdfcraft -p pdfcraft-cli -j 2`, twice (`full-01-…`, `full-02-…`): **1,220 passed, 0 failed, 6 ignored**, 69 test binaries each. Before: 1,212 / 2 / 6; originally 1,195 / 16 / 6. 1,220 = 1,212 + 2 formerly failing + 6 new.
+- **Gates:** `cargo fmt --all -- --check` exit 0; `cargo clippy --locked -p pdfcraft-ui-egui -p pdfcraft -p pdfcraft-cli -j 2 --all-targets -- -D warnings` exit 0, with the verbose run showing `clippy-driver` on the library and its test target and on all 7 integration targets (`gate-02b-…`); `cargo xtask layers`, `assets --write` and `assets` (`ATTRIBUTION.md` still `97288a11…cef`), `parity` exit 0; `fmt`, `assets`, `layers` and `parity` were rerun after the documentation updates (`gate-07-…` to `gate-10-…`), exit 0 each.
+
+### 13.4 Not run, and what is still unverified
+
+- **Unavailable, so not passed:** `cargo xtask wasm` and any `wasm32` check (target not installed; this change adds a `cfg(target_arch = "wasm32")` branch to `open_in_flight`, written to mirror the existing split, but it has not been compiled for wasm); `cargo xtask deny` and the advisory check (`cargo-deny` not installed); hosted Windows/Linux runs (nothing pushed); the optional-font build (`CRAFT_FONTS_DIR` unset); the 1.95 MSRV.
+- **Not verified in the real desktop:** D1 needs the native file picker, which cannot be driven from the control channel. It is verified through the deterministic gated test only.
+- **The other ~30 test binaries** were not audited for the same timing assumption (both full runs pass).
+
+### 13.5 Behaviour notes
+
+- **Correction to section 12.5, D1.** That section said the encrypted-file path still worked because it hands `then` to the password prompt. That was wrong: the prompt is created after the open completes, so the old code never attached `then` to it either. The new encrypted unit test failed before the fix for exactly that reason.
+- **D2 side effect.** A late startup file now also waits while any other open is being prepared (for example a large file), not only behind a password prompt. The desktop does not feed the startup inbox, so this affects the web host only in principle, and the browser has no worker, so it is never in flight there.
+- **D3 matching.** A prompt is cleared by an open when name and path both match, so two in-memory documents with the same name and no path count as the same document.
+- **Pre-existing, not changed:** a second encrypted open that completes while a password prompt is showing still replaces that prompt. It did before the asynchronous open as well (`try_open` set `password_prompt` unconditionally at `55f76ab7^`), for example when two encrypted files are chosen together. It is outside D1 to D3.
+
+### 13.6 Status
+
+Key files under `target/bdf-evidence/BUILD-001-fix/` are in its `MANIFEST.sha256` (hash in the final report). BUILD-001 is `pending_review`. Codex should rerun section 13.3. The known-green baseline gate is still not met because of the unavailable and unrun checks in 13.4. BUILD-002 is not started.
 
 ## Appendix: fixture generator
 
@@ -319,3 +382,4 @@ open(sys.argv[1], "wb").write(build(objs))
 |---|---|---|
 | 2026-10-13 | 0.1 | First evidence report for BUILD-001: baseline build, gates, smoke, desktop run, failing-test triage. |
 | 2026-10-14 | 0.2 | Section 12: bounded waits replace fixed-frame assumptions in the open-worker UI tests; before and after runs; two product behaviour changes reproduced separately. Sections 1 to 11 unchanged. |
+| 2026-10-14 | 0.3 | Section 13: D1 to D3 fixed with regression tests, mutation checks and a green scoped suite (1,220 passed, 0 failed); one sentence of 12.5 corrected. |
