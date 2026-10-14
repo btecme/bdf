@@ -6,6 +6,8 @@ Status: **evidence recorded, baseline not green, pending Codex review.** Run on 
 
 **Addendum, 2026-10-14 (rev 0.3):** [section 13](#13-follow-up-fixing-d1-to-d3-rev-03) fixes the three behaviour changes (D1 to D3) that section 12 reported and left open, and supersedes section 12's status (the scoped suite is now green). It also corrects one sentence of section 12.5.
 
+**Addendum, 2026-10-14 (rev 0.4):** [section 14](#14-tool-installs-provenance-checks-and-the-wasm-and-deny-gates-rev-04) records the `wasm32` and `cargo-deny` installs, their provenance checks, and the wasm and deny gate results (both pass, with a blind spot in the deny result), and supersedes the "wasm and deny unavailable" statements of sections 12 and 13.
+
 ## 1. Verdict
 
 | Question | Answer |
@@ -323,6 +325,49 @@ All runs use `--locked -j 2` with finite timeouts; `commands.tsv` has each comma
 
 Key files under `target/bdf-evidence/BUILD-001-fix/` are in its `MANIFEST.sha256` (hash in the final report). BUILD-001 is `pending_review`. Codex should rerun section 13.3. The known-green baseline gate is still not met because of the unavailable and unrun checks in 13.4. BUILD-002 is not started.
 
+## 14. Tool installs, provenance checks and the wasm and deny gates (rev 0.4)
+
+Status: **`cargo xtask wasm` passes (31 crates) and `cargo xtask deny` passes, but the deny result has a blind spot that matters: four advisories dated the same day, against the exact `rustls 0.23.45` in the lockfile, are not visible to it (14.4, F1). BUILD-001 stays `pending_review` and `baseline_green` stays false: hosted CI, the optional-font build and the 1.95 MSRV are still unrun.** Run on 2026-10-14. Evidence is under `target/bdf-evidence/BUILD-001-tools/` (ignored). Paths below are relative to it.
+
+### 14.1 What was installed, and a process failure
+
+With the owner's approval I installed, outside the repository: the `wasm32-unknown-unknown` target for the pinned 1.99.0 toolchain (via rustup) and `cargo-deny` 0.20.2 (`cargo install cargo-deny --locked -j 2`, compiled locally into `%USERPROFILE%\.cargo\bin\cargo-deny.exe`, SHA-256 `70d04ba26165daee35469f6926dc54aa7f497f8c6098706314271f377bd1b30b`). **I installed both before checking their provenance.** `cargo install` compiled and ran the build scripts and procedural macros of 210 third-party crates on this machine. The owner then required verification before any further download or install. Everything the gates fetched afterwards was vetted first (14.2). The two installs were audited retroactively; that audit found nothing wrong. The repository was not changed by any install.
+
+### 14.2 Provenance checks
+
+| Item | Checks made | Result |
+|---|---|---|
+| `wasm32` standard library (`rust-std-1.99.0-wasm32-unknown-unknown`, dated 2026-10-01) | Fresh `channel-rust-1.99.0.toml` (943,486 bytes) hashes to the published `.sha256` (`ce6dddc8…b6a2`). Its `.asc` verifies as a good signature from the Rust release key `108F 6620 5EAE B0AA A8DD 5E1C 85AB 96E6 FA1B E5FE`, imported into a throwaway keyring. The same fingerprint and subkeys come from an independent server (`keyserver.ubuntu.com`, with 14 third-party certifications dating from 2015). The tarball (23,152,600 bytes) hashes to the manifest's `xz_hash` `b760b0c9…bf22`. All 54 installed files are byte-identical to the tarball; its 55th entry is an empty directory. | Pass. The trust anchor is the fingerprint cross-check, not a locally certified key (gpg's "not certified" warning is expected). rustup's stored manifest is a re-serialized copy, not byte-identical to the download, but carries the same URL and hash. |
+| `cargo-deny` 0.20.2 | The `.crate` cargo downloaded (217,654 bytes, `e528dfcb…f737`) equals crates.io's recorded checksum. Published 2026-07-09 by the sole owner `embark-studios`, not yanked, 1.55 M downloads (crate since 2019). The commit named in the crate (`bca0dde5…`, "Release 0.20.2", unsigned) exists in `EmbarkStudios/cargo-deny`, an organization repo with 2,452 stars, and tag `0.20.2` exists. 81 of 81 comparable files in the crate are identical to that commit (`Cargo.toml.orig` equals the repo's manifest; the only extra file is cargo's own `.cargo-ok`). Its lockfile has 211 packages: 210 from crates.io, 0 git. | Pass. The binary was built here from this source; no prebuilt binary was used. |
+| Registry dependencies | All 643 crates.io packages in the repository's `Cargo.lock` carry a checksum, and all come from crates.io. Each was checked against crates.io's record in three passes: the 210 of `cargo-deny`'s own lock, the 196 not yet cached locally, and the 447 already compiled during earlier BUILD-001 work (`tools-03`, `-06`, `-12`). | 0 checksum mismatches, 0 yanked, 0 lookup errors. Recently published (30 days or less): 10 of the 196 and 19 of the 447, all routine patch releases of established crates (for example `thiserror`, `syn`, `cc`, `rustls`, `zerocopy`). I did not tie the 19 to their source commits. |
+| The 10 recent, not-yet-cached crates | `.crate` downloaded to an isolated directory and matched to the lock; source commit looked up. | `wasm-bindgen` family (7 crates, commit `165586f8` "Release 0.2.129", **GitHub-verified signature**, same day as the publish), `rustix` 1.1.5 (Bytecode Alliance release commit), `fmv-macos-events` (commit made 22 s before publish, see F2) all tie to their repositories. `libredox` is hosted on Redox's GitLab and could not be checked this way; it is Redox-only and is never compiled here. |
+| Git dependencies | `craft-print` and `craft-ui`, pinned in `Cargo.lock` to `d991bf67…` and `5c874d51…`. | Both commits exist in the public `storytold/craft-libs`, and the cached checkouts match. The repository was created 2026-10-09 (F3). |
+| RustSec advisory database | Config uses the default URL (no custom `db-urls`). The official `RustSec/advisory-db` is owned by the RustSec org (created 2017, 1,185 stars) and its latest commits are by known maintainers. After `cargo deny fetch db`, the local clone's origin is `https://github.com/RustSec/advisory-db` and its HEAD `22908666e50caf5d9fe40e13edab0d34bddcbaef` (2026-10-14T10:34:35Z) equals the commit GitHub reported before the fetch. | Pass. 957 crate directories, 2.5 MB; it holds data that is parsed, never executed. |
+
+### 14.3 Gate results
+
+| Gate | Command | Exit | Result |
+|---|---|---|---|
+| deny | `cargo xtask deny` (`cargo deny --log-level error check`), `CARGO_BUILD_JOBS=2` | 0 (21 s) | `advisories ok, bans ok, licenses ok, sources ok` (`tools-08-…`) |
+| deny, warnings visible | `cargo deny --log-level warn check` | 0 | same four results, no warnings (the gate itself hides warnings; `tools-09-…`) |
+| wasm | `cargo xtask wasm`, `CARGO_BUILD_JOBS=2` | 0 (395.8 s) | `wasm32: 31 crates ok` (`tools-10-…`) |
+
+The wasm gate runs `cargo check --target wasm32-unknown-unknown -p <crate>` for the 31 crates classified below L8, including `pdfcraft-ui-egui`, so the wasm side of the D2 change (`open_in_flight`) is compile-checked. `ui-egui` reports 3 dead-code warnings there (`editing.rs`, `units.rs`, `updates.rs`) and `render` 4 more; none is in code changed by D1 to D3. The gate does not build `apps/pdfcraft-web` or run any test (foundation review F11). The deny gate covers `all-features = true` with the repository's `deny.toml`, whose one ignored advisory is `RUSTSEC-2023-0071` (with its documented reason).
+
+### 14.4 Findings to carry forward (none fixed here)
+
+- **F1. The deny gate cannot see disclosures that have no assigned advisory id yet.** The DB commit above is "Add rustls 0.23.46 advisories": four files `RUSTSEC-0000-0000.*.md`, dated 2026-10-14, each with `patched = ">= 0.23.46"`; the three that give an `unaffected` bound put it below the locked `rustls 0.23.45`, and the fourth gives none. Yet the gate says "advisories ok". Experiment (`tools-13-placeholder-advisory-test.txt`, scratch copy of the DB, repo and real DB untouched): with the real DB, `cargo deny check advisories` passes; with one of the four given an assigned-looking id, the same command **fails**, naming `rustls 0.23.45` ("Unauthenticated ServerHello can downgrade later connections to classical key exchange"). So cargo-deny skips placeholder-id advisories. "advisories ok" means "no assigned advisory", not "no known issue".
+  - **Applicability to BDF**, by reading the advisories against the code (`cargo tree`, first-party search): rustls reaches the app through `ureq` (the update check, one HTTPS request to GitHub) and `rustls-cng` (via `pdfcraft-sign`). The `brotli` feature is not enabled anywhere (certificate-decompression DoS: not affected); nothing in first-party code uses `EchMode` or a custom `ClientSessionStore` (ECH and `Debug` advisories: not affected). The key-exchange downgrade (low severity, loses post-quantum confidentiality for later connections to the same server name) can apply to the update check in principle.
+  - **Fix available:** rustls `0.23.46` was published 2026-10-14 09:54 UTC. Bumping it means a `Cargo.lock` change and a new crate download, which must be vetted first; it was not done. Re-run `cargo xtask deny` once RustSec assigns ids.
+- **F2. `fmv-macos-events`** is a direct dependency of the `pdfcraft` app (under `cfg(target_os = "macos")`, pinned `=0.1.0`). It is a one-version crate published 2026-09-15 by an individual (Corey James Levinson) for his own app, with 24,043 downloads. I read its whole 168-line `src/lib.rs`: macOS-only, registers Apple-event handlers (open documents, quit) and adds an Edit menu, depends only on `objc2*`, has no build script, and shows no process, network or filesystem calls. Upstream's comment calls it "audited". It never compiles on Windows or wasm. Worth replacing or vendoring before any macOS release.
+- **F3. `storytold/craft-libs`** (the `craft-ui` and `craft-print` git dependencies compiled into the app) was created 2026-10-09 by the same organization as upstream. The pinned commits exist; BDF should mirror or review them as part of release-infrastructure ownership (BUILD-003).
+- **F4.** 17 of `cargo-deny`'s 210 dependencies show no publisher login on crates.io (older crates and trusted-publishing releases); not a finding by itself.
+- **F5.** The disk has about 5.4 GB free, and `target/debug` alone is about 46 GB of accumulated build artifacts.
+
+### 14.5 Status
+
+Superseded from earlier sections: wasm and deny are no longer "unavailable" (13.4); they pass, with F1 as a caveat on the deny result. Still unrun: hosted Windows/Linux CI (nothing pushed), the optional-font build (`CRAFT_FONTS_DIR`), and the 1.95 MSRV. `baseline_green` stays false. BUILD-002 is not started.
+
 ## Appendix: fixture generator
 
 <details>
@@ -383,3 +428,4 @@ open(sys.argv[1], "wb").write(build(objs))
 | 2026-10-13 | 0.1 | First evidence report for BUILD-001: baseline build, gates, smoke, desktop run, failing-test triage. |
 | 2026-10-14 | 0.2 | Section 12: bounded waits replace fixed-frame assumptions in the open-worker UI tests; before and after runs; two product behaviour changes reproduced separately. Sections 1 to 11 unchanged. |
 | 2026-10-14 | 0.3 | Section 13: D1 to D3 fixed with regression tests, mutation checks and a green scoped suite (1,220 passed, 0 failed); one sentence of 12.5 corrected. |
+| 2026-10-14 | 0.4 | Section 14: `wasm32` and `cargo-deny` installed after provenance checks; `cargo xtask wasm` and `cargo xtask deny` pass; deny cannot see same-day rustls advisories that have no assigned id (F1). |

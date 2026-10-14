@@ -4,8 +4,9 @@
 
 | BDF milestone | Status | Evidence / next gate |
 |---|---|---|
-| BDF-00: reproducible fork baseline | BUILD-001 D1 to D3 fixed; scoped suite green; re-review pending | [D1 to D3](bdf-evidence/BUILD-001.md#13-follow-up-fixing-d1-to-d3-rev-03): three behaviour changes of the asynchronous open fixed with regression tests; scoped suite 1,220 passed, 0 failed. Baseline not yet declared green: wasm, advisory, hosted CI, optional fonts and MSRV are unavailable or unrun. BUILD-002 remains pending. |
+| BDF-00: reproducible fork baseline | BUILD-001: scoped suite, wasm and deny gates pass; re-review pending | [Evidence](bdf-evidence/BUILD-001.md#14-tool-installs-provenance-checks-and-the-wasm-and-deny-gates-rev-04): D1 to D3 fixed; `cargo xtask wasm` (31 crates) and `cargo xtask deny` pass after provenance checks. Caveat: deny cannot see unassigned same-day rustls advisories (locked 0.23.45, fixed 0.23.46). Hosted CI, optional fonts and MSRV 1.95 remain unrun, so the baseline is not yet declared green. BUILD-002 remains pending. |
 
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 wasm and deny gates pass after provenance checks; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 D1 to D3 fixed, scoped suite green; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 test synchronization; baseline still not green; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (BDF-00: BUILD-001 Windows baseline evidence, scoped UI tests fail on the baseline itself; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -170,6 +171,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | BDF-00: BUILD-001 wasm and deny gates pass after provenance checks (rustls caveat); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 D1 to D3 fixed; scoped suite green (1,220 passed, 0 failed); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 test synchronization (14 of 16 failures corrected, 2 expose async-open behaviour changes); estimates unchanged. |
 | 2026-10-13 | minor | BUILD-001 Codex review completed; correction requested and BUILD-002 kept pending. |
