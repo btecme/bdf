@@ -8,6 +8,8 @@ Status: **evidence recorded, baseline not green, pending Codex review.** Run on 
 
 **Addendum, 2026-10-14 (rev 0.4):** [section 14](#14-tool-installs-provenance-checks-and-the-wasm-and-deny-gates-rev-04) records the `wasm32` and `cargo-deny` installs, their provenance checks, and the wasm and deny gate results (both pass, with a blind spot in the deny result), and supersedes the "wasm and deny unavailable" statements of sections 12 and 13.
 
+**Addendum, 2026-10-14 (rev 0.5):** [section 15](#15-follow-up-rustls-02345-to-02346-rev-05) bumps `rustls` to 0.23.46 and resolves finding F1 of section 14 (the four same-day advisories).
+
 ## 1. Verdict
 
 | Question | Answer |
@@ -368,6 +370,70 @@ The wasm gate runs `cargo check --target wasm32-unknown-unknown -p <crate>` for 
 
 Superseded from earlier sections: wasm and deny are no longer "unavailable" (13.4); they pass, with F1 as a caveat on the deny result. Still unrun: hosted Windows/Linux CI (nothing pushed), the optional-font build (`CRAFT_FONTS_DIR`), and the 1.95 MSRV. `baseline_green` stays false. BUILD-002 is not started.
 
+## 15. Follow-up: rustls 0.23.45 to 0.23.46 (rev 0.5)
+
+Status: **`rustls` is bumped to 0.23.46, which fixes the four same-day advisories (now `RUSTSEC-2026-0346` to `-0349`). The only change is two lines of `Cargo.lock`. The scoped suite is still green (1,220 passed, 0 failed, 6 ignored, twice), a live HTTPS update check works through the new version, and `cargo-deny` now fails the old lock on all four advisories and passes the new one. BUILD-001 stays `pending_review` and `baseline_green` stays false: hosted CI, the optional-font build and the 1.95 MSRV are still unrun. BUILD-002 is not started.** Run on 2026-10-14. Evidence is under `target/bdf-evidence/BUILD-001-rustls/` (ignored). Paths below are relative to it.
+
+### 15.1 The change
+
+Base commit `f5b9480a9d5447655101ce453dcdab58c1dbca82`. `rustls` is a transitive dependency (through `ureq`, the update check, and `rustls-cng`, via `pdfcraft-sign`) and its requirement is semver-compatible, so no `Cargo.toml` changed:
+
+```
+ name = "rustls"
+-version = "0.23.45"
++version = "0.23.46"
+-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
++checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
+```
+
+`Cargo.lock` SHA-256 afterwards: `d2ef027890a784d6792b54413a20bd280675780eebb53e2a6495d25bc3e4b75c` (`cargo-lock-sha256-after.txt`). A dry run (`cargo update -p rustls --precise 0.23.46 --dry-run`) reported only this one package.
+
+**An unrelated edit was reverted.** The real `cargo update` also flipped one more lockfile line: `tempfile 3.27.0`'s edge from `getrandom 0.4.3` to `getrandom 0.3.4`. Both satisfy `tempfile`'s declared `>=0.3.0, <0.5`, so it was valid but unreviewed and unrelated, and it changes which RNG crate `tempfile` links. I restored the original edge by hand so the diff is exactly the reviewed change, and confirmed that cargo accepts the lock with `--locked` and that the build does not rewrite it.
+
+### 15.2 Vetting before the download
+
+| Check | Result |
+|---|---|
+| crates.io record | Published 2026-10-14 09:54 UTC (hours old) by `ctz`, the same account as 0.23.45; owners `ctz`, `djc` and the `rustls:publishers` team; not yanked; `rust_version` 1.71 (within our 1.95); 22,822 downloads at the time. |
+| Download | `.crate` (386,227 bytes) fetched into an isolated directory; SHA-256 `48e13bd8…8fdf` equals crates.io's record and the checksum cargo now enforces from the lock. |
+| Source commit | `f04804fa…`, "Delay saving KX hint until handshake confirmation", by Joe Birr-Pixton, 2026-10-13 (unsigned). It exists in `rustls/rustls` (organization repo, 7,675 stars, created 2016), and tag `v/0.23.46` points at it. |
+| Crate equals commit | 114 of 114 comparable files identical to the commit's `rustls/` directory; `Cargo.toml.orig` equals the repo's manifest. The two crate-only files are explained: `README.md` is byte-identical to the repo-root README (`readme = "../README.md"`), and the crate's `Cargo.lock` differs from 0.23.45's only in dev-dependency versions, which consumers ignore. |
+| Change from 0.23.45 | 25 files, +1,164 / −171 (about a third is tests). `build.rs` byte-identical; the `[dependencies]` section identical, so no new runtime dependency; the only new imports are crates rustls already optionally uses (`brotli_decompressor`, `aws_lc_rs`). A scan of every added source line for process, network, filesystem, environment, `unsafe`, FFI and embedded data found only two RFC URLs in comments. |
+| Hunks read | The Brotli decoder now uses a strict state without the large window; the `Debug` impls omit the secret fields; trailing data after a certificate decompression is rejected. These are the fixes the advisories describe. |
+| Fix PRs | #3297, #3299, #3300 and #3355 are all merged, by `ctz` and `djc`. |
+
+### 15.3 Verification after the change
+
+All runs use the lockfile, 2 jobs and finite timeouts (`commands.tsv`).
+
+| Check | Result |
+|---|---|
+| `cargo build --locked -p pdfcraft -p pdfcraft-cli -j 2` | exit 0, 236 s. Cargo downloaded only `rustls 0.23.46` and recompiled `rustls`, `rustls-cng` and `pdfcraft`; the lock was not rewritten. |
+| `cargo fmt --all -- --check` | exit 0 |
+| `cargo clippy --locked -p pdfcraft-ui-egui -p pdfcraft -p pdfcraft-cli -j 2 --all-targets -- -D warnings` | exit 0 |
+| Full scoped suite, twice (`rls-04-…`, `rls-05-…`) | **1,220 passed, 0 failed, 6 ignored**, 69 binaries each, identical to before the bump |
+| Live TLS (`cargo test -p pdfcraft -- --ignored github_answers_with_the_latest_release`) | passes. It makes the app's own update request, one anonymous HTTPS GET to GitHub's releases API through `ureq` and the new rustls with the OS root store. |
+| `cargo xtask layers`, `assets`, `parity` | exit 0 each |
+| `cargo xtask deny`, and `cargo deny --log-level warn check` | exit 0; `advisories ok, bans ok, licenses ok, sources ok`, no warnings |
+| wasm | not rerun: `cargo tree --target wasm32-unknown-unknown -i rustls` reports that rustls is not in the dependency graph of `pdfcraft-sign`, `pdfcraft-engine` or `pdfcraft-ui-egui`, so the gate cannot be affected. |
+
+**The advisories, before and after** (`rls-12-advisory-real-db-before-after.txt`), against the real database at HEAD `caee11f41fab07d676c0a4655a2a5dd1f94da97c` (the RustSec maintainer's commit "Assigned RUSTSEC-2026-0346 … 0349 to rustls", 2026-10-14 13:17 UTC), `--offline`, with `Cargo.lock` swapped temporarily and restored byte-identical:
+
+| Lock | `cargo deny check advisories` |
+|---|---|
+| Old (`rustls 0.23.45`) | **FAILED**: four `vulnerability` errors (`Debug` impls expose TLS secrets; buffered data sent after ECH rejection; Brotli decompression allocates up to 1 GiB; unauthenticated ServerHello downgrades the key exchange) |
+| New (`rustls 0.23.46`) | **ok** |
+
+### 15.4 What this changes in section 14
+
+- **F1** (the deny gate cannot see advisories without an assigned id) is resolved for these four: RustSec assigned ids at 13:17 UTC, after my first deny run, and the bump removes the exposure. The general limitation stands: cargo-deny ignores `RUSTSEC-0000-0000` placeholders, so "advisories ok" never covers a disclosure on the day it appears. The practical impact on the app was low (14.4).
+- **A deviation to note.** `cargo xtask deny` fetches the advisory database again on every run, which it did inside the gate. I had verified the database before its first fetch (14.2) but not before this second one. I verified it afterwards: origin `https://github.com/RustSec/advisory-db`, HEAD equal to GitHub's `main`. The fetch could have been avoided with `--offline`.
+- **Housekeeping.** The disk fell to 3.8 GB free during this work, so I deleted `target/debug/incremental` (20 GB of regenerable compiler cache inside the ignored `target/`); free space is now about 20 GB. The next build recompiles from scratch.
+
+### 15.5 Status
+
+Still unavailable or unrun: hosted Windows/Linux CI (nothing pushed), the optional-font build (`CRAFT_FONTS_DIR`), and the 1.95 MSRV. `baseline_green` stays false. F2 and F3 of section 14 (the macOS-only `fmv-macos-events` dependency and the new `craft-libs` repository) are unchanged. BUILD-002 is not started.
+
 ## Appendix: fixture generator
 
 <details>
@@ -429,3 +495,4 @@ open(sys.argv[1], "wb").write(build(objs))
 | 2026-10-14 | 0.2 | Section 12: bounded waits replace fixed-frame assumptions in the open-worker UI tests; before and after runs; two product behaviour changes reproduced separately. Sections 1 to 11 unchanged. |
 | 2026-10-14 | 0.3 | Section 13: D1 to D3 fixed with regression tests, mutation checks and a green scoped suite (1,220 passed, 0 failed); one sentence of 12.5 corrected. |
 | 2026-10-14 | 0.4 | Section 14: `wasm32` and `cargo-deny` installed after provenance checks; `cargo xtask wasm` and `cargo xtask deny` pass; deny cannot see same-day rustls advisories that have no assigned id (F1). |
+| 2026-10-14 | 0.5 | Section 15: `rustls` bumped to 0.23.46 after provenance checks (two lines of `Cargo.lock`); scoped suite, live TLS check and gates pass; cargo-deny fails the old lock on four assigned rustls advisories and passes the new one. |
