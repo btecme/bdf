@@ -1,0 +1,165 @@
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index ea3da009..d41697cb 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -136,6 +136,9 @@ pub mod window_controls;
+ #[cfg(all(test, not(target_arch = "wasm32")))]
+ mod open_worker_tests;
+
++#[cfg(all(test, not(target_arch = "wasm32")))]
++mod open_worker_defects;
++
+ use pdfcraft_engine::{DocId, Session};
+
+ pub use canvas::{DocView, RasterMemory};
+diff --git a/crates/ui-egui/src/open_worker_defects.rs b/crates/ui-egui/src/open_worker_defects.rs
+new file mode 100644
+index 00000000..e4c4f0a0
+--- /dev/null
++++ b/crates/ui-egui/src/open_worker_defects.rs
+@@ -0,0 +1,145 @@
++//! BUILD-001 reproducers for two behaviour changes that the asynchronous open (#1493) made, found
++//! when the UI tests were synchronized with the worker. They are deterministic: the worker is held
++//! at its prepare barrier (`open_worker::prepare_gate`) so "the open is still in flight" is a
++//! state to assert, not a race. Each test fails today. NOT part of the BUILD-001 commit.
++
++use std::sync::Arc;
++use std::time::Duration;
++
++use egui_kittest::Harness;
++
++use crate::{Dialog, PdfCraftApp, open_worker};
++
++fn fixture(pages: usize) -> Vec<u8> {
++    let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
++    let kids = (0..pages).map(|page| format!("{} 0 R", 4 + 2 * page)).collect::<Vec<_>>().join(" ");
++    objects.push(format!("<< /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 200 300] >>"));
++    objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
++    for page in 0..pages {
++        objects.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * page));
++        let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", page + 1);
++        objects.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
++    }
++    let mut bytes = b"%PDF-1.7\n".to_vec();
++    let mut offsets = Vec::new();
++    for (index, object) in objects.iter().enumerate() {
++        offsets.push(bytes.len());
++        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
++    }
++    let xref = bytes.len();
++    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
++    for offset in offsets {
++        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
++    }
++    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
++    bytes
++}
++
++fn encrypted(password: &str) -> Vec<u8> {
++    use pdfcraft_engine::{Edit, Protection, Session};
++    let mut session = Session::new();
++    let id = session.open("e.pdf", None, Arc::new(fixture(1)), None).unwrap();
++    session.apply(id, Edit::Protect(Protection { open_password: Some(password.into()), ..Default::default() })).unwrap();
++    session.save_bytes(id).unwrap().as_ref().clone()
++}
++
++/// A shell past its first frame, so opening a path or an unlock goes through the worker.
++fn shell() -> Harness<'static, PdfCraftApp> {
++    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
++        let mut app = PdfCraftApp::new();
++        app.set_option("language", "en").unwrap();
++        app
++    });
++    h.run_steps(3);
++    h
++}
++
++fn name_of(app: &PdfCraftApp, tab: usize) -> Option<String> {
++    app.views.get(tab).and_then(|v| app.session.get(v.id)).map(|d| d.name.clone())
++}
++
++/// D1. A tool chosen with no document open asks for a file and "runs on it once it is open"
++/// (`open_then_run`). It checks `views.len() > before` right after `open_path`, which now only
++/// schedules the open, so the tool never runs once the document has opened.
++#[test]
++fn d1_a_tool_chosen_with_no_document_runs_once_the_picked_file_has_opened() {
++    let dir = std::env::temp_dir().join(format!("pdfcraft-defect-d1-{}", std::process::id()));
++    std::fs::create_dir_all(&dir).unwrap();
++    let path = dir.join("picked.pdf");
++    std::fs::write(&path, fixture(2)).unwrap();
++    let mut h = shell();
++    let (gate, started, release, finished) = open_worker::prepare_gate();
++    h.state_mut().open_prepare_gate = Some(gate);
++    h.state_mut().pick_override = Some(vec![path.to_string_lossy().into_owned()]);
++    h.state_mut().run_command("export.text");
++    h.step(); // the pick is answered; the file is handed to the worker
++    started.recv_timeout(Duration::from_secs(5)).expect("the worker reached its prepare barrier");
++    assert!(h.state().views.is_empty(), "the open is in flight, not committed");
++    release.send(()).unwrap();
++    finished.recv_timeout(Duration::from_secs(5)).expect("the worker finished preparing");
++    h.step(); // the frame that commits the open
++    assert_eq!(name_of(h.state(), 0).as_deref(), Some("picked.pdf"), "the picked file is open");
++    assert!(matches!(h.state().dialog, Some(Dialog::Export(_))), "and the tool chosen with no document runs on it: {:?}", h.state().dialog);
++    let _ = std::fs::remove_dir_all(&dir);
++}
++
++/// D2. A late startup file waits for the interaction in progress ("Don't replace a pending prompt
++/// or import"). After the password is submitted the prompt is gone while the unlock is still in
++/// flight, so the startup file is opened at once and takes the first tab ahead of the document
++/// the user is unlocking.
++#[test]
++fn d2_a_startup_file_waits_behind_an_unlock_that_is_still_in_flight() {
++    let mut h = shell();
++    let (gate, started, release, finished) = open_worker::prepare_gate();
++    h.state_mut().open_prepare_gate = Some(gate);
++    h.state_mut().open_bytes("local-encrypted.pdf", None, encrypted("pw")).unwrap();
++    h.state().startup_inbox.lock().unwrap().push(("late.pdf".into(), fixture(2)));
++    h.run_steps(2);
++    assert_eq!(h.state().password_prompt.as_ref().map(|p| p.name.as_str()), Some("local-encrypted.pdf"));
++    assert_eq!(h.state().startup_inbox.lock().unwrap().len(), 1, "the startup file waits for the prompt");
++    h.state_mut().submit_password(Some("pw".into()));
++    started.recv_timeout(Duration::from_secs(5)).expect("the worker reached its prepare barrier");
++    h.run_steps(2);
++    assert_eq!(
++        h.state().startup_inbox.lock().unwrap().len(),
++        1,
++        "the startup file still waits while the unlock is in flight (tabs now: {:?})",
++        (0..h.state().views.len()).map(|tab| name_of(h.state(), tab)).collect::<Vec<_>>()
++    );
++    assert!(h.state().views.is_empty(), "the unlock is still in flight");
++    release.send(()).unwrap();
++    finished.recv_timeout(Duration::from_secs(5)).expect("the worker finished preparing");
++    h.run_steps(3);
++    assert_eq!(name_of(h.state(), 0).as_deref(), Some("local-encrypted.pdf"), "the unlocked document is the first tab");
++    assert_eq!(name_of(h.state(), 1).as_deref(), Some("late.pdf"), "the startup file follows in the background");
++    assert_eq!(h.state().active, Some(0));
++}
++
++/// D3. The same window can lose a file: a second, encrypted startup file asks for its own password
++/// while the first unlock is in flight, and `finish_open` of the first one clears whatever prompt
++/// is up (`self.password_prompt = None`), so the second file neither opens nor asks again.
++#[test]
++fn d3_an_unlock_finishing_does_not_discard_a_later_files_password_prompt() {
++    let mut h = shell();
++    let (gate, started, release, finished) = open_worker::prepare_gate();
++    h.state_mut().open_prepare_gate = Some(gate);
++    h.state_mut().open_bytes("first.pdf", None, encrypted("pw-1")).unwrap();
++    h.state().startup_inbox.lock().unwrap().push(("second.pdf".into(), encrypted("pw-2")));
++    h.run_steps(2);
++    h.state_mut().submit_password(Some("pw-1".into()));
++    started.recv_timeout(Duration::from_secs(5)).expect("the worker reached its prepare barrier");
++    h.run_steps(2);
++    let asking = h.state().password_prompt.as_ref().map(|p| p.name.clone());
++    release.send(()).unwrap();
++    finished.recv_timeout(Duration::from_secs(5)).expect("the worker finished preparing");
++    h.run_steps(3);
++    let second_is_open = (0..h.state().views.len()).any(|tab| name_of(h.state(), tab).as_deref() == Some("second.pdf"));
++    let second_is_asking = h.state().password_prompt.as_ref().is_some_and(|p| p.name == "second.pdf");
++    assert!(
++        second_is_open || second_is_asking,
++        "second.pdf was neither opened nor still asking for its password (while the unlock was in flight it was asking: {asking:?}; \
++         tabs now: {:?}, prompt now: {:?})",
++        (0..h.state().views.len()).map(|tab| name_of(h.state(), tab)).collect::<Vec<_>>(),
++        h.state().password_prompt.as_ref().map(|p| p.name.clone())
++    );
++}

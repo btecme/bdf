@@ -2,6 +2,8 @@
 
 Status: **evidence recorded, baseline not green, pending Codex review.** Run on 2026-10-13 (UTC-5). This is the report for work item BUILD-001 in [bdf-work-items.toml](../bdf-work-items.toml); the work item is `pending_review`, not `verified`. Raw logs, renders and screenshots are unpublished and live under the git-ignored `target/bdf-evidence/BUILD-001/` on the test machine. Paths below are relative to it. Hashes are SHA-256.
 
+**Addendum, 2026-10-14 (rev 0.2):** [section 12](#12-follow-up-asynchronous-test-synchronization-rev-02) records the test-synchronization correction requested by the [Codex review](BUILD-001-codex-review.md). It supersedes the test and BUILD-002 verdict rows below. Sections 1 to 11 are the original rev 0.1 record and are kept unchanged, including their red results.
+
 ## 1. Verdict
 
 | Question | Answer |
@@ -165,6 +167,99 @@ Limitations: debug profile only; one machine and one GPU path (wgpu on DX12); no
 - BDF-00's exit gate ("known-green baseline") is **not met**: the scoped UI test suite fails 13 to 16 tests on every run, on baseline and pending tree alike, and there is no green hosted run.
 - Recommendation for the owner: either approve a small follow-up that makes those tests wait for the asynchronous open (assertions unchanged, rerun, then obtain a hosted Windows/Linux run), before or alongside BUILD-002, or record the 13 failures as an accepted exception. BUILD-001 stays `pending_review` until Codex has reviewed this report and that decision is made.
 
+## 12. Follow-up: asynchronous test synchronization (rev 0.2)
+
+Status: **14 of the 16 reported failures are corrected and stable; 2 are not, because synchronizing them exposed product behaviour changes (D1 and D2, reproduced separately in section 12.5). The scoped suite is therefore still red (1,212 passed, 2 failed, 6 ignored). BUILD-001 stays `pending_review`, `baseline_green` stays false, and BUILD-002 stays pending.** Run on 2026-10-13 and 2026-10-14. Evidence is under `target/bdf-evidence/BUILD-001-sync/` (ignored). Paths below are relative to it.
+
+### 12.1 Trees and commits
+
+| What | Identity |
+|---|---|
+| Baseline commit (unchanged) | `7437bde378f43856eada40af25b983812e615e8a` |
+| Pre-correction commit tested as "before" | `b65411e4fc62f673dd40018518747c075c6cd13e`, tree `e3b375a461b538cf5c059491aa12a5dfb3f1404b`, clean working tree (`00-before-tree.txt`) |
+| Tested "after" code | `crates/ui-egui` subtree `2685374b91f763716bce5351f4a5a44de824bdda` (was `e984516442da3463150bf90d0cc072a269dc5623`); full tree before these evidence documents `afbc690600f8076c12b423c3089d3afffee3fdcb` (`01-tested-tree.txt`). `git rev-parse <correction commit>:crates/ui-egui` must equal the subtree id. |
+| Correction commit | the commit that adds this section (its hash is in the final report; a commit cannot name itself) |
+
+`b65411e4` is the commit that records the Codex review documents exactly as received. Nothing was reset, stashed, rebased or pushed. Production code is unchanged: the diff touches only `crates/ui-egui/tests/` and documents.
+
+### 12.2 What changed
+
+- **New shared helper** `crates/ui-egui/tests/support/mod.rs` (SHA-256 `3ef48066e19a3d6e457064d0cd2fb461c7d5a5d146f26812d7fa5b0e23cb7650`), included with `mod support;` by each affected binary.
+  - `wait_until(h, what, |app| ..)` steps one frame, tests the outcome, and yields 2 ms to the worker when it has not arrived. It stops at a monotonic `Instant` deadline (30 s, a ceiling that a working open never approaches: waits end on the frame the outcome arrives) and panics with `what` plus a snapshot: tabs with names, paths and page counts, the password prompt and its error, the dialog, the notice, a pending absolute link, queued startup files and recoverable snapshots.
+  - `wait_until_shown(h, what, |shell| ..)` does the same for something that must be drawn, such as the password field, so a test does not click a dialog that has not been laid out.
+  - Predicates are `view_named(app, name)` (the tab showing that document), `password_prompt_for(app, name, with_error)` and `toast_starts_with` / `toast_contains`. A test with other documents open waits for the new document's tab, never for "any view".
+- **Self-tests** `crates/ui-egui/tests/async_open_waits.rs` (`cb88c68151ce4f73b74974e864d047ce2fc6eb9f1df74f34b134ab427b655872`), 3 tests on the real worker: `open_path` returns before the document exists and the wait ends when it arrives; a wait names the intended document while another is already open; a wait for an outcome that never comes fails at its deadline (checked `>= 300 ms` and `< 10 s`) and prints the state it saw.
+- **Fourteen reported tests, two latent ones and two audited ones** now wait for their own outcome (table 12.4). Every assertion in those tests is kept, and every initiating command is still checked to return before the outcome (for example `views.is_empty()` straight after `file.open`). Where a test cancels a prompt, three frames now run before it asserts that nothing opened, which strengthens that negative check.
+- **Not done, deliberately:** `run_inline` is not enabled anywhere; production opening stays asynchronous; no fixed frame count or sleep was increased; no test was ignored; no deadline is swallowed.
+- **Deterministic gating.** The worker's prepare gate is `#[cfg(test)]` inside the library, so integration tests cannot use it without a production change. The existing gated pending-state test (`src/open_worker_tests.rs`) is untouched, and the three reproducers in 12.5 use the gate.
+- **Fixed frames that remain** are for effects that no worker is involved in: a click, an already-queued pick (including a cancelled pick), and the inline `open_bytes` and startup-inbox paths.
+
+### 12.3 Before and after
+
+"Before" is the committed pre-correction tests. Their executables were preserved before being rebuilt (`bin-before/`, hashes in `before-test-binaries.sha256`); the corrected ones are in `bin-after/` (`after-test-binaries.sha256`).
+
+| Run set | Before (`b65411e4`) | After (tested subtree) |
+|---|---|---|
+| Six affected binaries, `cargo test --locked --no-fail-fast -p pdfcraft-ui-egui --test commands --test document_links --test editing --test pickers --test recovery --test ui -j 2`, 5 or 10 normal runs | 14, 14, 13, 11 and 15 failures out of 260 tests | 10 runs, always 2 failures, 261 passed (the 3 helper self-tests are added to this run) |
+| The same, `--test-threads=1` | 11 failures | 2 failures |
+| The same, under 12 busy CPU workers | 16 failures | 2 failures |
+| Each intermittent test alone, 40 processes each, 6 busy CPU workers (`hammer-before-stress6.txt`, `hammer-after-stress6.txt`) | `consenting_to_absolute_gotor_still_validates_the_target` 13 of 40, `missing_corrupt_or_mismatched_metadata…` 10 of 40, `a_crashed_session_is_offered_and_recovered_unsaved` 5 of 40, `the_open_recent_menu_lists_files_and_opens_one` 2 of 40 | 0 of 40 for each of these four, and for the two audited tests |
+| Full scoped suite, `cargo test --locked --no-fail-fast -p pdfcraft-ui-egui -p pdfcraft -p pdfcraft-cli -j 2` | 1,195 passed, 16 failed, 6 ignored (row 70 of section 4) | 1,212 passed, 2 failed, 6 ignored, in both of two runs (`full-01-…`, `full-02-…`) |
+
+1,212 = 1,195 + 14 corrected + 3 new self-tests. The two failures in every "after" run are `a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it` and `a_startup_url_does_not_replace_another_documents_password_prompt`. A first attempt at the hammer with 12 busy workers at normal priority starved the machine, produced no result in about three hours and was abandoned; it is not evidence. The 6-worker rerun finished in about 40 s per set.
+
+Other gates on the tested tree: `cargo fmt --all -- --check` exit 0; `cargo clippy --locked -p pdfcraft-ui-egui -p pdfcraft -p pdfcraft-cli -j 2 --all-targets -- -D warnings` exit 0, with the verbose run confirming `clippy-driver` ran on all 7 `ui-egui` test targets (`gate-02b-…`); `cargo xtask layers`, `assets --write` and `assets` (`ATTRIBUTION.md` still `97288a11…cef`), `parity` exit 0. `fmt`, `assets`, `layers` and `parity` were rerun after the documentation changes (`gate-07-…` to `gate-10-…`), exit 0 each.
+
+**Unavailable or not run, so not passed:** `cargo xtask wasm` (target not installed); `cargo xtask deny` and the advisory check (`cargo-deny` not installed); hosted Windows/Linux runs (nothing pushed, so the fork has none); the optional-font build (`CRAFT_FONTS_DIR` unset); the 1.95 MSRV; the other ~30 test binaries were not audited for the same assumption (they passed in both full runs, which does not prove they cannot race); no desktop re-launch (no behaviour changed).
+
+### 12.4 Every reported failure, and what it waits for
+
+| Test (binary) | Before | Waits for | After |
+|---|---|---|---|
+| `file_open_returns_at_once_and_opens_the_pick_on_the_next_frame` (pickers) | failed in 7 of 7 | `views.is_empty()` straight after the command (kept), then the tab `picked.pdf` | passes |
+| `dropping_a_pdf_on_the_window_opens_it` (ui) | 7 of 7 | the tab `dropped.pdf` | passes |
+| `files_dropped_outside_the_page_grid_still_open_as_documents` (editing) | 5 of 7 | the tab `other.pdf` as the second tab (the grid document is already open) | passes |
+| `password_prompt_opens_and_security_tab_reports_the_details` (editing) | 7 of 7 | the tab `secret.pdf` and no prompt | passes |
+| `the_open_recent_menu_lists_files_and_opens_one` (commands) | intermittent: 2 of 7, 2 of 40 | the tab `recent.pdf` as the second tab | passes |
+| `a_local_gotor_link_opens_in_a_tab_and_applies_its_destination` (document_links) | 4 of 7 | the tab `target.pdf` as the second tab | passes |
+| `a_remote_destination_survives_password_retries_and_cancel_opens_no_tab` (document_links) | 7 of 7 | the prompt for `target.pdf`; then the same prompt carrying the wrong-password error; then the tab `target.pdf`; cancel case: the prompt, then cancel and 3 frames before asserting no extra tab | passes |
+| `an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs` (document_links) | 4 of 7 | the tab `target with spaces.pdf` as the third tab (`other.pdf` is already second) | passes |
+| `an_approved_absolute_gotor_preserves_password_retries_and_cancellation` (document_links) | 7 of 7 | the prompt for `encrypted.pdf`; the prompt with the error; then the tab `encrypted.pdf`; cancel case as above | passes |
+| `consenting_to_absolute_gotor_still_validates_the_target` (document_links) | intermittent: 13 of 40 (0 of 7; 1 of the original BUILD-001 runs) | for each refused target, a notice that starts "Couldn't" | passes |
+| `encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password` (recovery) | 7 of 7 | the prompt for `work.pdf`; the password field drawn; the tab `work.pdf` | passes |
+| `a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document` (recovery) | 7 of 7 | the prompt for `work.pdf` and its field drawn, then (after the cancel) the tab `B.pdf` once `pw-b` is accepted | passes |
+| `an_encrypted_snapshot_without_metadata_still_requires_its_password` (recovery) | 7 of 7 | the prompt and the tab, both named `<key>.pdf` (a snapshot with no metadata is named after its key); field drawn | passes |
+| `unlocking_a_late_startup_url_keeps_it_in_the_background` (pickers) | 7 of 7 | the prompt for `late-encrypted.pdf` with the error; then the tab `late-encrypted.pdf` as the second tab | passes |
+| `a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it` (commands) | 7 of 7 | **not modified** (D1) | fails in every run |
+| `a_startup_url_does_not_replace_another_documents_password_prompt` (pickers) | 7 of 7 | **not modified** (D2) | fails in every run |
+| *Latent, found failing in the "before" runs:* `a_crashed_session_is_offered_and_recovered_unsaved`, `missing_corrupt_or_mismatched_metadata_recovers_the_snapshot_without_an_original_path` (recovery) | 1 of 7 each; 5 and 10 of 40 | the tab `work.pdf` / the tab `<key>.pdf`, for all three metadata cases | pass |
+| *Latent, audited and synchronized, never seen failing:* `a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it` (document_links), `files_and_quit_from_the_operating_system` (ui) | 0 of 40 | the "not a regular file" notice; the tab named after the file, before the test deletes it | pass |
+
+Two reported tests needed a timing correction beyond the document wait: the recovery prompts must be drawn before the test queries the password field, and the key-named snapshots have no `work.pdf` name. Both were found by the wait's own timeout diagnostics and are handled with `wait_until_shown` and exact key-based names, not with a looser predicate.
+
+### 12.5 Residual product behaviour changes, reported separately
+
+Synchronizing the tests exposed three behaviour changes that came with the asynchronous open (#1493). They are **not fixed here**, and the two tests that expose them were left as they were. The deterministic reproducers are `BUILD-001-defect-reproducers.patch` (SHA-256 `912bcb284f0193cb46694497d52151793e41d45d576814cc261824e31d90c46d`). Each holds the worker at its prepare barrier, so "the open is in flight" is a state to assert, not a race. To run them:
+
+```
+git apply docs/bdf-evidence/BUILD-001-defect-reproducers.patch
+cargo test --locked -p pdfcraft-ui-egui --lib open_worker_defects -j 2   # 3 failed, 0 passed (defect-01-reproducers.log)
+```
+
+| ID | Behaviour | Reproducer failure | Reach |
+|---|---|---|---|
+| D1 | `open_then_run` (`lib.rs`, "a tool chosen with no document asks for a file and then runs on it") calls `open_path`, which now only schedules the open, and then checks `views.len() > before`, which is false. For a plain (unencrypted) file the tool never runs after the pick opens. | `d1_…`: the picked file opens, then `dialog` is `None`, not the Export dialog | The ordinary desktop flow (a tool chosen from Home or the palette with nothing open). Confirmed by the deterministic test only, not in the real desktop (the native picker cannot be driven). The encrypted-file path still works because it hands `then` to the password prompt. |
+| D2 | A startup file queued behind a password prompt is released as soon as the password is submitted, while the unlock is still in flight. It opens first, ahead of the document being unlocked. | `d2_…`: after the submit, the startup inbox is empty and the tabs are `[late.pdf]` | By my reading, `startup_inbox` is fed only by the web host (`apps/pdfcraft-web`), which has no worker, so the shipped desktop cannot reach it; unverified. The existing test expects the unlocked document to be tab 0 and in front; it ends with `[late.pdf, local-encrypted.pdf]` and the unlocked document active as tab 1. |
+| D3 | The same window can lose a file: a second, encrypted startup file asks for its password while the first unlock is in flight, and the first unlock's commit (`finish_open`, `self.password_prompt = None`) clears that prompt. The second file then neither opens nor asks again. | `d3_…`: `second.pdf` was asking while the unlock was in flight; afterwards tabs `[first.pdf]` and no prompt | Same reach as D2. It is the more serious one because an open request disappears silently. |
+
+Suggested fixes (not made): attach `then` to the scheduled open in `open_then_run`; keep the startup inbox held while `pending_opens` is non-empty; and make `finish_open` clear only a prompt that belongs to the document it opened. The two unmodified tests would pass after such a change.
+
+The synchronized variants of those two tests (they fail on the behaviour, not on timing) are kept as `defect-reproducers/commands-d1-synchronized-variant.diff` and `pickers-d2-synchronized-variant.diff`.
+
+### 12.6 Hashes and status
+
+Key files under `target/bdf-evidence/BUILD-001-sync/` are listed in its `MANIFEST.sha256` (hash in the final report). `commands.tsv` has every command with its exit code and duration. Status: BUILD-001 `pending_review`; Codex should rerun section 12.3 and the reproducers. The known-green baseline gate is **not** met: the scoped suite has 2 failures that are product behaviour, no hosted run exists, and wasm, advisory, optional-font and MSRV checks are unavailable. BUILD-002 is not started.
+
 ## Appendix: fixture generator
 
 <details>
@@ -223,3 +318,4 @@ open(sys.argv[1], "wb").write(build(objs))
 | Date | Revision | Change |
 |---|---|---|
 | 2026-10-13 | 0.1 | First evidence report for BUILD-001: baseline build, gates, smoke, desktop run, failing-test triage. |
+| 2026-10-14 | 0.2 | Section 12: bounded waits replace fixed-frame assumptions in the open-worker UI tests; before and after runs; two product behaviour changes reproduced separately. Sections 1 to 11 unchanged. |

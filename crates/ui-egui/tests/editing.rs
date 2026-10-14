@@ -8,6 +8,9 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{CloseRequest, Dialog, PdfCraftApp};
 
+mod support;
+use support::{view_named, wait_until};
+
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -1671,7 +1674,8 @@ fn files_dropped_before_the_pointer_is_known_wait_for_it() {
 fn files_dropped_outside_the_page_grid_still_open_as_documents() {
     let mut h = harness(2, |_| {});
     drop_files(&mut h, vec![Dropped("other.pdf", fixture(1))]);
-    h.run_steps(3);
+    // A dropped document is prepared on the open worker and opens on the frame that sees it.
+    wait_until(&mut h, "other.pdf opens as the second tab", |app| view_named(app, "other.pdf") == Some(1));
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2"]);
 }
@@ -1907,7 +1911,10 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
     field.type_text("pw");
     h.run_steps(2);
     h.key_press(Key::Enter);
-    h.run_steps(4);
+    // The password is checked on the open worker; the prompt closes when secret.pdf opens.
+    wait_until(&mut h, "secret.pdf opens once its password is accepted", |app| {
+        view_named(app, "secret.pdf") == Some(0) && app.password_prompt.is_none()
+    });
     assert_eq!(h.state().views.len(), 1);
     h.state_mut().set_option("dialog", "properties").unwrap();
     h.run_steps(2);

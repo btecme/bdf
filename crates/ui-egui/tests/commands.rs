@@ -8,6 +8,9 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::commands::COMMANDS;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
+mod support;
+use support::{view_named, wait_until};
+
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
@@ -287,7 +290,8 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
     h.get_by_label("Open Recent ⏵").hover();
     h.run_steps(3);
     h.get_by_label_contains("recent.pdf").click();
-    h.run_steps(4);
+    // Opening the entry reads and prepares recent.pdf on the open worker.
+    wait_until(&mut h, "recent.pdf opens in a second tab", |app| view_named(app, "recent.pdf") == Some(1));
     let app = h.state();
     assert_eq!(app.views.len(), 2, "the recent file opened in a new tab");
     let active = app.active.unwrap();

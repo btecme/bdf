@@ -9,6 +9,9 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_render::PageRenderer;
 use pdfcraft_ui_egui::PdfCraftApp;
 
+mod support;
+use support::{password_prompt_for, view_named, wait_until};
+
 /// An `n`-page document with a proper xref table.
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -66,7 +69,8 @@ fn file_open_returns_at_once_and_opens_the_pick_on_the_next_frame() {
     h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
     assert!(h.state_mut().execute("file.open"));
     assert!(h.state().views.is_empty(), "the command must not wait for the picker");
-    h.run_steps(2);
+    // The pick is answered on a later frame, and the file is then prepared on the open worker.
+    wait_until(&mut h, "picked.pdf opens on a later frame", |app| view_named(app, "picked.pdf") == Some(0));
     assert_eq!(h.state().views.len(), 1, "the picked file opens on a later frame");
     assert_eq!(pages(h.state(), 0), 2);
     let _ = std::fs::remove_dir_all(&dir);
@@ -644,11 +648,12 @@ fn unlocking_a_late_startup_url_keeps_it_in_the_background() {
     assert_eq!(h.state().active, Some(0));
     assert_eq!(h.state().password_prompt.as_ref().unwrap().name, "late-encrypted.pdf");
     h.state_mut().submit_password(Some("wrong-password".into()));
-    h.run_steps(2);
+    // The wrong password is refused on the open worker; the prompt comes back with its error.
+    wait_until(&mut h, "late-encrypted.pdf asks again with the wrong-password error", |app| password_prompt_for(app, "late-encrypted.pdf", true));
     assert!(h.state().password_prompt.as_ref().unwrap().error.is_some());
     assert_eq!(h.state().active, Some(0));
     h.state_mut().submit_password(Some("test-password".into()));
-    h.run_steps(2);
+    wait_until(&mut h, "late-encrypted.pdf opens in the background", |app| view_named(app, "late-encrypted.pdf") == Some(1));
     assert!(h.state().password_prompt.is_none());
     assert_eq!(h.state().active, Some(0));
     assert_eq!(h.state().views.len(), 2);

@@ -5,6 +5,9 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{LinkOrigin, PdfCraftApp, PendingLink};
 
+mod support;
+use support::{password_prompt_for, toast_contains, toast_starts_with, view_named, wait_until};
+
 /// See `tests/view.rs`: WARP's shader JIT crashes when two devices compile at once on ARM64.
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -175,6 +178,8 @@ fn a_local_gotor_link_opens_in_a_tab_and_applies_its_destination() {
     std::fs::write(dir.join("target.pdf"), linked_pages(2, None)).unwrap();
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /FitH 200]");
     click_remote_link(&mut h);
+    // The target is read and prepared on the open worker; its destination is applied on commit.
+    wait_until(&mut h, "target.pdf opens as the second tab", |app| view_named(app, "target.pdf") == Some(1));
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().active, Some(1));
     assert_eq!(h.state().views[1].current, 1, "the remote page destination is applied");
@@ -191,17 +196,23 @@ fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {
 
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /Fit]");
     click_remote_link(&mut h);
+    wait_until(&mut h, "target.pdf asks for its password", |app| password_prompt_for(app, "target.pdf", false));
     assert!(h.state().password_prompt.is_some());
     assert_eq!(h.state().views.len(), 1);
+    // Each answer is checked on the open worker, so the prompt returns with its error later.
     h.state_mut().submit_password(Some("wrong-password".into()));
+    wait_until(&mut h, "target.pdf asks again with the wrong-password error", |app| password_prompt_for(app, "target.pdf", true));
     assert!(h.state().password_prompt.as_ref().is_some_and(|p| p.error.is_some()));
     h.state_mut().submit_password(Some("test-password".into()));
+    wait_until(&mut h, "target.pdf opens as the second tab after the right password", |app| view_named(app, "target.pdf") == Some(1));
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().views[1].current, 1, "the destination survives a wrong-password retry");
 
     let mut cancelled = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /Fit]");
     click_remote_link(&mut cancelled);
+    wait_until(&mut cancelled, "target.pdf asks for its password", |app| password_prompt_for(app, "target.pdf", false));
     cancelled.state_mut().submit_password(None);
+    cancelled.run_steps(3);
     assert_eq!(cancelled.state().views.len(), 1, "cancelling does not leave a half-open target tab");
 }
 
@@ -224,6 +235,8 @@ fn a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it() {
     for target in targets {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), target, "[0 /Fit]");
         click_remote_link(&mut h);
+        // A relative link is checked on the open worker, which refuses a directory or a device.
+        wait_until(&mut h, &format!("{target} is refused as not a regular file"), |app| toast_contains(app, "not a regular file"));
         assert_eq!(h.state().views.len(), 1, "{target} opens no tab");
         let toast = &h.state().toast.as_ref().unwrap().0;
         assert!(toast.contains("not a regular file"), "{target}: {toast}");
@@ -418,7 +431,7 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
     assert_eq!(h.state().active, Some(1));
     h.run_steps(3);
     h.get_by_label("Allow").click();
-    h.run_steps(3);
+    wait_until(&mut h, "the allowed target opens as the third tab", |app| view_named(app, "target with spaces.pdf") == Some(2));
     assert!(h.state().pending_remote_link.is_none());
     assert_eq!(h.state().views.len(), 3);
     assert_eq!(h.state().views[2].current, 1);
@@ -485,7 +498,8 @@ fn consenting_to_absolute_gotor_still_validates_the_target() {
         assert!(h.state().pending_remote_link.is_some());
         assert!(h.state().toast.is_none(), "{name} isn't checked before consent");
         h.get_by_label("Allow").click();
-        h.run_steps(3);
+        // The worker checks the target after consent; every refusal is a "Couldn't ..." notice.
+        wait_until(&mut h, &format!("{name} is refused after consent"), |app| toast_starts_with(app, "Couldn't"));
         assert!(h.state().pending_remote_link.is_none());
         assert_eq!(h.state().views.len(), 1, "{name}");
         assert!(h.state().toast.is_some(), "{name} is refused after consent");
@@ -506,16 +520,19 @@ fn an_approved_absolute_gotor_preserves_password_retries_and_cancellation() {
         click_remote_link(&mut h);
         assert!(h.state().password_prompt.is_none());
         h.get_by_label("Allow").click();
-        h.run_steps(3);
+        wait_until(&mut h, "encrypted.pdf asks for its password after consent", |app| password_prompt_for(app, "encrypted.pdf", false));
         assert!(h.state().password_prompt.is_some());
         h.state_mut().submit_password(Some("wrong-password".into()));
+        wait_until(&mut h, "encrypted.pdf asks again with the wrong-password error", |app| password_prompt_for(app, "encrypted.pdf", true));
         assert!(h.state().password_prompt.as_ref().unwrap().error.is_some());
         assert_eq!(h.state().views.len(), 1);
         if cancel {
             h.state_mut().submit_password(None);
+            h.run_steps(3);
             assert_eq!(h.state().views.len(), 1);
         } else {
             h.state_mut().submit_password(Some("test-password".into()));
+            wait_until(&mut h, "encrypted.pdf opens as the second tab after the right password", |app| view_named(app, "encrypted.pdf") == Some(1));
             assert_eq!(h.state().views.len(), 2);
             assert_eq!(h.state().views[1].current, 1);
         }
