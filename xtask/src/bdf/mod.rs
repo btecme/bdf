@@ -9,6 +9,7 @@ mod annot_cases;
 mod form_cases;
 mod graphics_cases;
 mod hostile_cases;
+mod imgcmp;
 mod model;
 mod pdfgen;
 mod structure_cases;

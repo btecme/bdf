@@ -37,6 +37,41 @@ pub enum Tolerance {
     None,
 }
 
+/// The numeric limits of a tolerance class, applied to [`super::imgcmp::Metrics`].
+///
+/// **These were fixed before the first oracle comparison was run** (they are committed ahead of the
+/// harness that uses them) so they cannot have been tuned to the results. They are starting
+/// values: a class is revised only with a recorded reason after the measured distribution is
+/// known, never to turn a failing case into a passing one (spec section 9).
+///
+/// A render passes when its `diff_frac` and `mae` are at or below the limits and its `ink_ratio`
+/// lies in `ink`. Every case outside them is triaged by looking at the two images.
+#[allow(dead_code)] // used by the oracle harness (next commit)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limits {
+    /// Fraction of pixels that differ by more than 64 grey levels after a one-pixel allowance.
+    pub diff_frac: f64,
+    /// Mean absolute difference of 4x4 block averages, in grey levels.
+    pub mae: f64,
+    /// Allowed range of our total darkness over the oracle's.
+    pub ink: (f64, f64),
+}
+
+impl Tolerance {
+    #[allow(dead_code)] // used by the oracle harness (next commit)
+    pub fn limits(self) -> Option<Limits> {
+        match self {
+            // Glyphs differ in hinting and weight between rasterizers, so text gets the widest ink range.
+            Self::Text => Some(Limits { diff_frac: 0.03, mae: 4.0, ink: (0.80, 1.25) }),
+            // Strokes, fills and gradients have exact geometry; only edge antialiasing may differ.
+            Self::Vector => Some(Limits { diff_frac: 0.015, mae: 3.0, ink: (0.90, 1.10) }),
+            // Pictures are resampled differently, so pixels move more, but total tone must agree.
+            Self::Image => Some(Limits { diff_frac: 0.05, mae: 5.0, ink: (0.95, 1.05) }),
+            Self::None => None,
+        }
+    }
+}
+
 /// What the author knows is in the fixture.
 #[derive(Clone, Serialize, Default, Debug)]
 pub struct Expect {
