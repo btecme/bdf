@@ -104,7 +104,7 @@ struct Check {
 /// is within tolerance) or it could not be, and `status` says why: a comparison that could not be made
 /// never passes, so a render refusal, a missing or undecodable image or a failed oracle cannot be
 /// mistaken for agreement.
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 struct Visual {
     page: usize,
     status: String,
@@ -573,6 +573,117 @@ struct Known {
     /// The exact verdict that is excused; a case whose verdict changes is no longer excused.
     verdict: String,
     reason: String,
+    /// What the divergence is tied to: an open defect or a documented rendering difference. Must be one
+    /// of `TRACKS`, so an excuse cannot float free of the record that explains it.
+    #[serde(default)]
+    tracks: String,
+    /// The metrics of every page comparison when the exception was reviewed. A verdict can stay
+    /// "visual divergence" while the output gets worse, so the gate also fails when a page drifts
+    /// beyond these figures (see `drift_failures`) until someone looks at the images and re-baselines.
+    #[serde(default)]
+    baseline: Vec<Baseline>,
+}
+
+/// Defects (G1 image sampling, G2 widget fallback, G3 page-tree repair, F10 admission limits) and
+/// documented rendering differences (G6 thin-line policy, `oracle-artefact`, `reader-defined`,
+/// `stroke-placement`) an exception may be tied to. See BUILD-002 sections 4.4 to 4.6.
+const TRACKS: [&str; 8] = ["G1", "G2", "G3", "G6", "F10", "oracle-artefact", "reader-defined", "stroke-placement"];
+
+/// The reviewed metrics of one page comparison.
+#[derive(Deserialize, Clone, Debug)]
+struct Baseline {
+    page: usize,
+    diff_frac: f64,
+    mae: f64,
+    ink_ratio: Option<f64>,
+    max_block: f64,
+    color_diff_frac: f64,
+    color_mae: f64,
+    max_color_block: f64,
+}
+
+impl Baseline {
+    fn of(v: &Visual) -> Baseline {
+        Baseline {
+            page: v.page,
+            diff_frac: v.diff_frac,
+            mae: v.mae,
+            ink_ratio: v.ink_ratio,
+            max_block: v.max_block,
+            color_diff_frac: v.color_diff_frac,
+            color_mae: v.color_mae,
+            max_color_block: v.max_color_block,
+        }
+    }
+}
+
+/// How much a baselined metric may grow before the gate asks for a review: a tenth of its value plus a
+/// floor that absorbs float noise. The engine and the oracle are deterministic, so on one machine the
+/// figures repeat exactly; the margin is for another one.
+fn drift_limit(base: f64, floor: f64) -> f64 {
+    base * 1.10 + floor
+}
+
+/// The reasons a known exception's pages have drifted from what was reviewed. A page may not get
+/// worse (larger difference, larger block, ink further from 1) beyond `drift_limit`, must still be
+/// compared, and every page compared must be in the baseline.
+fn drift_failures(known: &[Known], visuals: &BTreeMap<String, Vec<Visual>>) -> Vec<String> {
+    let mut out = Vec::new();
+    for k in known {
+        // A case that did not run is reported by strict_failures, not here.
+        if !visuals.contains_key(&k.id) {
+            continue;
+        }
+        let now: Vec<&Visual> = visuals.get(&k.id).map(|v| v.iter().filter(|v| v.status == "compared").collect()).unwrap_or_default();
+        for b in &k.baseline {
+            let Some(v) = now.iter().find(|v| v.page == b.page) else {
+                out.push(format!("`{}` page {}: baselined, but no comparison was made; re-baseline after review", k.id, b.page));
+                continue;
+            };
+            let worse = |name: &str, base: f64, cur: f64, floor: f64| {
+                let limit = drift_limit(base, floor);
+                (cur > limit).then(|| {
+                    format!(
+                        "`{}` page {}: {name} worsened from {base:.4} to {cur:.4} (limit {limit:.4}); look at the images, then re-baseline",
+                        k.id, b.page
+                    )
+                })
+            };
+            out.extend(worse("diff_frac", b.diff_frac, v.diff_frac, 0.0005));
+            out.extend(worse("mae", b.mae, v.mae, 0.2));
+            out.extend(worse("max_block", b.max_block, v.max_block, 2.0));
+            out.extend(worse("color_diff_frac", b.color_diff_frac, v.color_diff_frac, 0.0005));
+            out.extend(worse("color_mae", b.color_mae, v.color_mae, 0.2));
+            out.extend(worse("max_color_block", b.max_color_block, v.max_color_block, 2.0));
+            // Darkness is judged by its distance from equal, in either direction.
+            if let (Some(base), Some(cur)) = (b.ink_ratio, v.ink_ratio) {
+                out.extend(worse("ink distance from 1", (base - 1.0).abs(), (cur - 1.0).abs(), 0.02));
+            }
+        }
+        for v in &now {
+            if !k.baseline.iter().any(|b| b.page == v.page) {
+                out.push(format!("`{}` page {}: compared but not in the baseline; review the images and re-baseline", k.id, v.page));
+            }
+        }
+    }
+    out
+}
+
+/// The baseline blocks for every case with a visual divergence, as TOML to paste into the known
+/// exceptions file once the images have been looked at (`--print-baselines`).
+fn print_baselines(results: &[CaseResult]) {
+    for r in results.iter().filter(|r| r.verdict == "visual divergence") {
+        println!("# {}\nbaseline = [", r.id);
+        for v in r.visual.iter().filter(|v| v.status == "compared") {
+            let b = Baseline::of(v);
+            let ink = b.ink_ratio.map(|x| format!(", ink_ratio = {x:.4}")).unwrap_or_default();
+            println!(
+                "  {{ page = {}, diff_frac = {:.6}, mae = {:.4}, max_block = {:.2}, color_diff_frac = {:.6}, color_mae = {:.4}, max_color_block = {:.2}{ink} }},",
+                b.page, b.diff_frac, b.mae, b.max_block, b.color_diff_frac, b.color_mae, b.max_color_block
+            );
+        }
+        println!("]");
+    }
 }
 
 #[derive(Deserialize)]
@@ -601,6 +712,9 @@ fn strict_failures(rows: &[(String, String)], total: usize, known: &[Known]) -> 
     for k in known {
         if k.reason.trim().is_empty() {
             out.push(format!("known exception for `{}` gives no reason", k.id));
+        }
+        if !TRACKS.contains(&k.tracks.as_str()) {
+            out.push(format!("known exception for `{}` is tied to `{}`, which is not one of {TRACKS:?}", k.id, k.tracks));
         }
         if !seen.insert(k.id.as_str()) {
             out.push(format!("`{}` is excused more than once", k.id));
@@ -700,11 +814,12 @@ fn negative_control(t: &Tools, manifest: &InManifest) -> (usize, Vec<String>) {
     (tried, accepted)
 }
 
-/// `cargo xtask bdf-oracle [--strict [--known FILE]] [--cli P] [--mutool P] [--corpus DIR] [--out DIR] [--only ids] [--family F] [--dpi N] [--timeout S]`
+/// `cargo xtask bdf-oracle [--strict [--known FILE]] [--print-baselines] [--cli P] [--mutool P] [--corpus DIR] [--out DIR] [--only ids] [--family F] [--dpi N] [--timeout S]`
 ///
 /// Without `--strict` the run is exploratory: it records every divergence and exits 0. With it the run
 /// is a regression gate: it fails unless all cases ran, every required comparison was made, and every
-/// non-accepted verdict is excused by an entry in the known-exceptions file.
+/// non-accepted verdict is excused by an entry in the known-exceptions file, each entry is tied to a
+/// defect or documented difference, and no excused case has got worse than the figures reviewed.
 pub fn run(args: &[String]) -> Result<()> {
     let r = root();
     let mut t = Tools {
@@ -720,6 +835,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut control = false;
     let mut control_only = false;
     let mut strict = false;
+    let mut baselines = false;
     let mut known_path = r.join("xtask/baselines/bdf-oracle-known.toml");
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -732,6 +848,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--only" => only = Some(val()?.split(',').map(str::to_string).collect()),
             "--family" => family = Some(val()?.clone()),
             "--strict" => strict = true,
+            "--print-baselines" => baselines = true,
             "--known" => known_path = PathBuf::from(val()?),
             "--control" => control = true,
             "--control-only" => (control, control_only) = (true, true),
@@ -791,7 +908,9 @@ pub fn run(args: &[String]) -> Result<()> {
         Err(e) => bail!("strict mode needs the known exceptions at {}: {e}", known_path.display()),
     };
     let rows: Vec<(String, String)> = results.iter().map(|r| (r.id.clone(), r.verdict.clone())).collect();
-    let failures = strict_failures(&rows, manifest.case.len(), &known);
+    let mut failures = strict_failures(&rows, manifest.case.len(), &known);
+    let visuals: BTreeMap<String, Vec<Visual>> = results.iter().map(|r| (r.id.clone(), r.visual.clone())).collect();
+    failures.extend(drift_failures(&known, &visuals));
     println!(
         "{}: {} reason(s) the strict gate would fail ({} known exception(s) read from {})",
         if strict { "strict gate" } else { "exploratory run (exit status does not depend on the gate)" },
@@ -801,6 +920,9 @@ pub fn run(args: &[String]) -> Result<()> {
     );
     for f in &failures {
         println!("  - {f}");
+    }
+    if baselines {
+        print_baselines(&results);
     }
     if control {
         let (tried, accepted) = negative_control(&t, &manifest);
@@ -901,7 +1023,66 @@ mod tests {
     }
 
     fn known(id: &str, v: &str, why: &str) -> Known {
-        Known { id: id.into(), verdict: v.into(), reason: why.into() }
+        Known { id: id.into(), verdict: v.into(), reason: why.into(), tracks: "G1".into(), baseline: vec![] }
+    }
+
+    fn worse_visual(page: usize, mae: f64) -> Visual {
+        Visual { mae, diff_frac: 0.01, max_block: 40.0, ink_ratio: Some(1.2), passes: false, ..good_visual(page) }
+    }
+
+    fn with_baseline(id: &str, pages: &[Visual]) -> Known {
+        Known { baseline: pages.iter().map(Baseline::of).collect(), ..known(id, "visual divergence", "x") }
+    }
+
+    fn drift(k: &Known, now: Vec<Visual>) -> Vec<String> {
+        drift_failures(std::slice::from_ref(k), &BTreeMap::from([(k.id.clone(), now)]))
+    }
+
+    #[test]
+    fn a_failing_case_whose_output_gets_worse_fails_the_gate_though_its_verdict_is_unchanged() {
+        let k = with_baseline("b", &[worse_visual(1, 6.0)]);
+        assert!(drift(&k, vec![worse_visual(1, 6.0)]).is_empty(), "identical figures are fine");
+        assert!(drift(&k, vec![worse_visual(1, 6.2)]).is_empty(), "float-noise growth is fine");
+        assert!(drift(&k, vec![worse_visual(1, 5.0)]).is_empty(), "getting better is not a drift");
+        let f = drift(&k, vec![worse_visual(1, 9.0)]);
+        assert!(f.iter().any(|m| m.contains("`b`") && m.contains("mae") && m.contains("re-baseline")), "{f:?}");
+        // Each metric is watched, not only the mean error.
+        for v in [
+            Visual { diff_frac: 0.05, ..worse_visual(1, 6.0) },
+            Visual { max_block: 80.0, ..worse_visual(1, 6.0) },
+            Visual { ink_ratio: Some(2.5), ..worse_visual(1, 6.0) },
+            Visual { ink_ratio: Some(0.2), ..worse_visual(1, 6.0) },
+            Visual { color_mae: 9.0, ..worse_visual(1, 6.0) },
+            Visual { color_diff_frac: 0.05, ..worse_visual(1, 6.0) },
+            Visual { max_color_block: 90.0, ..worse_visual(1, 6.0) },
+        ] {
+            assert!(!drift(&k, vec![v.clone()]).is_empty(), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn a_baselined_page_must_still_be_compared_and_every_compared_page_must_be_baselined() {
+        let k = with_baseline("b", &[worse_visual(1, 6.0), worse_visual(2, 6.0)]);
+        let gone = drift(&k, vec![worse_visual(1, 6.0)]);
+        assert!(gone.iter().any(|m| m.contains("page 2")), "{gone:?}");
+        let unreadable = Visual { status: "oracle render failed".into(), ..worse_visual(2, 6.0) };
+        assert!(!drift(&k, vec![worse_visual(1, 6.0), unreadable]).is_empty());
+        let extra = drift(&k, vec![worse_visual(1, 6.0), worse_visual(2, 6.0), worse_visual(3, 6.0)]);
+        assert!(extra.iter().any(|m| m.contains("page 3")), "{extra:?}");
+        let none = Known { baseline: vec![], ..known("b", "visual divergence", "x") };
+        assert!(!drift(&none, vec![worse_visual(1, 6.0)]).is_empty(), "a visual exception needs a baseline");
+    }
+
+    #[test]
+    fn an_exception_must_be_tied_to_a_defect_or_a_documented_difference() {
+        let untied = Known { tracks: String::new(), ..known("b", "visual divergence", "x") };
+        assert!(!strict_failures(&[row("b", "visual divergence")], 1, &[untied]).is_empty());
+        let invented = Known { tracks: "whatever".into(), ..known("b", "visual divergence", "x") };
+        assert!(!strict_failures(&[row("b", "visual divergence")], 1, &[invented]).is_empty());
+        for t in TRACKS {
+            let ok = Known { tracks: t.into(), ..known("b", "visual divergence", "x") };
+            assert!(strict_failures(&[row("b", "visual divergence")], 1, &[ok]).is_empty(), "{t}");
+        }
     }
 
     #[test]
