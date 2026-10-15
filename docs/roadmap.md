@@ -176,6 +176,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 |---|---|---|
 | 2026-10-15 | minor | BDF-00: BUILD-001 evidence correction (rustls key-exchange advisory does not apply to the update check); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 MSRV 1.95 check passes (compile check); estimates unchanged. |
+| 2026-10-14 | minor | [Codex review of fff77e17](bdf-evidence/fff77e17-codex-review.md): no blocking bump finding; dependency checks independently pass, baseline status unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 rustls bumped to 0.23.46 (four advisories fixed); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 wasm and deny gates pass after provenance checks (rustls caveat); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 D1 to D3 fixed; scoped suite green (1,220 passed, 0 failed); estimates unchanged. |
