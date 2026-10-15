@@ -144,3 +144,12 @@ pub fn start_probe(hang: bool) -> (Child, u32) {
     let pid: u32 = line.trim().strip_prefix("PID ").expect("a PID line").parse().unwrap();
     (parent, pid)
 }
+
+/// A config that runs the scripted fake worker in `mode` (see `examples/fake_worker.rs`). The example is
+/// built by a plain `cargo test -p pdfcraft-worker`; a `--test X` filter does not build examples.
+pub fn fake(mode: &str) -> Config {
+    let exe = std::env::current_exe().unwrap();
+    let path = exe.parent().and_then(|p| p.parent()).unwrap().join("examples").join(if cfg!(windows) { "fake_worker.exe" } else { "fake_worker" });
+    assert!(path.is_file(), "build the example first (cargo build -p pdfcraft-worker --examples): {}", path.display());
+    Config { args: vec![mode.to_string()], ..Config::new(path) }
+}

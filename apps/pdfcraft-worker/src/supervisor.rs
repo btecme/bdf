@@ -36,6 +36,8 @@ use crate::protocol::{
 #[derive(Clone, Debug)]
 pub struct Config {
     pub exe: PathBuf,
+    /// Arguments passed to the worker (none for the real worker; tests select a scripted fake).
+    pub args: Vec<String>,
     pub limits: Limits,
     /// Longest any single call may take.
     pub call_deadline: Duration,
@@ -51,6 +53,7 @@ impl Config {
     pub fn new(exe: impl Into<PathBuf>) -> Self {
         Self {
             exe: exe.into(),
+            args: Vec::new(),
             limits: Limits::default(),
             call_deadline: Duration::from_secs(30),
             memory_cap: Some(1536 * 1024 * 1024),
@@ -170,6 +173,7 @@ impl Worker {
     /// Start the worker and complete the version handshake.
     pub fn spawn(cfg: &Config) -> Result<Self, WorkerError> {
         let mut cmd = Command::new(&cfg.exe);
+        cmd.args(&cfg.args);
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| WorkerError::Spawn(format!("{}: {e}", cfg.exe.display())))?;
         let pid = child.id();
@@ -441,15 +445,18 @@ impl Worker {
             return Err(self.remote_or_protocol(f));
         }
         let begin: RenderBegin = protocol::decode(&f.payload).map_err(|e| self.fail_protocol(e.to_string()))?;
-        let expected = u64::from(begin.width) * u64::from(begin.height) * 4;
-        if begin.width == 0 || begin.height == 0 || begin.total != expected || begin.total > self.cfg.limits.max_result {
+        let expected = match protocol::rgba_len(begin.width, begin.height, self.cfg.limits.max_result) {
+            Ok(n) => n,
+            Err(why) => return Err(self.fail_protocol(format!("render dimensions {}x{}: {why}", begin.width, begin.height))),
+        };
+        if begin.total != expected as u64 {
             return Err(self.fail_protocol(format!(
-                "render of {}x{} declares {} bytes (limit {})",
-                begin.width, begin.height, begin.total, self.cfg.limits.max_result
+                "render dimensions {}x{} need {expected} bytes but {} are declared",
+                begin.width, begin.height, begin.total
             )));
         }
         let mut pixels = Vec::new();
-        if pixels.try_reserve_exact(begin.total as usize).is_err() {
+        if pixels.try_reserve_exact(expected).is_err() {
             return Err(self.fail_protocol("cannot reserve memory for the render".into()));
         }
         let mut hasher = Sha256::new();

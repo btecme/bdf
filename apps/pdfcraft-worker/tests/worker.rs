@@ -205,3 +205,15 @@ fn the_parent_refuses_an_oversize_document_without_sending_it() {
     let err = Session::open(&pdfcraft_worker::supervisor::Config { limits, ..cfg() }, vec![b' '; 4096], None).err().expect("must fail");
     assert!(matches!(&err, WorkerError::Remote { code, .. } if code == "resource_limit"), "{err:?}");
 }
+
+/// R1: a worker that sends dimensions whose pixel count overflows must be refused as a protocol
+/// fault and ended. It must never panic the parent (overflow checks on) nor be believed (off).
+#[test]
+fn a_reply_whose_dimensions_overflow_is_a_protocol_fault_and_never_a_render() {
+    let mut w = Worker::spawn(&fake("overflow")).expect("the fake completes the handshake");
+    let pid = w.pid();
+    w.open(&tiny_pdf("overflow"), None).expect("the fake accepts the document");
+    let err = w.render(1, 96.0).err().expect("an overflowing render must not be accepted");
+    assert!(matches!(&err, WorkerError::Protocol(m) if m.contains("dimensions")), "{err:?}");
+    assert!(wait_until(Duration::from_secs(3), || process_gone(pid)), "the peer that sent it must be ended");
+}

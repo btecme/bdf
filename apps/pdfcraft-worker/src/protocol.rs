@@ -282,6 +282,20 @@ pub enum Debug {
     CrashOnce,
 }
 
+/// Bytes of a `width` x `height` RGBA8 image, or why that size is not acceptable. Every step is
+/// checked: a peer controls both numbers, and `2^31 x 2^31 x 4` wraps a `u64` to zero.
+pub fn rgba_len(width: u32, height: u32, max_result: u64) -> Result<usize, String> {
+    if width == 0 || height == 0 {
+        return Err("a dimension is zero".into());
+    }
+    let bytes =
+        u64::from(width).checked_mul(u64::from(height)).and_then(|p| p.checked_mul(4)).ok_or_else(|| "the pixel count overflows".to_string())?;
+    if bytes > max_result {
+        return Err(format!("{bytes} bytes exceeds the {max_result} byte result limit"));
+    }
+    usize::try_from(bytes).map_err(|_| "the size does not fit in memory".to_string())
+}
+
 /// Lower-case hex of a SHA-256 digest.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -369,6 +383,18 @@ mod tests {
         assert!(matches!(write_frame(&mut Vec::new(), Kind::Chunk, 1, &big, &l), Err(ProtocolError::TooLarge { .. })));
         let ok = vec![0u8; l.max_chunk as usize];
         assert!(write_frame(&mut Vec::new(), Kind::Chunk, 1, &ok, &l).is_ok());
+    }
+
+    #[test]
+    fn rgba_sizes_are_checked_at_every_step() {
+        assert_eq!(rgba_len(100, 50, 1 << 20), Ok(20_000));
+        assert!(rgba_len(0, 5, 1 << 20).is_err() && rgba_len(5, 0, 1 << 20).is_err());
+        // The reviewed counterexample: 2^31 x 2^31 x 4 = 2^64 wraps to 0 without checked arithmetic.
+        assert!(rgba_len(2_147_483_648, 2_147_483_648, u64::MAX).unwrap_err().contains("overflow"));
+        assert!(rgba_len(u32::MAX, u32::MAX, u64::MAX).unwrap_err().contains("overflow"));
+        // Just over the limit is refused; exactly at it is accepted.
+        assert!(rgba_len(1000, 1000, 3_999_999).is_err());
+        assert_eq!(rgba_len(1000, 1000, 4_000_000), Ok(4_000_000));
     }
 
     #[test]
