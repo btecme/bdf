@@ -59,17 +59,68 @@ pub struct Limits {
     /// limits were chosen from what a block difference means (60 of 255 is a 24% tone change over
     /// a 16x16 area, clearly visible), before they were applied to any real comparison.
     pub max_block: f64,
+    /// Fraction of pixels that differ by more than 64 in any colour channel after a one-pixel
+    /// allowance. **Revision 2 (BUILD-002 follow-up, R5):** the colour limits were added because the
+    /// grey metrics cannot see a wrong colour of equal luma. Each is set equal to the grey limit it
+    /// mirrors (`diff_frac`, `mae`, `max_block`) before it was applied to any real comparison, on the
+    /// principle that a colour error is judged by the same budget as a grey error of the same size. They
+    /// were not tuned to the current outputs; the cases they newly reject are listed in the record.
+    pub color_diff_frac: f64,
+    /// Mean over 4x4 blocks of the largest channel difference of the block's mean colour.
+    pub color_mae: f64,
+    /// Largest channel difference of the mean colour of any 16x16 block.
+    pub max_color_block: f64,
+}
+
+impl Limits {
+    /// Whether a comparison is within every limit: the sizes match, and the grey and colour metrics
+    /// are at or below theirs and the darkness ratio is in range. The one place this is decided.
+    pub fn accepts(&self, m: &super::imgcmp::Metrics) -> bool {
+        m.size_match
+            && m.diff_frac <= self.diff_frac
+            && m.mae <= self.mae
+            && m.ink_ratio >= self.ink.0
+            && m.ink_ratio <= self.ink.1
+            && m.max_block <= self.max_block
+            && m.color_diff_frac <= self.color_diff_frac
+            && m.color_mae <= self.color_mae
+            && m.max_color_block <= self.max_color_block
+    }
 }
 
 impl Tolerance {
     pub fn limits(self) -> Option<Limits> {
         match self {
             // Glyphs differ in hinting and weight between rasterizers, so text gets the widest ink range.
-            Self::Text => Some(Limits { diff_frac: 0.03, mae: 4.0, ink: (0.80, 1.25), max_block: 60.0 }),
+            Self::Text => Some(Limits {
+                diff_frac: 0.03,
+                mae: 4.0,
+                ink: (0.80, 1.25),
+                max_block: 60.0,
+                color_diff_frac: 0.03,
+                color_mae: 4.0,
+                max_color_block: 60.0,
+            }),
             // Strokes, fills and gradients have exact geometry; only edge antialiasing may differ.
-            Self::Vector => Some(Limits { diff_frac: 0.015, mae: 3.0, ink: (0.90, 1.10), max_block: 60.0 }),
+            Self::Vector => Some(Limits {
+                diff_frac: 0.015,
+                mae: 3.0,
+                ink: (0.90, 1.10),
+                max_block: 60.0,
+                color_diff_frac: 0.015,
+                color_mae: 3.0,
+                max_color_block: 60.0,
+            }),
             // Pictures are resampled differently, so pixels move more, but total tone must agree.
-            Self::Image => Some(Limits { diff_frac: 0.05, mae: 5.0, ink: (0.95, 1.05), max_block: 80.0 }),
+            Self::Image => Some(Limits {
+                diff_frac: 0.05,
+                mae: 5.0,
+                ink: (0.95, 1.05),
+                max_block: 80.0,
+                color_diff_frac: 0.05,
+                color_mae: 5.0,
+                max_color_block: 80.0,
+            }),
             Self::None => None,
         }
     }

@@ -115,6 +115,9 @@ struct Visual {
     mae: f64,
     ink_ratio: Option<f64>,
     max_block: f64,
+    color_diff_frac: f64,
+    color_mae: f64,
+    max_color_block: f64,
     passes: bool,
 }
 
@@ -415,6 +418,9 @@ fn not_compared(page: usize, why: String) -> Visual {
         mae: 255.0,
         ink_ratio: None,
         max_block: 255.0,
+        color_diff_frac: 1.0,
+        color_mae: 255.0,
+        max_color_block: 255.0,
         passes: false,
     }
 }
@@ -451,12 +457,7 @@ fn visual_checks(t: &Tools, case: &InCase, e: &Side, o: &Side, tol: super::model
             }
         };
         let m = imgcmp::compare(&a, &b);
-        let passes = m.size_match
-            && m.diff_frac <= limits.diff_frac
-            && m.mae <= limits.mae
-            && m.ink_ratio >= limits.ink.0
-            && m.ink_ratio <= limits.ink.1
-            && m.max_block <= limits.max_block;
+        let passes = limits.accepts(&m);
         out.push(Visual {
             page: er.page,
             status: "compared".into(),
@@ -467,6 +468,9 @@ fn visual_checks(t: &Tools, case: &InCase, e: &Side, o: &Side, tol: super::model
             mae: m.mae,
             ink_ratio: m.ink_ratio.is_finite().then_some(m.ink_ratio),
             max_block: m.max_block,
+            color_diff_frac: m.color_diff_frac,
+            color_mae: m.color_mae,
+            max_color_block: m.max_color_block,
             passes,
         });
     }
@@ -669,8 +673,8 @@ fn negative_control(t: &Tools, manifest: &InManifest) -> (usize, Vec<String>) {
             // appearance-stream / no-appearance twins.
             let twin = |s: &str| s.replace("-no-ap", "").replace("-ap", "");
             if b.id == a.id
-                || ours.w != theirs.w
-                || ours.h != theirs.h
+                || ours.gray.w != theirs.gray.w
+                || ours.gray.h != theirs.gray.h
                 || (a.family == "encrypted" && b.family == "encrypted")
                 || twin(&a.id) == twin(&b.id)
             {
@@ -684,13 +688,7 @@ fn negative_control(t: &Tools, manifest: &InManifest) -> (usize, Vec<String>) {
             let Some(l) = tol.limits() else { continue };
             let m = imgcmp::compare(&ours, &theirs);
             tried += 1;
-            if m.size_match
-                && m.diff_frac <= l.diff_frac
-                && m.mae <= l.mae
-                && m.ink_ratio >= l.ink.0
-                && m.ink_ratio <= l.ink.1
-                && m.max_block <= l.max_block
-            {
+            if l.accepts(&m) {
                 accepted.push(format!(
                     "{} vs {} (diff {:.4}, mae {:.2}, ink {:.2}, block {:.0})",
                     a.id, b.id, m.diff_frac, m.mae, m.ink_ratio, m.max_block
@@ -851,6 +849,9 @@ mod tests {
             mae: 0.0,
             ink_ratio: Some(1.0),
             max_block: 0.0,
+            color_diff_frac: 0.0,
+            color_mae: 0.0,
+            max_color_block: 0.0,
             passes: true,
         }
     }
@@ -971,6 +972,65 @@ mod tests {
             w.write_image_data(&rgb.repeat(64)).unwrap();
         }
         std::fs::write(path, buf).unwrap();
+    }
+
+    /// A page of `size` pixels, white, with a square of `square` pixels in the corner in `rgba`.
+    fn write_page(path: &Path, size: u32, square: u32, rgba: [u8; 4]) {
+        let mut buf = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut buf, size, size);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut w = enc.write_header().unwrap();
+            let mut data = Vec::new();
+            for y in 0..size {
+                for x in 0..size {
+                    data.extend_from_slice(if x < square && y < square { &rgba } else { &[255, 255, 255, 255] });
+                }
+            }
+            w.write_image_data(&data).unwrap();
+        }
+        std::fs::write(path, buf).unwrap();
+    }
+
+    /// Whether the engine's page (`ours`) is accepted against the oracle's (`theirs`), through the real
+    /// PNG loading and comparison, for the given tolerance class.
+    fn accepted_pair(name: &str, tol: super::super::model::Tolerance, ours: (u32, [u8; 4]), theirs: (u32, [u8; 4])) -> bool {
+        let dir = scratch(name);
+        let t = tools(dir.clone());
+        let c = case("opens", "text");
+        write_page(&dir.join("_render/engine-t-case-1.png"), 64, ours.0, ours.1);
+        write_page(&dir.join("_render/oracle-t-case-1.png"), 64, theirs.0, theirs.1);
+        let e = side(true, vec![render(1, true)]);
+        let o = side(true, vec![render(1, true)]);
+        let v = visual_checks(&t, &c, &e, &o, tol);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(v.len(), 1);
+        v[0].passes
+    }
+
+    #[test]
+    fn a_wrong_colour_of_equal_luma_is_not_accepted_in_any_class() {
+        use super::super::model::Tolerance::{Image, Text, Vector};
+        // Red (255,0,0) and green (0,130,0) both have luma 76: the grayscale metrics cannot tell them apart.
+        for tol in [Text, Vector, Image] {
+            assert!(!accepted_pair("rg", tol, (32, [255, 0, 0, 255]), (32, [0, 130, 0, 255])), "{tol:?}");
+            // The control: the same colour is accepted.
+            assert!(accepted_pair("rr", tol, (32, [255, 0, 0, 255]), (32, [255, 0, 0, 255])), "{tol:?}");
+        }
+    }
+
+    #[test]
+    fn transparency_is_composited_before_colour_is_judged() {
+        use super::super::model::Tolerance::Vector;
+        // 50% red over white is (255,127,127): accepted against that colour, not against green or full red.
+        assert!(accepted_pair("a1", Vector, (32, [255, 0, 0, 128]), (32, [255, 127, 127, 255])));
+        assert!(!accepted_pair("a2", Vector, (32, [255, 0, 0, 128]), (32, [0, 130, 0, 255])));
+        assert!(!accepted_pair("a3", Vector, (32, [255, 0, 0, 128]), (32, [255, 0, 0, 255])));
+        // Fully transparent shows the white page, whatever colour it carries.
+        assert!(accepted_pair("a4", Vector, (32, [255, 0, 0, 0]), (0, [0, 0, 0, 255])));
+        // The same colour at a different opacity is a different render.
+        assert!(!accepted_pair("a5", Vector, (32, [255, 0, 0, 255]), (32, [255, 0, 0, 64])));
     }
 
     #[test]

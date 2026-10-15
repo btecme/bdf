@@ -75,3 +75,16 @@ reason = "The engine opens a 2001-page file although the proposed limit is 2000 
 id = "hostile-size-251mib"
 verdict = "limit not enforced"
 reason = "The engine reads a 251 MiB file whole although the proposed limit is 250 MiB; admission limits belong to the worker (BDF-0002, BDF-0003), finding F10 (record 4.5)."
+
+# Newly rejected by the colour metrics added in the BUILD-002 follow-up (R5); the grey metrics passed
+# both. Triaged by looking at the crops (target/bdf-evidence/BUILD-002-followup/triage/): neither file
+# has an appearance stream, so the icon is each reader's own design and the spec does not define it.
+[[known]]
+id = "annot-note-popup"
+verdict = "visual divergence"
+reason = "A Text annotation with no appearance: the engine draws a yellow speech bubble, MuPDF a yellow square with a dark glyph. Both are yellow from /C; the largest 16x16 colour block differs by 72 against a limit of 60. Reader-defined icon, not a defect."
+
+[[known]]
+id = "annot-fileattachment"
+verdict = "visual divergence"
+reason = "A FileAttachment annotation with no appearance: the engine draws a blue paperclip, MuPDF a black one in a bordered box. The largest 16x16 colour block differs by 64 against a limit of 60. Reader-defined icon, not a defect."
