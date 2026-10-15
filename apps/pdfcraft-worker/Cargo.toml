@@ -1,0 +1,33 @@
+[package]
+name = "pdfcraft-worker"
+description = "Prototype of the private document-processing worker process (BUILD-002): bounded IPC, supervision and failure containment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pdfcraft-worker"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Test-only requests that make the worker hang, crash, allocate or misbehave on purpose. Never
+# enabled in a release build: without it the worker has no such code path.
+fault-injection = []
+
+[dependencies]
+pdfcraft-render = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.11"
+
+# Job-object supervision of the worker (kill when the parent dies, memory cap polling): a maintained
+# safe wrapper, since this workspace forbids unsafe code.
+[target.'cfg(windows)'.dependencies]
+win32job = "2"

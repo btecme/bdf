@@ -4006,6 +4006,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-worker"
+version = "0.7.1"
+dependencies = [
+ "pdfcraft-render",
+ "serde",
+ "serde_json",
+ "sha2",
+ "win32job",
+]
+
+[[package]]
 name = "pdfcraft-xfa"
 version = "0.7.1"
 dependencies = [
