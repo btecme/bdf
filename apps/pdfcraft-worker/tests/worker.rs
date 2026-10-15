@@ -217,3 +217,78 @@ fn a_reply_whose_dimensions_overflow_is_a_protocol_fault_and_never_a_render() {
     assert!(matches!(&err, WorkerError::Protocol(m) if m.contains("dimensions")), "{err:?}");
     assert!(wait_until(Duration::from_secs(3), || process_gone(pid)), "the peer that sent it must be ended");
 }
+
+// ---- R2: cancellation must reach every blocking step, not only the wait for a reply ----
+
+/// Cancel `handle` after `after`; returns when it was requested.
+fn cancel_later(handle: pdfcraft_worker::supervisor::CancelHandle, after: Duration) -> std::thread::JoinHandle<std::time::Instant> {
+    std::thread::spawn(move || {
+        std::thread::sleep(after);
+        let at = std::time::Instant::now();
+        handle.cancel();
+        at
+    })
+}
+
+fn quick_cancel(mode: &str) -> pdfcraft_worker::supervisor::Config {
+    pdfcraft_worker::supervisor::Config { cancel_grace: Duration::from_millis(100), call_deadline: Duration::from_secs(4), ..fake(mode) }
+}
+
+/// The reviewed counterexample: a worker that completes the handshake and then stops reading. A 16 MiB
+/// upload blocks on the full pipe; the caller cannot reach any cancellation logic of its own.
+#[test]
+fn cancel_ends_an_upload_that_is_blocked_on_a_full_pipe() {
+    let mut w = Worker::spawn(&quick_cancel("stall-after-hello")).unwrap();
+    let pid = w.pid();
+    let later = cancel_later(w.cancel_handle(), Duration::from_millis(100));
+    let err = w.open(&vec![0u8; 16 << 20], None).expect_err("must fail");
+    let returned = std::time::Instant::now();
+    let latency = returned.duration_since(later.join().unwrap());
+    assert_eq!(err, WorkerError::Canceled, "{err:?} after {latency:?}");
+    assert!(latency < Duration::from_millis(1000), "cancel took {latency:?} to take effect; the budget is 2 s and the grace was 100 ms");
+    assert!(wait_until(Duration::from_secs(3), || process_gone(pid)));
+}
+
+/// Hashing a large document happens before anything is sent; cancelling then must not wait for it.
+#[test]
+fn cancel_during_the_hashing_of_a_large_document_is_prompt() {
+    let mut w = Worker::spawn(&quick_cancel("silent-render")).unwrap();
+    let pid = w.pid();
+    // Build the document first: the cancel must land while the call is hashing it, not before it.
+    let doc = vec![7u8; 249 << 20]; // the largest document the worker accepts is 250 MiB
+    let later = cancel_later(w.cancel_handle(), Duration::from_millis(15));
+    let err = w.open(&doc, None).expect_err("must fail: it was cancelled");
+    let latency = std::time::Instant::now().duration_since(later.join().unwrap());
+    assert_eq!(err, WorkerError::Canceled, "{err:?}");
+    // Tight on purpose: the watcher alone would end the worker after the 100 ms grace, but the call
+    // would still be hashing. Only a cancel check inside the hashing loop returns this quickly.
+    assert!(latency < Duration::from_millis(60), "took {latency:?}: the hashing loop must notice a cancel");
+    assert!(wait_until(Duration::from_secs(3), || process_gone(pid)));
+}
+
+#[test]
+fn cancel_of_a_silent_render_is_classified_canceled_and_the_session_state_is_unchanged() {
+    let doc = tiny_pdf("silent");
+    let mut s = Session::open(&quick_cancel("silent-render"), doc.clone(), None).unwrap();
+    let (sha, len, pages) = (s.document_sha256(), s.document_len(), s.pages());
+    let later = cancel_later(s.cancel_handle().expect("a live worker"), Duration::from_millis(100));
+    let err = s.render(1, 96.0).err().expect("must fail");
+    let latency = std::time::Instant::now().duration_since(later.join().unwrap());
+    assert_eq!(err, WorkerError::Canceled, "{err:?}");
+    assert!(latency < Duration::from_millis(1000), "took {latency:?}");
+    assert_eq!(s.retries, 0, "a cancel is not retried");
+    assert_eq!((s.document_sha256(), s.document_len(), s.pages()), (sha, len, pages), "the accepted state is untouched");
+}
+
+#[test]
+fn cancel_of_a_render_that_started_and_then_stopped_is_prompt() {
+    let mut w = Worker::spawn(&quick_cancel("begin-then-stall")).unwrap();
+    w.open(&tiny_pdf("stalled"), None).unwrap();
+    let pid = w.pid();
+    let later = cancel_later(w.cancel_handle(), Duration::from_millis(100));
+    let err = w.render(1, 96.0).err().expect("must fail");
+    let latency = std::time::Instant::now().duration_since(later.join().unwrap());
+    assert_eq!(err, WorkerError::Canceled, "{err:?}");
+    assert!(latency < Duration::from_millis(1000), "took {latency:?}");
+    assert!(wait_until(Duration::from_secs(3), || process_gone(pid)));
+}

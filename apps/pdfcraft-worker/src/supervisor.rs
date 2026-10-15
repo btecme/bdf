@@ -8,7 +8,9 @@
 //!   soft, so the cap is enforced by polling the OS counters);
 //! * every response is validated (request id, sizes, order, SHA-256) and a malformed one ends the
 //!   worker instead of being believed;
-//! * cancellation answers immediately and the worker is gone within a bounded grace period;
+//! * cancellation reaches every blocking step (hashing, a write to a pipe the worker has stopped
+//!   reading, the wait for a reply, receiving pixels): the caller gets `Canceled` and the worker is gone
+//!   within the grace period, and the watcher does not depend on writing to the pipe to do it;
 //! * the worker dies with its parent: it lives in a job object that kills it when the job closes;
 //! * none of this touches the parent's own state: [`Session`] keeps the accepted document, and a
 //!   dead worker is replaced and, for a read-only render, retried once.
@@ -20,7 +22,7 @@ use std::fmt;
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -123,11 +125,22 @@ pub struct Rendered {
 enum Reason {
     Deadline,
     Memory(u64),
+    /// The caller cancelled and the grace period ran out.
+    Canceled,
 }
 
 /// State shared with the watcher and the caller's cancel handle.
 struct Shared {
     child: Mutex<Child>,
+    /// The worker's stdin. Writers hold the lock for the whole of a (possibly blocking) write, so
+    /// anything that must not wait behind one (the watcher) never takes it directly.
+    stdin: Mutex<Option<ChildStdin>>,
+    limits: Limits,
+    cancel_grace: Duration,
+    /// Id of the request in progress, the target of a cooperative Cancel.
+    call_id: AtomicU64,
+    cancel_at: Mutex<Option<Instant>>,
+    cancel_sent: AtomicBool,
     cancel: AtomicBool,
     stop: AtomicBool,
     reason: Mutex<Option<Reason>>,
@@ -144,10 +157,15 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct CancelHandle(Arc<Shared>);
 
 impl CancelHandle {
-    /// Ask for the current call to stop. Returns at once; the call itself returns within the grace
-    /// period.
+    /// Ask for the current call to stop. Returns at once. The watcher thread, which never waits on
+    /// the call, asks the worker to stop and ends it once the grace period has passed, so the call
+    /// returns [`WorkerError::Canceled`] within about that long even when it is blocked writing to a
+    /// pipe the worker no longer reads. Ignored when no call is in progress.
     pub fn cancel(&self) {
-        self.0.cancel.store(true, Ordering::SeqCst);
+        if lock(&self.0.deadline).is_some() {
+            self.0.cancel.store(true, Ordering::SeqCst);
+            lock(&self.0.cancel_at).get_or_insert_with(Instant::now);
+        }
     }
 }
 
@@ -160,7 +178,6 @@ enum Ev {
 /// One running worker process.
 pub struct Worker {
     shared: Arc<Shared>,
-    stdin: ChildStdin,
     rx: Receiver<Ev>,
     cfg: Config,
     next_id: u64,
@@ -184,6 +201,12 @@ impl Worker {
         let stderr = child.stderr.take().ok_or_else(|| WorkerError::Spawn("no stderr pipe".into()))?;
         let shared = Arc::new(Shared {
             child: Mutex::new(child),
+            stdin: Mutex::new(Some(stdin)),
+            limits: cfg.limits,
+            cancel_grace: cfg.cancel_grace,
+            call_id: AtomicU64::new(0),
+            cancel_at: Mutex::new(None),
+            cancel_sent: AtomicBool::new(false),
             cancel: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             reason: Mutex::new(None),
@@ -226,7 +249,6 @@ impl Worker {
         thread::spawn(move || watcher(&watch, cap));
         let mut w = Self {
             shared,
-            stdin,
             rx,
             cfg: cfg.clone(),
             next_id: 1,
@@ -235,10 +257,10 @@ impl Worker {
             _job: job,
         };
         let id = w.take_id();
-        w.begin_call();
+        w.begin_call(id);
         let hello = protocol::encode(&protocol::Hello { v: protocol::VERSION });
         w.send(Kind::Hello, id, &hello)?;
-        let f = w.await_frame(id, false)?;
+        let f = w.await_frame(id)?;
         w.end_call();
         match f.kind {
             Kind::HelloOk => {
@@ -276,9 +298,27 @@ impl Worker {
         id
     }
 
-    fn begin_call(&self) {
+    fn begin_call(&self, id: u64) {
+        self.shared.call_id.store(id, Ordering::SeqCst);
         self.shared.cancel.store(false, Ordering::SeqCst);
+        self.shared.cancel_sent.store(false, Ordering::SeqCst);
+        *lock(&self.shared.cancel_at) = None;
         *lock(&self.shared.deadline) = Some(Instant::now() + self.cfg.call_deadline);
+    }
+
+    fn cancel_requested(&self) -> bool {
+        self.shared.cancel.load(Ordering::SeqCst)
+    }
+
+    /// A call that was cancelled returns `Canceled` even if its answer happened to arrive, and the
+    /// worker, which may still be mid-reply, is ended so the next call starts clean.
+    fn finish<T>(&mut self, result: Result<T, WorkerError>) -> Result<T, WorkerError> {
+        self.end_call();
+        if self.cancel_requested() {
+            self.kill();
+            return Err(WorkerError::Canceled);
+        }
+        result
     }
 
     fn end_call(&self) {
@@ -294,7 +334,11 @@ impl Worker {
     }
 
     fn send(&mut self, kind: Kind, id: u64, payload: &[u8]) -> Result<(), WorkerError> {
-        write_frame(&mut self.stdin, kind, id, payload, &self.cfg.limits).map_err(|e| self.classify(e))
+        let written = match lock(&self.shared.stdin).as_mut() {
+            Some(w) => write_frame(w, kind, id, payload, &self.cfg.limits),
+            None => Err(ProtocolError::Io("the worker's input is closed".into())),
+        };
+        written.map_err(|e| self.classify(e))
     }
 
     /// Map a write failure to what actually happened to the worker.
@@ -328,6 +372,7 @@ impl Worker {
     fn reason_error(&self) -> WorkerError {
         match *lock(&self.shared.reason) {
             Some(Reason::Memory(cap)) => WorkerError::ResourceLimit(cap),
+            Some(Reason::Canceled) => WorkerError::Canceled,
             _ => WorkerError::Timeout,
         }
     }
@@ -346,21 +391,10 @@ impl Worker {
         self.fail_protocol(format!("unexpected {:?} frame", f.kind))
     }
 
-    /// Wait for the next frame for request `id`. Observes the cancel flag, the deadline (through
-    /// the watcher) and the worker's end.
-    fn await_frame(&mut self, id: u64, cancellable: bool) -> Result<Frame, WorkerError> {
-        let mut cancel_sent: Option<Instant> = None;
+    /// Wait for the next frame for request `id`. The deadline and a cancellation are enforced by the
+    /// watcher thread, which ends the worker; this loop then sees the worker's end and says why.
+    fn await_frame(&mut self, id: u64) -> Result<Frame, WorkerError> {
         loop {
-            if cancellable && self.shared.cancel.load(Ordering::SeqCst) {
-                let started = *cancel_sent.get_or_insert_with(|| {
-                    let _ = write_frame(&mut self.stdin, Kind::Cancel, id, &protocol::encode(&protocol::Cancel { target: id }), &self.cfg.limits);
-                    Instant::now()
-                });
-                if started.elapsed() >= self.cfg.cancel_grace {
-                    self.kill();
-                    return Err(WorkerError::Canceled);
-                }
-            }
             match self.rx.recv_timeout(Duration::from_millis(5)) {
                 Ok(Ev::Frame(f)) => {
                     if f.kind == Kind::Canceled && f.id == id {
@@ -397,10 +431,9 @@ impl Worker {
     /// Send a document and open it. Returns the page count.
     pub fn open(&mut self, doc: &[u8], password: Option<&str>) -> Result<u32, WorkerError> {
         let id = self.take_id();
-        self.begin_call();
+        self.begin_call(id);
         let result = self.open_inner(id, doc, password);
-        self.end_call();
-        result
+        self.finish(result)
     }
 
     fn open_inner(&mut self, id: u64, doc: &[u8], password: Option<&str>) -> Result<u32, WorkerError> {
@@ -411,14 +444,27 @@ impl Worker {
                 message: format!("{} bytes exceeds the {} byte input limit", doc.len(), self.cfg.limits.max_input),
             });
         }
-        let begin = OpenBegin { total: doc.len() as u64, sha256: hex(&Sha256::digest(doc)), password: password.map(str::to_string) };
+        // Hash in pieces so a cancel is noticed while a large document is being hashed.
+        let mut hasher = Sha256::new();
+        for piece in doc.chunks(1 << 20) {
+            if self.cancel_requested() {
+                self.kill();
+                return Err(WorkerError::Canceled);
+            }
+            hasher.update(piece);
+        }
+        let begin = OpenBegin { total: doc.len() as u64, sha256: hex(&hasher.finalize()), password: password.map(str::to_string) };
         self.send(Kind::OpenBegin, id, &protocol::encode(&begin))?;
         let max_data = self.cfg.limits.max_chunk as usize - 4;
         for (seq, piece) in doc.chunks(max_data).enumerate() {
+            if self.cancel_requested() {
+                self.kill();
+                return Err(WorkerError::Canceled);
+            }
             self.send(Kind::Chunk, id, &chunk_payload(u32::try_from(seq).unwrap_or(u32::MAX), piece))?;
         }
         self.send(Kind::OpenEnd, id, b"{}")?;
-        let f = self.await_frame(id, true)?;
+        let f = self.await_frame(id)?;
         match f.kind {
             Kind::Opened => {
                 let o: Opened = protocol::decode(&f.payload).map_err(|e| self.fail_protocol(e.to_string()))?;
@@ -431,16 +477,15 @@ impl Worker {
     /// Render a 1-based page at `dpi`.
     pub fn render(&mut self, page: u32, dpi: f32) -> Result<Rendered, WorkerError> {
         let id = self.take_id();
-        self.begin_call();
+        self.begin_call(id);
         let result = self.render_inner(id, page, dpi);
-        self.end_call();
-        result
+        self.finish(result)
     }
 
     fn render_inner(&mut self, id: u64, page: u32, dpi: f32) -> Result<Rendered, WorkerError> {
         let req = Render { page, dpi_milli: (dpi * 1000.0).round().clamp(0.0, f32::from(u16::MAX) * 1000.0) as u32 };
         self.send(Kind::Render, id, &protocol::encode(&req))?;
-        let f = self.await_frame(id, true)?;
+        let f = self.await_frame(id)?;
         if f.kind != Kind::RenderBegin {
             return Err(self.remote_or_protocol(f));
         }
@@ -462,7 +507,7 @@ impl Worker {
         let mut hasher = Sha256::new();
         let mut next_seq = 0u32;
         loop {
-            let f = self.await_frame(id, true)?;
+            let f = self.await_frame(id)?;
             match f.kind {
                 Kind::Chunk => {
                     let (seq, data) = protocol::split_chunk(&f.payload).map_err(|e| self.fail_protocol(e.to_string()))?;
@@ -492,17 +537,18 @@ impl Worker {
     /// Send a fault-injection request and wait for the reply to it (used for requests that answer).
     pub fn debug_and_wait(&mut self, d: &protocol::Debug) -> Result<Frame, WorkerError> {
         let id = self.take_id();
-        self.begin_call();
-        let result = self.send(Kind::Debug, id, &protocol::encode(d)).and_then(|()| self.await_frame(id, true));
-        self.end_call();
-        result
+        self.begin_call(id);
+        let result = self.send(Kind::Debug, id, &protocol::encode(d)).and_then(|()| self.await_frame(id));
+        self.finish(result)
     }
 
     /// Ask the worker to exit and wait for it.
     pub fn shutdown(mut self) {
         let id = self.take_id();
         let _ = self.send(Kind::Shutdown, id, b"{}");
-        let _ = self.stdin.flush();
+        if let Some(w) = lock(&self.shared.stdin).as_mut() {
+            let _ = w.flush();
+        }
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(2) {
             if matches!(lock(&self.shared.child).try_wait(), Ok(Some(_))) {
@@ -522,7 +568,7 @@ impl Drop for Worker {
 }
 
 /// The watcher: ends the worker at its call deadline and when it grows past the memory cap.
-fn watcher(shared: &Shared, cap: Option<u64>) {
+fn watcher(shared: &Arc<Shared>, cap: Option<u64>) {
     loop {
         thread::sleep(Duration::from_millis(15));
         if shared.stop.load(Ordering::SeqCst) {
@@ -537,6 +583,26 @@ fn watcher(shared: &Shared, cap: Option<u64>) {
             *lock(&shared.reason) = Some(Reason::Deadline);
             let _ = child.kill();
             return;
+        }
+        let cancel_at = *lock(&shared.cancel_at);
+        if let (Some(at), true) = (cancel_at, deadline.is_some()) {
+            if !shared.cancel_sent.swap(true, Ordering::SeqCst) {
+                // Ask the worker to stop by itself, from a helper thread: the write can block on a full
+                // pipe, and the watcher must never be the thing that is blocked.
+                let s = Arc::clone(shared);
+                thread::spawn(move || {
+                    let id = s.call_id.load(Ordering::SeqCst);
+                    let body = protocol::encode(&protocol::Cancel { target: id });
+                    if let Some(w) = lock(&s.stdin).as_mut() {
+                        let _ = write_frame(w, Kind::Cancel, id, &body, &s.limits);
+                    }
+                });
+            }
+            if at.elapsed() >= shared.cancel_grace {
+                *lock(&shared.reason) = Some(Reason::Canceled);
+                let _ = child.kill();
+                return;
+            }
         }
         if let (Some(cap), Some(used)) = (cap, working_set(&child))
             && used > cap
