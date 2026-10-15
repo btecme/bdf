@@ -12,6 +12,8 @@ Status: **evidence recorded, baseline not green, pending Codex review.** Run on 
 
 **Addendum, 2026-10-14 (rev 0.6):** [section 16](#16-msrv-195-check-rev-06) runs the MSRV check: the workspace compiles with Rust 1.95.0 (`cargo check`, Windows, default features), with the limits and finding F6 recorded there.
 
+**Addendum, 2026-10-15 (rev 0.7):** [section 15.6](#156-addendum-rev-07-the-key-exchange-advisory-does-not-apply-to-this-build) corrects one sentence of 14.4: the rustls key-exchange advisory cannot affect the update check, because its TLS provider offers no hybrid group.
+
 ## 1. Verdict
 
 | Question | Answer |
@@ -361,7 +363,7 @@ The wasm gate runs `cargo check --target wasm32-unknown-unknown -p <crate>` for 
 ### 14.4 Findings to carry forward (none fixed here)
 
 - **F1. The deny gate cannot see disclosures that have no assigned advisory id yet.** The DB commit above is "Add rustls 0.23.46 advisories": four files `RUSTSEC-0000-0000.*.md`, dated 2026-10-14, each with `patched = ">= 0.23.46"`; the three that give an `unaffected` bound put it below the locked `rustls 0.23.45`, and the fourth gives none. Yet the gate says "advisories ok". Experiment (`tools-13-placeholder-advisory-test.txt`, scratch copy of the DB, repo and real DB untouched): with the real DB, `cargo deny check advisories` passes; with one of the four given an assigned-looking id, the same command **fails**, naming `rustls 0.23.45` ("Unauthenticated ServerHello can downgrade later connections to classical key exchange"). So cargo-deny skips placeholder-id advisories. "advisories ok" means "no assigned advisory", not "no known issue".
-  - **Applicability to BDF**, by reading the advisories against the code (`cargo tree`, first-party search): rustls reaches the app through `ureq` (the update check, one HTTPS request to GitHub) and `rustls-cng` (via `pdfcraft-sign`). The `brotli` feature is not enabled anywhere (certificate-decompression DoS: not affected); nothing in first-party code uses `EchMode` or a custom `ClientSessionStore` (ECH and `Debug` advisories: not affected). The key-exchange downgrade (low severity, loses post-quantum confidentiality for later connections to the same server name) can apply to the update check in principle.
+  - **Applicability to BDF**, by reading the advisories against the code (`cargo tree`, first-party search): rustls reaches the app through `ureq` (the update check, one HTTPS request to GitHub) and `rustls-cng` (via `pdfcraft-sign`). The `brotli` feature is not enabled anywhere (certificate-decompression DoS: not affected); nothing in first-party code uses `EchMode` or a custom `ClientSessionStore` (ECH and `Debug` advisories: not affected). The key-exchange downgrade (low severity, loses post-quantum confidentiality for later connections to the same server name) can apply to the update check in principle. **Corrected in 15.6: it does not apply; the TLS provider in use offers no hybrid group.**
   - **Fix available:** rustls `0.23.46` was published 2026-10-14 09:54 UTC. Bumping it means a `Cargo.lock` change and a new crate download, which must be vetted first; it was not done. Re-run `cargo xtask deny` once RustSec assigns ids.
 - **F2. `fmv-macos-events`** is a direct dependency of the `pdfcraft` app (under `cfg(target_os = "macos")`, pinned `=0.1.0`). It is a one-version crate published 2026-09-15 by an individual (Corey James Levinson) for his own app, with 24,043 downloads. I read its whole 168-line `src/lib.rs`: macOS-only, registers Apple-event handlers (open documents, quit) and adds an Edit menu, depends only on `objc2*`, has no build script, and shows no process, network or filesystem calls. Upstream's comment calls it "audited". It never compiles on Windows or wasm. Worth replacing or vendoring before any macOS release.
 - **F3. `storytold/craft-libs`** (the `craft-ui` and `craft-print` git dependencies compiled into the app) was created 2026-10-09 by the same organization as upstream. The pinned commits exist; BDF should mirror or review them as part of release-infrastructure ownership (BUILD-003).
@@ -435,6 +437,28 @@ All runs use the lockfile, 2 jobs and finite timeouts (`commands.tsv`).
 ### 15.5 Status
 
 Still unavailable or unrun: hosted Windows/Linux CI (nothing pushed), the optional-font build (`CRAFT_FONTS_DIR`), and the 1.95 MSRV. `baseline_green` stays false. F2 and F3 of section 14 (the macOS-only `fmv-macos-events` dependency and the new `craft-libs` repository) are unchanged. BUILD-002 is not started.
+
+### 15.6 Addendum (rev 0.7): the key-exchange advisory does not apply to this build
+
+Status: **one sentence of 14.4 was wrong and is corrected here. `RUSTSEC-2026-0349` (the "unauthenticated ServerHello can downgrade later connections to classical key exchange" advisory) cannot affect the update check as built, because the TLS provider it uses never offers a post-quantum hybrid group. The bump to 0.23.46 is unchanged and still the right state of the lockfile.** Written 2026-10-15; Codex's review of `fff77e17` raised the point, and I checked it myself against the pinned sources rather than taking it as given.
+
+**What 14.4 said, and the mistake.** It said the downgrade "loses post-quantum confidentiality for later connections to the same server name" and "can apply to the update check in principle". I took the impact line of the advisory without checking which key-exchange groups this build's provider offers. That was the step that decides it.
+
+**What the advisory describes.** A network attacker answers one connection with a ServerHello that selects `X25519`; the client records that choice before the server is authenticated and later sends only an `X25519` key share while still listing the hybrid group `X25519MLKEM768` first; if the real server accepts that share, the handshake ends up on classical key exchange instead of the hybrid one. The harm is losing the hybrid group.
+
+**Why it cannot happen here** (checked against the sources cargo built from, and the lock, on 2026-10-15):
+
+| Question | Finding |
+|---|---|
+| Which TLS provider does the update check use? | `ureq` 3.4.2 picks a rustls provider in this order: one set in its own config, then a process-wide default, then `rustls::crypto::ring::default_provider()` when its `_ring` feature is on (`ureq/src/tls/rustls.rs`). `apps/pdfcraft/Cargo.toml` enables `rustls-no-provider` and `_ring`. First-party code sets neither of the first two: `install_default` and `CryptoProvider` appear nowhere in `crates/`, `apps/` or `xtask/`. |
+| Which key-exchange groups does that provider offer? | rustls 0.23.46's ring provider offers `X25519`, `secp256r1` and `secp384r1` (`src/crypto/ring/kx.rs`, `DEFAULT_KX_GROUPS`). The hybrid group is implemented only under `src/crypto/aws_lc_rs/pq/`. |
+| Is any hybrid-capable provider in the build? | `cargo tree -p pdfcraft -i rustls -e features` shows rustls built with `ring`, `std`, `tls12` and `log`/`logging`, and **no** `aws_lc_rs`, so the hybrid code is not compiled. `aws-lc-rs` is in `Cargo.lock` only as a dependency of `pdfcraft-sign` (RSA signing, ADR-0009), not as a TLS provider; `rustls-cng` is a key-access shim for Windows certificate stores. No `rustls-post-quantum` or other provider crate is in the lock. |
+
+So this client never lists or offers a hybrid group: there is no post-quantum protection for an attacker to strip, and the advisory's downgrade has nothing to act on. The update check's key exchange is classical by construction, with or without the fix. That is a property of the configuration, not a vulnerability created by this advisory, and the request is an anonymous GET for public release information (15.3).
+
+**What stays the same.** The other three advisories were assessed in 14.4 and that is unchanged: the `brotli` feature is not enabled, and no first-party code uses `EchMode` or a custom `ClientSessionStore`. The bump is still worth keeping: the fixes are published, the advisories are assigned, `cargo deny` now passes, and if the project ever moves to `aws-lc-rs` or a hybrid provider, `RUSTSEC-2026-0349` would apply and the fixed version is already locked.
+
+**Limit.** I did not search the source of every locked dependency for a call that installs a process-wide provider. The argument does not need it: the only provider code compiled into this build is ring's own, so any process-wide default could only offer the same three classical groups.
 
 ## 16. MSRV 1.95 check (rev 0.6)
 
@@ -547,3 +571,4 @@ open(sys.argv[1], "wb").write(build(objs))
 | 2026-10-14 | 0.4 | Section 14: `wasm32` and `cargo-deny` installed after provenance checks; `cargo xtask wasm` and `cargo xtask deny` pass; deny cannot see same-day rustls advisories that have no assigned id (F1). |
 | 2026-10-14 | 0.5 | Section 15: `rustls` bumped to 0.23.46 after provenance checks (two lines of `Cargo.lock`); scoped suite, live TLS check and gates pass; cargo-deny fails the old lock on four assigned rustls advisories and passes the new one. |
 | 2026-10-14 | 0.6 | Section 16: Rust 1.95.0 installed after signature and hash checks; `cargo +1.95.0 check --workspace` (and `--all-targets`) passes; 22 of 35 workspace crates declare no `rust-version` (F6); the full disk and the test binaries deleted to make room are recorded. |
+| 2026-10-15 | 0.7 | Section 15.6: corrects the 14.4 sentence on the post-quantum downgrade advisory (RUSTSEC-2026-0349): the update check uses the ring provider, which offers no hybrid group, so the advisory does not apply. The bump itself is unchanged. |

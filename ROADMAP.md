@@ -148,6 +148,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-15 (BDF BUILD-001 evidence correction):** Corrected one sentence of the BUILD-001 evidence: the rustls key-exchange advisory (RUSTSEC-2026-0349) does not apply to the update check, because the ring provider it uses offers only X25519, P-256 and P-384 and no hybrid post-quantum group (checked in the pinned rustls and ureq sources and the lock). The bump to 0.23.46 is unchanged. Documentation only. [Evidence](docs/bdf-evidence/BUILD-001.md#156-addendum-rev-07-the-key-exchange-advisory-does-not-apply-to-this-build). Upstream estimates unchanged.
+
 - **2026-10-14 (BDF BUILD-001 MSRV check):** Installed Rust 1.95.0 after verifying its signed release manifest and package hashes (the default toolchain and the 1.99.0 pin are unchanged), then ran `cargo +1.95.0 check --locked --workspace`, and again with `--all-targets`: both exit 0 with no warnings, so the declared minimum holds for all 35 workspace crates on Windows with default features (compile check only; no tests run on 1.95). Only 13 of 35 crates declare a `rust-version` (F6, not fixed). The full disk was cleared by deleting regenerable pre-bump test binaries. Hosted CI and optional fonts remain unrun; `baseline_green` stays false. [Evidence](docs/bdf-evidence/BUILD-001.md#16-msrv-195-check-rev-06). Upstream estimates unchanged.
 
 - **2026-10-14 (BDF BUILD-001 rustls bump):** Bumped `rustls` 0.23.45 to 0.23.46 (two lines of `Cargo.lock`) after verifying the release (published by its author the same day, crate equal to its tagged commit, no new dependency, fixes read in the diff). It fixes four advisories that RustSec assigned as RUSTSEC-2026-0346 to -0349 on the same day: with the old lock `cargo-deny` fails all four, with the new one it passes. The scoped suite is unchanged (1,220 passed, 0 failed, twice), and a live HTTPS update check works through the new version. Hosted CI, optional fonts and MSRV 1.95 remain unrun; `baseline_green` stays false. [Evidence](docs/bdf-evidence/BUILD-001.md#15-follow-up-rustls-02345-to-02346-rev-05). Upstream estimates unchanged.
@@ -442,6 +444,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | BUILD-001 evidence: the rustls key-exchange advisory is shown not to apply to the update check (ring provider, no hybrid group). |
 | 2026-10-14 | minor | BUILD-001: MSRV 1.95 check passes (cargo check, Windows, default features); F6: 22 of 35 crates declare no rust-version; baseline still not declared green. |
 | 2026-10-14 | minor | BUILD-001: rustls bumped to 0.23.46 (fixes RUSTSEC-2026-0346 to -0349); scoped suite and gates pass; baseline still not declared green. |
 | 2026-10-14 | minor | BUILD-001: wasm32 and deny gates pass after provenance checks; deny cannot see unassigned rustls advisories; baseline still not declared green. |
