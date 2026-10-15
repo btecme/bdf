@@ -23,7 +23,17 @@ Observations that matter for the proposal:
 
 - **A hostile page size costs about 500 MiB.** A 10,000,000-point page is clamped to an 8000x8000
   raster, which peaks at 498 MiB, as much as the whole budget for an ordinary document. Propose a
-  lower pixel cap (for example 16 Mpx for a whole-page raster) with tiling beyond it.
+  lower pixel cap (for example 16 Mpx for a whole-page raster) with tiling beyond it. **Pixel
+  admission must happen before the raster is allocated**, in the code that sizes the output: a check
+  after allocation has already spent the memory it was meant to protect. The worker prototype checks
+  the declared dimensions and length of a reply before it allocates, but the engine's own raster
+  allocation is not yet gated, so the cap is not enforced end to end.
+- **Admission limits are not a process-tree budget.** The per-operation limits (document size, page
+  count, pixels per raster, chunk size) bound one request each. The memory budgets above are for the
+  whole session, including the parent's copy and the worker's copy of the document and the raster. A
+  hard memory limit and a sandbox for the worker are still open (BDF-0002), so neither the budgets
+  nor the limits are guaranteed by the operating system today; they are checked by the code and
+  polled.
 - **A 251 MiB file is read whole** (260 MiB peak). The 250 MiB admission limit and the 2,000-page
   limit in the specification are not enforced by the engine today; BUILD-004 and BUILD-010 own that.
 - **The 4-logical-CPU run matched the unrestricted run**, because rendering is single-threaded; it
