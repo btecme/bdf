@@ -11,7 +11,9 @@ mod graphics_cases;
 mod hostile_cases;
 mod imgcmp;
 mod model;
+mod oracle;
 mod pdfgen;
+mod proc;
 mod structure_cases;
 mod text_cases;
 
@@ -25,6 +27,8 @@ use serde::Serialize;
 use crate::assets::sha256_hex;
 use crate::gates::root;
 use model::{Case, Expect, Outcome, Tolerance};
+
+pub use oracle::run as oracle;
 
 /// Inputs shared by the case generators.
 pub struct Ctx {

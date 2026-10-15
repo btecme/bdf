@@ -472,9 +472,10 @@ fn derived(ctx: &Ctx, out: &mut Vec<Case>) -> Result<()> {
         c.provenance = format!("synthetic: {recipe}; command `mutool clean {}`", flags.join(" "));
         c.expect.password = password.map(str::to_string);
         if password.is_none() {
-            c.expect.notes =
-                "Opens without a password. Printing, copying and editing are denied by the permission flags; the owner password lifts them"
-                    .to_string();
+            // Copying and extraction are denied, so a reader that honours permissions must withhold
+            // the text; MuPDF's text output ignores them. Asserting the token would assert a violation.
+            c.expect.text.clear();
+            c.expect.notes = "Opens without a password. Printing, copying and editing are denied by the permission flags and the owner password lifts them, so a conforming reader withholds the extracted text".to_string();
         }
         out.push(c);
     }

@@ -134,7 +134,7 @@ pub fn generate(_ctx: &Ctx, out: &mut Vec<Case>) -> Result<()> {
         )
         .pages(4)
         .text(3, "BDFNAMED-PAGE-03");
-        case.expect.annotations = Some(2);
+        case.expect.links = Some(2);
         out.push(case);
     }
 

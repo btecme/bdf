@@ -146,7 +146,6 @@ impl Form {
         let mut case =
             Case::new(id, "forms", "small", desc, self.doc.finish()?).tolerance(Tolerance::Text).pages(1).text(1, &format!("BDFFORM {id}"));
         case.expect.fields = self.names;
-        case.expect.annotations = Some(self.widgets.len());
         Ok(case)
     }
 }

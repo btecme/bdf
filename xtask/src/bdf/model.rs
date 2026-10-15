@@ -46,7 +46,6 @@ pub enum Tolerance {
 ///
 /// A render passes when its `diff_frac` and `mae` are at or below the limits and its `ink_ratio`
 /// lies in `ink`. Every case outside them is triaged by looking at the two images.
-#[allow(dead_code)] // used by the oracle harness (next commit)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Limits {
     /// Fraction of pixels that differ by more than 64 grey levels after a one-pixel allowance.
@@ -55,18 +54,22 @@ pub struct Limits {
     pub mae: f64,
     /// Allowed range of our total darkness over the oracle's.
     pub ink: (f64, f64),
+    /// Largest difference in mean tone between any 16x16 block of the two renders. Added after the
+    /// negative control showed the page-average metrics accepting a page rotated the wrong way; its
+    /// limits were chosen from what a block difference means (60 of 255 is a 24% tone change over
+    /// a 16x16 area, clearly visible), before they were applied to any real comparison.
+    pub max_block: f64,
 }
 
 impl Tolerance {
-    #[allow(dead_code)] // used by the oracle harness (next commit)
     pub fn limits(self) -> Option<Limits> {
         match self {
             // Glyphs differ in hinting and weight between rasterizers, so text gets the widest ink range.
-            Self::Text => Some(Limits { diff_frac: 0.03, mae: 4.0, ink: (0.80, 1.25) }),
+            Self::Text => Some(Limits { diff_frac: 0.03, mae: 4.0, ink: (0.80, 1.25), max_block: 60.0 }),
             // Strokes, fills and gradients have exact geometry; only edge antialiasing may differ.
-            Self::Vector => Some(Limits { diff_frac: 0.015, mae: 3.0, ink: (0.90, 1.10) }),
+            Self::Vector => Some(Limits { diff_frac: 0.015, mae: 3.0, ink: (0.90, 1.10), max_block: 60.0 }),
             // Pictures are resampled differently, so pixels move more, but total tone must agree.
-            Self::Image => Some(Limits { diff_frac: 0.05, mae: 5.0, ink: (0.95, 1.05) }),
+            Self::Image => Some(Limits { diff_frac: 0.05, mae: 5.0, ink: (0.95, 1.05), max_block: 80.0 }),
             Self::None => None,
         }
     }
@@ -81,7 +84,10 @@ pub struct Expect {
     pub text: Vec<(usize, String)>,
     /// Page sizes in points after `/CropBox`, `/Rotate` and `/UserUnit`, width then height.
     pub sizes: Vec<[f64; 2]>,
+    /// Annotations other than widgets, popups and links (`doc_info` lists those elsewhere).
     pub annotations: Option<usize>,
+    /// Link annotations.
+    pub links: Option<usize>,
     pub fields: Vec<String>,
     pub outlines: Vec<String>,
     pub attachments: Vec<String>,

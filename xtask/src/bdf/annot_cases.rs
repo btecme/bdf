@@ -13,6 +13,9 @@ struct Sheet {
     font: u32,
     bold: u32,
     annots: Vec<u32>,
+    /// Annotations that count towards `Expect::annotations` (not links, not popups).
+    counted: usize,
+    links: usize,
     content: String,
 }
 
@@ -32,12 +35,20 @@ impl Sheet {
         for (i, t) in tokens.iter().enumerate() {
             content.push_str(&block("F1", 14.0, LINE_X, line_y(i), 16.0, &[format!("{t} sample line of text to mark up")], &|s| lit(s)));
         }
-        Self { doc, font, bold, annots: Vec::new(), content }
+        Self { doc, font, bold, annots: Vec::new(), counted: 0, links: 0, content }
     }
 
     fn add(&mut self, dict: String) -> u32 {
         let id = self.doc.pdf.add(dict.into_bytes());
         self.annots.push(id);
+        self.counted += 1;
+        id
+    }
+
+    fn add_link(&mut self, dict: String) -> u32 {
+        let id = self.doc.pdf.add(dict.into_bytes());
+        self.annots.push(id);
+        self.links += 1;
         id
     }
 
@@ -57,7 +68,7 @@ impl Sheet {
     }
 
     fn finish(mut self, id: &str, desc: &str, tokens: &[&str]) -> Result<Case> {
-        let n = self.annots.len();
+        let (counted, links) = (self.counted, self.links);
         let mut page =
             Page::letter().with_content(self.content.into_bytes()).with_resources(format!("/Font << /F1 {} 0 R /F2 {} 0 R >>", self.font, self.bold));
         page.annots = self.annots;
@@ -66,7 +77,8 @@ impl Sheet {
         for t in tokens {
             case = case.text(1, t);
         }
-        case.expect.annotations = Some(n);
+        case.expect.annotations = Some(counted);
+        case.expect.links = (links > 0).then_some(links);
         Ok(case)
     }
 }
@@ -133,6 +145,7 @@ pub fn generate(_ctx: &Ctx, out: &mut Vec<Case>) -> Result<()> {
         s.doc.pdf.set(popup, format!("<< /Type /Annot /Subtype /Popup /Rect [430 640 560 720] /Parent {note} 0 R /Open false >>").into_bytes())?;
         s.annots.push(note);
         s.annots.push(popup);
+        s.counted += 1; // the note; the popup is not counted
         out.push(s.finish("annot-note-popup", "A sticky-note (Text) annotation and its popup", &["BDFNOTE-ONE"])?);
     }
 
@@ -265,7 +278,7 @@ pub fn generate(_ctx: &Ctx, out: &mut Vec<Case>) -> Result<()> {
         let mut s = Sheet::new("annot-links", &["BDFLINK-ONE", "BDFLINK-TWO"]);
         let r0 = rect_of(0);
         let r1 = rect_of(1);
-        s.add(format!(
+        s.add_link(format!(
             "<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 2] /C [0 0 1] /A << /S /URI /URI {} >> >>",
             num(r0[0]),
             num(r0[1]),
@@ -273,7 +286,7 @@ pub fn generate(_ctx: &Ctx, out: &mut Vec<Case>) -> Result<()> {
             num(r0[3]),
             lit("https://example.invalid/bdf-link")
         ));
-        s.add(format!(
+        s.add_link(format!(
             "<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 2] /C [1 0 0] /A << /S /Named /N /NextPage >> >>",
             num(r1[0]),
             num(r1[1]),

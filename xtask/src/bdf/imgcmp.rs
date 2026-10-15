@@ -10,10 +10,12 @@
 //! * `mae`: the mean absolute difference of 4x4 block averages, which smooths antialiasing but
 //!   keeps tone and layout;
 //! * `ink_ratio`: total darkness of ours over total darkness of theirs, which catches missing or
-//!   doubled content that is small in area.
-
-// The comparison is used by the oracle harness, which lands in the next commit.
-#![allow(dead_code)]
+//!   doubled content that is small in area;
+//! * `max_block`: the largest difference between the mean tone of any 16x16 block in the two
+//!   images. The three metrics above are averages over the page, so a small, localized error (an
+//!   arrow on the wrong side of a rotated page, one missing word) hides in them. This one cannot
+//!   hide: it was added after the negative control showed that a page rotated by 90 degrees instead
+//!   of 270 was accepted (see `model::Limits`).
 
 use std::fs::File;
 use std::io::BufReader;
@@ -79,6 +81,7 @@ pub struct Metrics {
     pub diff_frac: f64,
     pub mae: f64,
     pub ink_ratio: f64,
+    pub max_block: f64,
 }
 
 /// Smallest difference between `a[x,y]` and any pixel of the 3x3 neighbourhood of `(x,y)` in `b`.
@@ -92,10 +95,10 @@ fn near(a: i32, b: &Gray, x: usize, y: usize) -> i32 {
     best
 }
 
-fn block_mean(g: &Gray, bx: usize, by: usize) -> f64 {
+fn block_mean(g: &Gray, bx: usize, by: usize, size: usize) -> f64 {
     let (mut sum, mut n) = (0i64, 0i64);
-    for y in by * 4..(by * 4 + 4).min(g.h) {
-        for x in bx * 4..(bx * 4 + 4).min(g.w) {
+    for y in by * size..(by * size + size).min(g.h) {
+        for x in bx * size..(bx * size + size).min(g.w) {
             sum += i64::from(g.at(x, y));
             n += 1;
         }
@@ -123,7 +126,13 @@ pub fn compare(ours: &Gray, theirs: &Gray) -> Metrics {
     let mut mae = 0f64;
     for by in 0..bh {
         for bx in 0..bw {
-            mae += (block_mean(ours, bx, by) - block_mean(theirs, bx, by)).abs();
+            mae += (block_mean(ours, bx, by, 4) - block_mean(theirs, bx, by, 4)).abs();
+        }
+    }
+    let mut max_block = 0f64;
+    for by in 0..h.div_ceil(16) {
+        for bx in 0..w.div_ceil(16) {
+            max_block = max_block.max((block_mean(ours, bx, by, 16) - block_mean(theirs, bx, by, 16)).abs());
         }
     }
     let cells = (bw * bh).max(1) as f64;
@@ -141,6 +150,7 @@ pub fn compare(ours: &Gray, theirs: &Gray) -> Metrics {
         diff_frac: bad as f64 / ((w * h).max(1)) as f64,
         mae: mae / cells,
         ink_ratio,
+        max_block,
     }
 }
 
@@ -194,6 +204,18 @@ mod tests {
         assert!(m.mae > 5.0, "{m:?}");
         assert_eq!(m.ink_ratio, 0.0);
         assert!(compare(&a, &blank).ink_ratio.is_infinite());
+    }
+
+    #[test]
+    fn a_small_localized_error_is_caught_by_the_block_metric() {
+        // A 12x12 dark square on a 400x400 page: the page averages barely move, the block does not.
+        let a = with_box(flat(400, 400, 255), 100, 100, 12, 0);
+        let m = compare(&a, &flat(400, 400, 255));
+        assert!(m.diff_frac < 0.01 && m.mae < 1.0, "{m:?}");
+        assert!(m.max_block > 100.0, "{m:?}");
+        // The same square one pixel over is still not an error.
+        let b = with_box(flat(400, 400, 255), 101, 100, 12, 0);
+        assert!(compare(&a, &b).max_block < 30.0);
     }
 
     #[test]

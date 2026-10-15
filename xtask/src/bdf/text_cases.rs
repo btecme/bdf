@@ -242,7 +242,7 @@ fn office_embedded_100(ctx: &Ctx, out: &mut Vec<Case>) -> Result<()> {
     .text(50, "BDFPAGE-0050")
     .text(100, "BDFPAGE-0100");
     case.expect.outlines = titles;
-    case.expect.annotations = Some(200);
+    case.expect.links = Some(200);
     case.expect.sizes = vec![[612.0, 792.0]; 100];
     out.push(case);
     Ok(())

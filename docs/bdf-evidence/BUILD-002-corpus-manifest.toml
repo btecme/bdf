@@ -738,7 +738,7 @@ sizes = [
     792.0,
 ],
 ]
-annotations = 200
+links = 200
 fields = []
 outlines = [
     "Chapter 1",
@@ -1712,7 +1712,6 @@ text = [[
     "BDFFORM form-text-basic",
 ]]
 sizes = []
-annotations = 3
 fields = [
     "person.first",
     "person.last",
@@ -1742,7 +1741,6 @@ text = [[
     "BDFFORM form-text-no-ap",
 ]]
 sizes = []
-annotations = 3
 fields = [
     "person.first",
     "person.last",
@@ -1772,7 +1770,6 @@ text = [[
     "BDFFORM form-checks-radios",
 ]]
 sizes = []
-annotations = 5
 fields = [
     "agree",
     "newsletter",
@@ -1802,7 +1799,6 @@ text = [[
     "BDFFORM form-choices",
 ]]
 sizes = []
-annotations = 2
 fields = [
     "colour",
     "direction",
@@ -1831,7 +1827,6 @@ text = [[
     "BDFFORM form-multiline-comb",
 ]]
 sizes = []
-annotations = 2
 fields = [
     "comments",
     "code",
@@ -1860,7 +1855,6 @@ text = [[
     "BDFFORM form-flags",
 ]]
 sizes = []
-annotations = 3
 fields = [
     "locked",
     "needed",
@@ -1890,7 +1884,6 @@ text = [[
     "BDFFORM form-calculated",
 ]]
 sizes = []
-annotations = 3
 fields = [
     "a",
     "b",
@@ -1920,7 +1913,6 @@ text = [[
     "BDFFORM form-sig-button",
 ]]
 sizes = []
-annotations = 2
 fields = [
     "signature",
     "submit",
@@ -2029,7 +2021,7 @@ text = [[
     "BDFNOTE-ONE",
 ]]
 sizes = []
-annotations = 2
+annotations = 1
 fields = []
 outlines = []
 attachments = []
@@ -2201,7 +2193,8 @@ text = [
 ],
 ]
 sizes = []
-annotations = 2
+annotations = 0
+links = 2
 fields = []
 outlines = []
 attachments = []
@@ -2435,7 +2428,7 @@ text = [[
     "BDFNAMED-PAGE-03",
 ]]
 sizes = []
-annotations = 2
+links = 2
 fields = []
 outlines = []
 attachments = []
@@ -3272,16 +3265,13 @@ provenance = "synthetic: derived from damage-base by `mutool clean`, which salts
 
 [case.expect]
 pages = 3
-text = [[
-    1,
-    "BDFPAGE-0001",
-]]
+text = []
 sizes = []
 fields = []
 outlines = []
 attachments = []
 page_labels = []
-notes = "Opens without a password. Printing, copying and editing are denied by the permission flags; the owner password lifts them"
+notes = "Opens without a password. Printing, copying and editing are denied by the permission flags and the owner password lifts them, so a conforming reader withholds the extracted text"
 
 [[case]]
 id = "font-subset-inter"
