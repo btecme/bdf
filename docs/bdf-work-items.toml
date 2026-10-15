@@ -57,7 +57,14 @@ stop_conditions = ["Missing build prerequisites: report exact missing prerequisi
 [[work_item]]
 id = "BUILD-002"
 title = "Measure fidelity/resources and prove worker feasibility"
-status = "pending"
+status = "pending_review"
+evidence = "docs/bdf-evidence/BUILD-002.md"
+adrs = ["docs/adr/BDF-0001-renderer-retain-and-adapt.md", "docs/adr/BDF-0002-worker-process-isolation.md", "docs/adr/BDF-0003-proposed-performance-budgets.md"]
+evidence_baseline_commit = "c2dcc7a3c5f11163b34aaa8363c97c273e7a4ae7"
+evidence_tested_commit = "3d41257362b76b78e9c21df92e25eadab928ff7f"
+evidence_corpus_manifest = "docs/bdf-evidence/BUILD-002-corpus-manifest.toml"
+evidence_oracle = "MuPDF 1.28.5 (mupdf-1.28.5-windows.zip sha256 13476a53e84f5527983158acb6442c7853b3cdc022f3b24880780dcfba1fcc99), separate process"
+status_note = "Corpus (100 cases), oracle harness, benchmark and worker prototype committed. Engine: 306 of 306 semantic checks pass, 0 crashes or hangs, 91 of 103 visual comparisons within tolerance; three real defects (image downscaling, form fields without appearance streams, one page-tree recovery case) and the 250 MiB and 2,000-page limits not enforced. Budgets proposed with 30-run measurements, not ratified (owner); cold launch, frame times and input latency not measured. Worker feasible in safe Rust (36 tests with fault injection, 24 without; six guarantees mutation-checked); no hard commit limit or sandbox yet. ADRs proposed for owner approval. BUILD-001 is still pending_review, so BUILD-003 waits on both reviews."
 priority = "P0"
 depends_on = ["BUILD-001"]
 prd_milestone = "BDF-01"

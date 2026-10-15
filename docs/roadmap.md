@@ -5,7 +5,9 @@
 | BDF milestone | Status | Evidence / next gate |
 |---|---|---|
 | BDF-00: reproducible fork baseline | BUILD-001: suite, wasm, deny, MSRV pass; re-review pending | [Evidence](bdf-evidence/BUILD-001.md#16-msrv-195-check-rev-06): scoped suite green, `cargo xtask wasm` and `deny` pass, `rustls` bumped to 0.23.46, and `cargo +1.95.0 check` of the whole workspace passes (compile check only; 22 of 35 crates declare no `rust-version`). Hosted CI and optional fonts remain unrun, so the baseline is not yet declared green. BUILD-002 remains pending. |
+| BDF-01: measured foundation | BUILD-002: evidence recorded, pending review | [Evidence](bdf-evidence/BUILD-002.md): 100-case corpus, oracle harness, benchmark and worker prototype are committed; 306 of 306 semantic checks pass, no crashes or hangs, 91 of 103 renders within tolerance; three engine defects and the unenforced input limits found; budgets proposed ([BDF-0003](adr/BDF-0003-proposed-performance-budgets.md)), not ratified; renderer retain-and-adapt ([BDF-0001](adr/BDF-0001-renderer-retain-and-adapt.md)) and worker ([BDF-0002](adr/BDF-0002-worker-process-isolation.md)) proposed for owner approval. |
 
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (BDF-01: BUILD-002 fidelity, resources and worker feasibility evidence; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (BDF-00: BUILD-001 evidence correction on the rustls key-exchange advisory; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 MSRV 1.95 check passes; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 rustls bumped to 0.23.46; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -174,6 +176,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | BDF-01: BUILD-002 evidence (corpus, oracle, benchmark, worker prototype); budgets proposed, not ratified; estimates unchanged. |
 | 2026-10-15 | minor | BDF-00: BUILD-001 evidence correction (rustls key-exchange advisory does not apply to the update check); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 MSRV 1.95 check passes (compile check); estimates unchanged. |
 | 2026-10-14 | minor | [Codex review of fff77e17](bdf-evidence/fff77e17-codex-review.md): no blocking bump finding; dependency checks independently pass, baseline status unchanged. |
