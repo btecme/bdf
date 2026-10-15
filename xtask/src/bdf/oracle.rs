@@ -100,9 +100,14 @@ struct Check {
     detail: String,
 }
 
+/// One required comparison. Either it was made (`status` is `compared`, and `passes` says whether it
+/// is within tolerance) or it could not be, and `status` says why: a comparison that could not be made
+/// never passes, so a render refusal, a missing or undecodable image or a failed oracle cannot be
+/// mistaken for agreement.
 #[derive(Serialize)]
 struct Visual {
     page: usize,
+    status: String,
     ours: (usize, usize),
     theirs: (usize, usize),
     size_match: bool,
@@ -124,6 +129,8 @@ struct CaseResult {
     oracle: Side,
     checks: Vec<Check>,
     visual: Vec<Visual>,
+    /// Set when a check that the case requires was not made; the verdict is then `incomplete`.
+    coverage_gap: Option<String>,
     verdict: String,
 }
 
@@ -396,14 +403,53 @@ fn semantic_checks(case: &InCase, e: &Side, o: &Side) -> Vec<Check> {
     c
 }
 
+/// A required comparison that could not be made.
+fn not_compared(page: usize, why: String) -> Visual {
+    Visual {
+        page,
+        status: why,
+        ours: (0, 0),
+        theirs: (0, 0),
+        size_match: false,
+        diff_frac: 1.0,
+        mae: 255.0,
+        ink_ratio: None,
+        max_block: 255.0,
+        passes: false,
+    }
+}
+
+/// Every page the engine was asked to render is a required comparison; the result has one entry for
+/// each, in order, whether or not it could be made.
 fn visual_checks(t: &Tools, case: &InCase, e: &Side, o: &Side, tol: super::model::Tolerance) -> Vec<Visual> {
     let Some(limits) = tol.limits() else { return Vec::new() };
     let mut out = Vec::new();
-    for er in e.renders.iter().filter(|r| r.ok) {
-        let Some(or) = o.renders.iter().find(|r| r.ok && r.page == er.page) else { continue };
+    for er in &e.renders {
+        if !er.ok {
+            out.push(not_compared(er.page, format!("engine render failed: {}", er.error.as_deref().unwrap_or("no output"))));
+            continue;
+        }
+        let Some(or) = o.renders.iter().find(|r| r.page == er.page) else {
+            out.push(not_compared(er.page, "oracle did not render this page".into()));
+            continue;
+        };
+        if !or.ok {
+            out.push(not_compared(er.page, format!("oracle render failed: {}", or.error.as_deref().unwrap_or("no output"))));
+            continue;
+        }
         let ours = imgcmp::load(&t.corpus.join(format!("_render/engine-{}-{}.png", case.id, er.page)));
         let theirs = imgcmp::load(&t.corpus.join(format!("_render/oracle-{}-{}.png", case.id, or.page)));
-        let (Ok(a), Ok(b)) = (ours, theirs) else { continue };
+        let (a, b) = match (ours, theirs) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(err), _) => {
+                out.push(not_compared(er.page, format!("engine image unreadable: {err}")));
+                continue;
+            }
+            (_, Err(err)) => {
+                out.push(not_compared(er.page, format!("oracle image unreadable: {err}")));
+                continue;
+            }
+        };
         let m = imgcmp::compare(&a, &b);
         let passes = m.size_match
             && m.diff_frac <= limits.diff_frac
@@ -413,6 +459,7 @@ fn visual_checks(t: &Tools, case: &InCase, e: &Side, o: &Side, tol: super::model
             && m.max_block <= limits.max_block;
         out.push(Visual {
             page: er.page,
+            status: "compared".into(),
             ours: m.ours,
             theirs: m.theirs,
             size_match: m.size_match,
@@ -437,6 +484,42 @@ fn tokens_found(case: &InCase, s: &Side) -> (usize, usize) {
     (hit, total)
 }
 
+fn tolerance_of(case: &InCase) -> super::model::Tolerance {
+    match case.tolerance.as_str() {
+        "text" => super::model::Tolerance::Text,
+        "vector" => super::model::Tolerance::Vector,
+        "image" => super::model::Tolerance::Image,
+        _ => super::model::Tolerance::None,
+    }
+}
+
+/// Why a case that should have been fully checked was not, or `None` when every required check was
+/// made. Required: the oracle opens the file, and for a case with a visual class every page the engine
+/// was asked to render has a comparison that was actually made.
+fn coverage_gap(case: &InCase, e: &Side, o: &Side, visual: &[Visual]) -> Option<String> {
+    if !o.opened {
+        return Some(format!("oracle did not open the file ({})", o.refusal.as_deref().unwrap_or("no reason")));
+    }
+    if o.crashed_or_hung {
+        return Some("oracle crashed or hung".into());
+    }
+    // A case with no visual class has no render to compare.
+    tolerance_of(case).limits()?;
+    if e.renders.is_empty() {
+        return Some("no render was attempted although the case has a visual class".into());
+    }
+    let missing: Vec<String> = e
+        .renders
+        .iter()
+        .filter(|r| !visual.iter().any(|v| v.page == r.page && v.status == "compared"))
+        .map(|r| match visual.iter().find(|v| v.page == r.page) {
+            Some(v) => format!("page {}: {}", r.page, v.status),
+            None => format!("page {}: no comparison was made", r.page),
+        })
+        .collect();
+    (!missing.is_empty()).then(|| missing.join("; "))
+}
+
 fn verdict(case: &InCase, e: &Side, o: &Side, checks: &[Check], visual: &[Visual]) -> String {
     if e.crashed_or_hung {
         return "engine crashed or hung".into();
@@ -447,6 +530,8 @@ fn verdict(case: &InCase, e: &Side, o: &Side, checks: &[Check], visual: &[Visual
         "opens" | "password" => {
             if failed {
                 "semantic divergence".into()
+            } else if coverage_gap(case, e, o, visual).is_some() {
+                "incomplete".into()
             } else if visual_bad {
                 "visual divergence".into()
             } else {
@@ -477,13 +562,63 @@ fn verdict(case: &InCase, e: &Side, o: &Side, checks: &[Check], visual: &[Visual
     }
 }
 
+/// A divergence that is understood and accepted for now, recorded with the reason.
+#[derive(Deserialize, Clone)]
+struct Known {
+    id: String,
+    /// The exact verdict that is excused; a case whose verdict changes is no longer excused.
+    verdict: String,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+struct KnownFile {
+    #[serde(default)]
+    known: Vec<Known>,
+}
+
+/// Verdicts that need no excuse: the engine did what the case required.
+fn accepted(verdict: &str) -> bool {
+    matches!(
+        verdict,
+        "match" | "limit enforced" | "both refuse" | "both open" | "equal recovery" | "engine recovers more" | "engine recovers, oracle refuses"
+    )
+}
+
+/// The strict gate: the reasons a run must fail. `rows` are (case id, verdict); `total` is how many
+/// cases the corpus has. A run passes only if every case ran, every verdict is accepted or excused by a
+/// known exception that names that exact verdict, and no exception is stale.
+fn strict_failures(rows: &[(String, String)], total: usize, known: &[Known]) -> Vec<String> {
+    let mut out = Vec::new();
+    if rows.len() != total {
+        out.push(format!("only {} of {total} cases ran; the strict gate needs all of them", rows.len()));
+    }
+    let mut seen = BTreeSet::new();
+    for k in known {
+        if k.reason.trim().is_empty() {
+            out.push(format!("known exception for `{}` gives no reason", k.id));
+        }
+        if !seen.insert(k.id.as_str()) {
+            out.push(format!("`{}` is excused more than once", k.id));
+        }
+        match rows.iter().find(|(id, _)| *id == k.id) {
+            None if rows.len() == total => out.push(format!("known exception names `{}`, which is not a case", k.id)),
+            None => {}
+            Some((_, v)) if accepted(v) => out.push(format!("stale exception: `{}` is now `{v}`, which needs no excuse; remove it", k.id)),
+            Some((_, v)) if *v != k.verdict => out.push(format!("stale exception: `{}` was excused as `{}` but is now `{v}`", k.id, k.verdict)),
+            Some(_) => {}
+        }
+    }
+    for (id, v) in rows {
+        if !accepted(v) && !known.iter().any(|k| k.id == *id && k.verdict == *v) {
+            out.push(format!("`{id}`: {v}"));
+        }
+    }
+    out
+}
+
 fn run_case(t: &Tools, case: &InCase) -> Result<CaseResult> {
-    let tol = match case.tolerance.as_str() {
-        "text" => super::model::Tolerance::Text,
-        "vector" => super::model::Tolerance::Vector,
-        "image" => super::model::Tolerance::Image,
-        _ => super::model::Tolerance::None,
-    };
+    let tol = tolerance_of(case);
     let file = format!("{}.pdf", case.id);
     let path = t.corpus.join(&file);
     let mut engine = engine_side(t, case, &file)?;
@@ -497,6 +632,7 @@ fn run_case(t: &Tools, case: &InCase) -> Result<CaseResult> {
     }
     let visual = visual_checks(t, case, &engine, &oracle, tol);
     let v = verdict(case, &engine, &oracle, &checks, &visual);
+    let gap = if matches!(case.outcome.as_str(), "opens" | "password") { coverage_gap(case, &engine, &oracle, &visual) } else { None };
     engine.sizes.truncate(8);
     Ok(CaseResult {
         id: case.id.clone(),
@@ -508,6 +644,7 @@ fn run_case(t: &Tools, case: &InCase) -> Result<CaseResult> {
         oracle,
         checks,
         visual,
+        coverage_gap: gap,
         verdict: v,
     })
 }
@@ -565,7 +702,11 @@ fn negative_control(t: &Tools, manifest: &InManifest) -> (usize, Vec<String>) {
     (tried, accepted)
 }
 
-/// `cargo xtask bdf-oracle [--cli P] [--mutool P] [--corpus DIR] [--out DIR] [--only ids] [--family F] [--dpi N] [--timeout S]`
+/// `cargo xtask bdf-oracle [--strict [--known FILE]] [--cli P] [--mutool P] [--corpus DIR] [--out DIR] [--only ids] [--family F] [--dpi N] [--timeout S]`
+///
+/// Without `--strict` the run is exploratory: it records every divergence and exits 0. With it the run
+/// is a regression gate: it fails unless all cases ran, every required comparison was made, and every
+/// non-accepted verdict is excused by an entry in the known-exceptions file.
 pub fn run(args: &[String]) -> Result<()> {
     let r = root();
     let mut t = Tools {
@@ -580,6 +721,8 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut family: Option<String> = None;
     let mut control = false;
     let mut control_only = false;
+    let mut strict = false;
+    let mut known_path = r.join("xtask/baselines/bdf-oracle-known.toml");
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = || it.next().with_context(|| format!("{a} needs a value"));
@@ -590,6 +733,8 @@ pub fn run(args: &[String]) -> Result<()> {
             "--out" => out = PathBuf::from(val()?),
             "--only" => only = Some(val()?.split(',').map(str::to_string).collect()),
             "--family" => family = Some(val()?.clone()),
+            "--strict" => strict = true,
+            "--known" => known_path = PathBuf::from(val()?),
             "--control" => control = true,
             "--control-only" => (control, control_only) = (true, true),
             "--dpi" => t.dpi = val()?.parse()?,
@@ -627,6 +772,38 @@ pub fn run(args: &[String]) -> Result<()> {
     for (v, n) in tally {
         println!("  {n:>3}  {v}");
     }
+    let (mut required, mut made) = (0usize, 0usize);
+    let mut gaps = Vec::new();
+    for r in &results {
+        if r.tolerance != "none" && matches!(r.expected_outcome.as_str(), "opens" | "password") {
+            required += r.engine.renders.len();
+            made += r.visual.iter().filter(|v| v.status == "compared").count();
+        }
+        if let Some(g) = &r.coverage_gap {
+            gaps.push(format!("{}: {g}", r.id));
+        }
+    }
+    println!("coverage: {made} of {required} required visual comparisons were made; {} case(s) with a coverage gap", gaps.len());
+    for g in &gaps {
+        println!("  gap: {g}");
+    }
+    let known: Vec<Known> = match std::fs::read_to_string(&known_path) {
+        Ok(text) => toml::from_str::<KnownFile>(&text).with_context(|| format!("reading {}", known_path.display()))?.known,
+        Err(_) if !strict => Vec::new(),
+        Err(e) => bail!("strict mode needs the known exceptions at {}: {e}", known_path.display()),
+    };
+    let rows: Vec<(String, String)> = results.iter().map(|r| (r.id.clone(), r.verdict.clone())).collect();
+    let failures = strict_failures(&rows, manifest.case.len(), &known);
+    println!(
+        "{}: {} reason(s) the strict gate would fail ({} known exception(s) read from {})",
+        if strict { "strict gate" } else { "exploratory run (exit status does not depend on the gate)" },
+        failures.len(),
+        known.len(),
+        known_path.display()
+    );
+    for f in &failures {
+        println!("  - {f}");
+    }
     if control {
         let (tried, accepted) = negative_control(&t, &manifest);
         println!("negative control: {} of {tried} comparisons between different cases were accepted (want ~0)", accepted.len());
@@ -634,5 +811,186 @@ pub fn run(args: &[String]) -> Result<()> {
             println!("  accepted: {a}");
         }
     }
+    if strict && !failures.is_empty() {
+        bail!("bdf-oracle --strict: {} failure(s)", failures.len());
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case(outcome: &str, tolerance: &str) -> InCase {
+        InCase {
+            id: "t-case".into(),
+            family: "office".into(),
+            class: "ordinary".into(),
+            outcome: outcome.into(),
+            tolerance: tolerance.into(),
+            expect: InExpect::default(),
+        }
+    }
+
+    fn render(page: usize, ok: bool) -> Render {
+        Render { page, ok, error: (!ok).then(|| "refused".to_string()), width: 10, height: 10, ms: 1 }
+    }
+
+    fn side(opened: bool, renders: Vec<Render>) -> Side {
+        Side { opened, renders, pages: Some(1), ..Side::default() }
+    }
+
+    fn good_visual(page: usize) -> Visual {
+        Visual {
+            page,
+            status: "compared".into(),
+            ours: (10, 10),
+            theirs: (10, 10),
+            size_match: true,
+            diff_frac: 0.0,
+            mae: 0.0,
+            ink_ratio: Some(1.0),
+            max_block: 0.0,
+            passes: true,
+        }
+    }
+
+    #[test]
+    fn a_render_the_engine_refused_cannot_be_a_match() {
+        // Codex's reproduction: open, metadata and text succeed, page_render exits 1; no visual entry exists.
+        let c = case("opens", "text");
+        let e = side(true, vec![render(1, false)]);
+        let o = side(true, vec![render(1, true)]);
+        assert_ne!(verdict(&c, &e, &o, &[], &[]), "match");
+    }
+
+    #[test]
+    fn a_render_the_oracle_failed_to_make_cannot_be_a_match() {
+        let c = case("opens", "vector");
+        let e = side(true, vec![render(1, true)]);
+        let o = side(true, vec![render(1, false)]);
+        assert_ne!(verdict(&c, &e, &o, &[], &[]), "match");
+    }
+
+    #[test]
+    fn an_oracle_that_did_not_open_the_file_cannot_make_it_a_match() {
+        let c = case("opens", "text");
+        let e = side(true, vec![render(1, true)]);
+        let o = side(false, vec![]);
+        assert_ne!(verdict(&c, &e, &o, &[], &[good_visual(1)]), "match");
+    }
+
+    #[test]
+    fn a_required_render_that_was_never_attempted_cannot_be_a_match() {
+        let c = case("opens", "text");
+        assert_ne!(verdict(&c, &side(true, vec![]), &side(true, vec![]), &[], &[]), "match");
+    }
+
+    #[test]
+    fn a_render_without_a_comparison_cannot_be_a_match() {
+        // Both sides rendered, but nothing was compared (the comparison was skipped).
+        let c = case("opens", "text");
+        let e = side(true, vec![render(1, true)]);
+        let o = side(true, vec![render(1, true)]);
+        assert_ne!(verdict(&c, &e, &o, &[], &[]), "match");
+    }
+
+    fn row(id: &str, v: &str) -> (String, String) {
+        (id.to_string(), v.to_string())
+    }
+
+    fn known(id: &str, v: &str, why: &str) -> Known {
+        Known { id: id.into(), verdict: v.into(), reason: why.into() }
+    }
+
+    #[test]
+    fn the_strict_gate_fails_on_an_unexcused_divergence_or_incomplete_case() {
+        for bad in ["incomplete", "visual divergence", "semantic divergence", "engine crashed or hung", "limit not enforced"] {
+            let f = strict_failures(&[row("a", "match"), row("b", bad)], 2, &[]);
+            assert_eq!(f.len(), 1, "{bad}: {f:?}");
+            assert!(f[0].contains('b') && f[0].contains(bad), "{f:?}");
+        }
+        assert!(strict_failures(&[row("a", "match"), row("b", "both open")], 2, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_known_exception_excuses_exactly_its_verdict() {
+        let k = [known("b", "visual divergence", "aliasing, see 4.4")];
+        assert!(strict_failures(&[row("b", "visual divergence")], 1, &k).is_empty());
+        // The case got worse in a different way: no longer excused.
+        assert_eq!(strict_failures(&[row("b", "incomplete")], 1, &k).len(), 2, "unexcused verdict and a stale exception");
+    }
+
+    #[test]
+    fn exceptions_that_are_stale_unreasoned_or_unknown_fail_the_gate() {
+        // The case now matches: the exception must be removed so the list stays true.
+        assert_eq!(strict_failures(&[row("b", "match")], 1, &[known("b", "visual divergence", "x")]).len(), 1);
+        // No reason given.
+        assert!(!strict_failures(&[row("b", "visual divergence")], 1, &[known("b", "visual divergence", " ")]).is_empty());
+        // Names a case that does not exist.
+        assert!(!strict_failures(&[row("b", "match")], 1, &[known("zz", "visual divergence", "x")]).is_empty());
+        // The same case excused twice.
+        let twice = [known("b", "visual divergence", "x"), known("b", "visual divergence", "y")];
+        assert!(!strict_failures(&[row("b", "visual divergence")], 1, &twice).is_empty());
+    }
+
+    #[test]
+    fn the_strict_gate_fails_when_not_every_case_ran() {
+        let f = strict_failures(&[row("a", "match")], 3, &[]);
+        assert!(f.iter().any(|m| m.contains("1 of 3")), "{f:?}");
+    }
+
+    #[test]
+    fn complete_passing_coverage_is_a_match_and_a_case_with_no_visual_class_needs_none() {
+        let c = case("opens", "text");
+        let e = side(true, vec![render(1, true)]);
+        let o = side(true, vec![render(1, true)]);
+        assert_eq!(verdict(&c, &e, &o, &[], &[good_visual(1)]), "match");
+        let none = case("opens", "none");
+        assert_eq!(verdict(&none, &side(true, vec![]), &side(true, vec![]), &[], &[]), "match");
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("bdf-oracle-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("_render")).unwrap();
+        d
+    }
+
+    fn tools(corpus: PathBuf) -> Tools {
+        Tools { cli: PathBuf::new(), mutool: PathBuf::new(), corpus, dpi: 96, timeout: Duration::from_secs(1) }
+    }
+
+    fn write_png(path: &Path, rgb: [u8; 3]) {
+        let mut buf = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut buf, 8, 8);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut w = enc.write_header().unwrap();
+            w.write_image_data(&rgb.repeat(64)).unwrap();
+        }
+        std::fs::write(path, buf).unwrap();
+    }
+
+    #[test]
+    fn comparisons_whose_images_are_missing_or_unreadable_are_reported_not_skipped() {
+        let dir = scratch("images");
+        let t = tools(dir.clone());
+        let c = case("opens", "text");
+        let e = side(true, vec![render(1, true), render(2, true), render(3, true)]);
+        let o = side(true, vec![render(1, true), render(2, true), render(3, true)]);
+        // Page 1: both images fine. Page 2: engine PNG missing. Page 3: oracle PNG is not an image.
+        write_png(&dir.join("_render/engine-t-case-1.png"), [9, 9, 9]);
+        write_png(&dir.join("_render/oracle-t-case-1.png"), [9, 9, 9]);
+        write_png(&dir.join("_render/oracle-t-case-2.png"), [9, 9, 9]);
+        write_png(&dir.join("_render/engine-t-case-3.png"), [9, 9, 9]);
+        std::fs::write(dir.join("_render/oracle-t-case-3.png"), b"not a png").unwrap();
+        let v = visual_checks(&t, &c, &e, &o, super::super::model::Tolerance::Text);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(v.len(), 3, "every required page has a result, compared or not");
+        assert!(v[0].passes);
+        assert!(!v[1].passes && !v[2].passes);
+        assert_ne!(verdict(&c, &e, &o, &[], &v), "match");
+    }
 }

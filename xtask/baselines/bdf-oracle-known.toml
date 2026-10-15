@@ -1,0 +1,77 @@
+# Divergences from the independent reader that are understood and accepted for now.
+#
+# `cargo xtask bdf-oracle --strict` fails on any case whose verdict is not an accepted one unless an entry
+# here names that case and that exact verdict, with a reason. An entry whose case now has an accepted
+# verdict, or a different one, is stale and fails the gate, so this list cannot drift from the results.
+# Each reason points at the triage in docs/bdf-evidence/BUILD-002.md. The entries are not a statement
+# that the behaviour is correct; the renderer adaptations they refer to (G1 to G3) are separate work.
+
+[[known]]
+id = "vector-pattern"
+verdict = "visual divergence"
+reason = "MuPDF's tile pitch beats against the pixel grid; an oracle artefact (BUILD-002 record 4.4)."
+
+[[known]]
+id = "plan-hatch-100k"
+verdict = "visual divergence"
+reason = "A 0.25 pt line is drawn as a solid one-pixel line by the engine and faint by MuPDF: a policy difference (4.4)."
+
+[[known]]
+id = "plan-hatch-400k"
+verdict = "visual divergence"
+reason = "As plan-hatch-100k (4.4)."
+
+[[known]]
+id = "plan-symbols-5k"
+verdict = "visual divergence"
+reason = "Stroke placement and weight at 1.33 px (4.4)."
+
+[[known]]
+id = "scan-gray-300"
+verdict = "visual divergence"
+reason = "Point-sampled downscale of a noise image; tone identical (4.4). Adaptation G1, image sampling."
+
+[[known]]
+id = "scan-rgb-300"
+verdict = "visual divergence"
+reason = "As scan-gray-300 (4.4). Adaptation G1, image sampling."
+
+[[known]]
+id = "scan-bitonal-600"
+verdict = "visual divergence"
+reason = "600 dpi 1-bit page aliased at 96 dpi; small text strokes can break up (4.4). Adaptation G1, image sampling."
+
+[[known]]
+id = "scan-multipage-16"
+verdict = "visual divergence"
+reason = "As scan-gray-300 with more noise (4.4). Adaptation G1, image sampling."
+
+[[known]]
+id = "form-text-no-ap"
+verdict = "visual divergence"
+reason = "Fields without appearance streams and NeedAppearances true render labels only (4.4). Adaptation G2, widget fallback."
+
+[[known]]
+id = "form-sig-button"
+verdict = "visual divergence"
+reason = "Block difference 61 against a limit of 60; no difference visible at the crop (4.4)."
+
+[[known]]
+id = "annot-shapes-no-ap"
+verdict = "visual divergence"
+reason = "Shapes MuPDF synthesized and the engine drew, with slightly different stroke placement (4.4)."
+
+[[known]]
+id = "damaged-bad-kid"
+verdict = "recovery gap (oracle recovers, engine refuses)"
+reason = "One invalid reference at the head of a page list: the engine reports no pages, MuPDF opens 3 (record 4.5). Adaptation G3, page-tree repair."
+
+[[known]]
+id = "hostile-pages-2001"
+verdict = "limit not enforced"
+reason = "The engine opens a 2001-page file although the proposed limit is 2000 pages; admission limits belong to the worker (BDF-0002, BDF-0003), finding F10 (record 4.5)."
+
+[[known]]
+id = "hostile-size-251mib"
+verdict = "limit not enforced"
+reason = "The engine reads a 251 MiB file whole although the proposed limit is 250 MiB; admission limits belong to the worker (BDF-0002, BDF-0003), finding F10 (record 4.5)."
