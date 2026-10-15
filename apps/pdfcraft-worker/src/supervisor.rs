@@ -11,7 +11,11 @@
 //! * cancellation reaches every blocking step (hashing, a write to a pipe the worker has stopped
 //!   reading, the wait for a reply, receiving pixels): the caller gets `Canceled` and the worker is gone
 //!   within the grace period, and the watcher does not depend on writing to the pipe to do it;
-//! * the worker dies with its parent: it lives in a job object that kills it when the job closes;
+//! * the worker dies with its parent: it lives in a job object that kills it when the job closes, and
+//!   a worker that cannot be placed in the job is ended and startup fails, never handed out
+//!   uncontained unless the caller opts in with `allow_uncontained`;
+//! * the configuration is validated before anything starts (chunk, frame and size limits, deadlines,
+//!   CPU count), so a bad value is an error and not a panic or a silently ignored setting;
 //! * none of this touches the parent's own state: [`Session`] keeps the accepted document, and a
 //!   dead worker is replaced and, for a read-only render, retried once.
 //!
@@ -49,9 +53,47 @@ pub struct Config {
     pub cancel_grace: Duration,
     /// Restrict the worker to this many logical CPUs.
     pub cores: Option<u32>,
+    /// Run a worker that could not be placed in a job object. Off: a worker whose containment cannot
+    /// be established is ended and startup fails. Turn it on only where containment does not exist
+    /// (other operating systems) and the caller accepts that the worker can outlive its parent.
+    pub allow_uncontained: bool,
+    /// Make a step of the containment setup fail, to test that startup fails closed.
+    #[cfg(feature = "fault-injection")]
+    pub inject: Option<Injection>,
+}
+
+/// A containment step to make fail (tests only).
+#[cfg(feature = "fault-injection")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Injection {
+    JobCreate,
+    JobAssign,
 }
 
 impl Config {
+    /// Reject configurations that cannot work, before anything is started.
+    pub fn validate(&self) -> Result<(), String> {
+        self.limits.validate()?;
+        if self.exe.as_os_str().is_empty() {
+            return Err("the worker path is empty".into());
+        }
+        if self.call_deadline.is_zero() || self.call_deadline > Duration::from_secs(3600) {
+            return Err(format!("call_deadline {:?} must be between 1 ms and 1 hour", self.call_deadline));
+        }
+        if self.cancel_grace > Duration::from_secs(60) {
+            return Err(format!("cancel_grace {:?} must be at most 60 s", self.cancel_grace));
+        }
+        if self.memory_cap == Some(0) {
+            return Err("memory_cap of zero would end every worker at once".into());
+        }
+        if let Some(c) = self.cores
+            && !(1..=usize::BITS).contains(&c)
+        {
+            return Err(format!("cores {c} must be between 1 and {}", usize::BITS));
+        }
+        Ok(())
+    }
+
     pub fn new(exe: impl Into<PathBuf>) -> Self {
         Self {
             exe: exe.into(),
@@ -61,6 +103,9 @@ impl Config {
             memory_cap: Some(1536 * 1024 * 1024),
             cancel_grace: Duration::from_millis(300),
             cores: None,
+            allow_uncontained: false,
+            #[cfg(feature = "fault-injection")]
+            inject: None,
         }
     }
 }
@@ -69,6 +114,10 @@ impl Config {
 #[derive(Debug, PartialEq)]
 pub enum WorkerError {
     Spawn(String),
+    /// The configuration is not acceptable; nothing was started.
+    InvalidConfig(String),
+    /// The worker could not be contained (job object), so it was ended and not used.
+    Containment(String),
     /// The call ran past its deadline and the worker was terminated.
     Timeout,
     /// The worker process ended without being asked to.
@@ -91,6 +140,8 @@ impl fmt::Display for WorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Spawn(e) => write!(f, "could not start the worker: {e}"),
+            Self::InvalidConfig(e) => write!(f, "invalid worker configuration: {e}"),
+            Self::Containment(e) => write!(f, "the worker could not be contained: {e}"),
             Self::Timeout => write!(f, "the worker did not answer in time and was terminated"),
             Self::Crashed(c) => write!(f, "the worker ended unexpectedly (exit code {c:?})"),
             Self::Protocol(e) => write!(f, "the worker broke the protocol: {e}"),
@@ -182,20 +233,37 @@ pub struct Worker {
     cfg: Config,
     next_id: u64,
     pid: u32,
-    #[cfg(windows)]
-    _job: Option<win32job::Job>,
+    contained: bool,
+    _job: Option<Job>,
 }
+
+/// The OS handle that contains the worker (a job object on Windows).
+#[cfg(windows)]
+type Job = win32job::Job;
+#[cfg(not(windows))]
+type Job = ();
 
 impl Worker {
     /// Start the worker and complete the version handshake.
     pub fn spawn(cfg: &Config) -> Result<Self, WorkerError> {
+        cfg.validate().map_err(WorkerError::InvalidConfig)?;
         let mut cmd = Command::new(&cfg.exe);
         cmd.args(&cfg.args);
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| WorkerError::Spawn(format!("{}: {e}", cfg.exe.display())))?;
         let pid = child.id();
-        #[cfg(windows)]
-        let job = contain(&child, cfg.cores);
+        // Containment is required: a worker that cannot be placed in the job is ended, reaped and
+        // reported, never handed out uncontained (unless the caller opted in explicitly).
+        let job = match contain(&child, cfg) {
+            Ok(job) => Some(job),
+            Err(_) if cfg.allow_uncontained => None,
+            Err(why) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(WorkerError::Containment(format!("{why} (worker process {pid} was ended)")));
+            }
+        };
+        let contained = job.is_some();
         let stdin = child.stdin.take().ok_or_else(|| WorkerError::Spawn("no stdin pipe".into()))?;
         let stdout = child.stdout.take().ok_or_else(|| WorkerError::Spawn("no stdout pipe".into()))?;
         let stderr = child.stderr.take().ok_or_else(|| WorkerError::Spawn("no stderr pipe".into()))?;
@@ -247,15 +315,7 @@ impl Worker {
         let watch = shared.clone();
         let cap = cfg.memory_cap;
         thread::spawn(move || watcher(&watch, cap));
-        let mut w = Self {
-            shared,
-            rx,
-            cfg: cfg.clone(),
-            next_id: 1,
-            pid,
-            #[cfg(windows)]
-            _job: job,
-        };
+        let mut w = Self { shared, rx, cfg: cfg.clone(), next_id: 1, pid, contained, _job: job };
         let id = w.take_id();
         w.begin_call(id);
         let hello = protocol::encode(&protocol::Hello { v: protocol::VERSION });
@@ -276,6 +336,18 @@ impl Worker {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    /// Whether the worker is in a job object that ends it with its parent.
+    pub fn contained(&self) -> bool {
+        self.contained
+    }
+
+    /// The CPUs the worker may run on, as an affinity mask (Windows).
+    #[cfg(windows)]
+    pub fn cpu_affinity(&self) -> Option<usize> {
+        use std::os::windows::io::AsRawHandle;
+        win32job::utils::get_process_affinity_mask(lock(&self.shared.child).as_raw_handle() as isize).ok().map(|(process, _)| process)
     }
 
     pub fn cancel_handle(&self) -> CancelHandle {
@@ -455,7 +527,7 @@ impl Worker {
         }
         let begin = OpenBegin { total: doc.len() as u64, sha256: hex(&hasher.finalize()), password: password.map(str::to_string) };
         self.send(Kind::OpenBegin, id, &protocol::encode(&begin))?;
-        let max_data = self.cfg.limits.max_chunk as usize - 4;
+        let max_data = self.cfg.limits.chunk_data_len();
         for (seq, piece) in doc.chunks(max_data).enumerate() {
             if self.cancel_requested() {
                 self.kill();
@@ -639,18 +711,33 @@ fn working_set(_child: &Child) -> Option<u64> {
 }
 
 /// Put the worker in a job object that kills it when the job is closed (that is, when this process
-/// ends, however it ends), optionally limiting its CPUs.
+/// ends, however it ends), optionally limiting its CPUs. Every failure is returned with its reason.
 #[cfg(windows)]
-fn contain(child: &Child, cores: Option<u32>) -> Option<win32job::Job> {
+fn contain(child: &Child, cfg: &Config) -> Result<Job, String> {
     use std::os::windows::io::AsRawHandle;
+    #[cfg(feature = "fault-injection")]
+    if cfg.inject == Some(Injection::JobCreate) {
+        return Err("injected: creating the job object failed".into());
+    }
     let mut info = win32job::ExtendedLimitInfo::new();
     info.limit_kill_on_job_close();
-    if let Some(c) = cores {
+    if let Some(c) = cfg.cores {
         info.limit_affinity(if c >= usize::BITS { usize::MAX } else { (1usize << c) - 1 });
     }
-    let job = win32job::Job::create_with_limit_info(&info).ok()?;
-    job.assign_process(child.as_raw_handle() as isize).ok()?;
-    Some(job)
+    let job = win32job::Job::create_with_limit_info(&info).map_err(|e| format!("creating or configuring the job object failed: {e}"))?;
+    #[cfg(feature = "fault-injection")]
+    if cfg.inject == Some(Injection::JobAssign) {
+        return Err("injected: assigning the process to the job failed".into());
+    }
+    job.assign_process(child.as_raw_handle() as isize).map_err(|e| format!("assigning the process to the job object failed: {e}"))?;
+    Ok(job)
+}
+
+/// There is no containment on this platform yet; a worker can only be started with
+/// `allow_uncontained`.
+#[cfg(not(windows))]
+fn contain(_child: &Child, _cfg: &Config) -> Result<Job, String> {
+    Err("parent-death containment is implemented only on Windows".into())
 }
 
 /// The parent's accepted state for one document, and the workers that serve it.

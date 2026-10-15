@@ -1,6 +1,8 @@
 //! `pdfcraft-worker`: the private document-processing process. Speaks the frame protocol on
 //! stdin/stdout; see `protocol.rs`. Not meant to be run by hand.
 
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
 use std::io::BufReader;
 use std::process::ExitCode;
 

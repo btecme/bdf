@@ -34,6 +34,32 @@ pub struct Limits {
     pub max_result: u64,
 }
 
+impl Limits {
+    /// Reject limits that cannot work: a chunk with no room for its sequence number, a control frame
+    /// too small for any message, or a zero or absurd size. Both ends call this before using them.
+    pub fn validate(&self) -> Result<(), String> {
+        const MAX_BYTES: u64 = 4 << 30;
+        if !(1024..=1 << 20).contains(&self.max_control) {
+            return Err(format!("max_control {} must be between 1 KiB and 1 MiB", self.max_control));
+        }
+        if !(1024..=16 << 20).contains(&self.max_chunk) {
+            return Err(format!("max_chunk {} must be between 1 KiB and 16 MiB (four of its bytes are the sequence number)", self.max_chunk));
+        }
+        if !(1..=MAX_BYTES).contains(&self.max_input) {
+            return Err(format!("max_input {} must be between 1 byte and 4 GiB", self.max_input));
+        }
+        if !(1..=MAX_BYTES).contains(&self.max_result) {
+            return Err(format!("max_result {} must be between 1 byte and 4 GiB", self.max_result));
+        }
+        Ok(())
+    }
+
+    /// Data bytes a chunk frame can carry (its payload less the 4-byte sequence number); never zero.
+    pub fn chunk_data_len(&self) -> usize {
+        (self.max_chunk as usize).saturating_sub(4).max(1)
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self { max_control: 64 * 1024, max_chunk: 256 * 1024, max_input: 250 * 1024 * 1024, max_result: 256 * 1024 * 1024 }
@@ -395,6 +421,24 @@ mod tests {
         // Just over the limit is refused; exactly at it is accepted.
         assert!(rgba_len(1000, 1000, 3_999_999).is_err());
         assert_eq!(rgba_len(1000, 1000, 4_000_000), Ok(4_000_000));
+    }
+
+    #[test]
+    fn limits_that_cannot_work_are_rejected() {
+        assert!(Limits::default().validate().is_ok());
+        for bad in [
+            Limits { max_chunk: 0, ..Limits::default() },
+            Limits { max_chunk: 4, ..Limits::default() },
+            Limits { max_chunk: 17 << 20, ..Limits::default() },
+            Limits { max_control: 10, ..Limits::default() },
+            Limits { max_input: 0, ..Limits::default() },
+            Limits { max_result: u64::MAX, ..Limits::default() },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        // Whatever the limits, a chunk always carries at least one data byte.
+        assert_eq!(Limits { max_chunk: 0, ..Limits::default() }.chunk_data_len(), 1);
+        assert_eq!(Limits::default().chunk_data_len(), 262_140);
     }
 
     #[test]

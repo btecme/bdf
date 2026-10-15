@@ -31,6 +31,17 @@ pub struct WorkerConfig {
     pub max_pixels: u64,
 }
 
+impl WorkerConfig {
+    /// Reject limits that cannot work.
+    pub fn validate(&self) -> Result<(), String> {
+        self.limits.validate()?;
+        if self.max_pixels == 0 {
+            return Err("max_pixels must be positive".into());
+        }
+        Ok(())
+    }
+}
+
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self { limits: Limits::default(), max_pixels: 64_000_000 }
@@ -89,6 +100,10 @@ fn is_sha256_hex(s: &str) -> bool {
 /// Serve requests from `input` until it ends or a protocol violation, writing replies to `output`.
 /// Returns the process exit code: 0 for a clean end, 2 for a protocol violation.
 pub fn run(input: impl Read + Send + 'static, mut output: impl Write, cfg: &WorkerConfig) -> i32 {
+    if let Err(why) = cfg.validate() {
+        eprintln!("pdfcraft-worker: invalid configuration: {why}");
+        return 2;
+    }
     let cancel = Arc::new(AtomicU64::new(0));
     let (tx, rx) = mpsc::sync_channel::<Event>(8);
     let reader_cancel = cancel.clone();
@@ -336,7 +351,7 @@ fn send_render(
         &protocol::encode(&RenderBegin { width, height, total: bytes.len() as u64, sha256: std::mem::take(&mut sha), millis }),
         l,
     )?;
-    let max_data = l.max_chunk as usize - 4;
+    let max_data = l.chunk_data_len();
     for (seq, piece) in bytes.chunks(max_data).enumerate() {
         send(out, Kind::Chunk, reply_id, &chunk_payload(u32::try_from(seq).unwrap_or(u32::MAX), piece), l)?;
     }

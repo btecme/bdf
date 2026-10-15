@@ -292,3 +292,45 @@ fn cancel_of_a_render_that_started_and_then_stopped_is_prompt() {
     assert!(latency < Duration::from_millis(1000), "took {latency:?}");
     assert!(wait_until(Duration::from_secs(3), || process_gone(pid)));
 }
+
+// ---- R3: validate the configuration, and fail closed when containment cannot be established ----
+
+#[test]
+fn a_cpu_limit_of_zero_is_an_invalid_configuration_not_a_silently_uncontained_worker() {
+    let cfg = pdfcraft_worker::supervisor::Config { cores: Some(0), ..cfg() };
+    let err = Worker::spawn(&cfg).err().expect("a zero-CPU limit cannot be satisfied and must not be ignored");
+    assert!(matches!(err, WorkerError::InvalidConfig(_)), "{err:?}");
+}
+
+#[test]
+fn a_chunk_limit_too_small_to_carry_data_is_rejected_before_anything_is_sent() {
+    // max_chunk - 4 (room for the sequence number) is zero or underflows: `chunks(0)` panics the parent.
+    for max_chunk in [0u32, 2, 4] {
+        let limits = Limits { max_chunk, ..Limits::default() };
+        let err = Session::open(&pdfcraft_worker::supervisor::Config { limits, ..cfg() }, tiny_pdf("chunk"), None).err().expect("must fail");
+        assert!(matches!(err, WorkerError::InvalidConfig(_)), "max_chunk {max_chunk}: {err:?}");
+    }
+}
+
+#[test]
+fn nonsense_limits_and_deadlines_are_rejected() {
+    use pdfcraft_worker::supervisor::Config;
+    for bad in [
+        Config { limits: Limits { max_control: 0, ..Limits::default() }, ..cfg() },
+        Config { limits: Limits { max_input: 0, ..Limits::default() }, ..cfg() },
+        Config { limits: Limits { max_result: 0, ..Limits::default() }, ..cfg() },
+        Config { call_deadline: Duration::ZERO, ..cfg() },
+        Config { memory_cap: Some(0), ..cfg() },
+    ] {
+        assert!(matches!(Worker::spawn(&bad).err(), Some(WorkerError::InvalidConfig(_))), "{bad:?}");
+    }
+}
+
+/// The healthy path of the containment the failure tests above depend on: the job really is applied.
+#[cfg(windows)]
+#[test]
+fn a_contained_worker_is_in_its_job_with_the_cpu_limit_applied() {
+    let w = Worker::spawn(&pdfcraft_worker::supervisor::Config { cores: Some(2), ..cfg() }).expect("a worker with a valid CPU limit starts");
+    assert!(w.contained());
+    assert_eq!(w.cpu_affinity(), Some(0b11), "the job's affinity limit must be in force on the worker process");
+}

@@ -190,3 +190,42 @@ fn how_far_a_worker_overshoots_the_memory_cap_is_bounded_and_recorded() {
     assert!(peak_ws >= cap, "it was only stopped after crossing the cap");
     assert!(peak_ws < 700 * 1024 * 1024, "peak working set {} MiB: it must not have finished the whole allocation and kept going", peak_ws >> 20);
 }
+
+// ---- R3: injected failures of the containment setup must fail startup closed ----
+
+/// The pid named in a containment error ("... (worker process N was ended)").
+#[cfg(windows)]
+fn pid_in(err: &WorkerError) -> u32 {
+    let WorkerError::Containment(m) = err else { panic!("not a containment error: {err:?}") };
+    let digits: String = m.split("worker process ").nth(1).expect("the pid is named").chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().expect("a pid")
+}
+
+#[cfg(windows)]
+#[test]
+fn a_job_that_cannot_be_created_fails_startup_closed_and_leaves_no_worker() {
+    let cfg = Config { inject: Some(pdfcraft_worker::supervisor::Injection::JobCreate), ..cfg() };
+    let err = Worker::spawn(&cfg).err().expect("an uncontained worker must not be handed out");
+    assert!(matches!(err, WorkerError::Containment(_)), "{err:?}");
+    let pid = pid_in(&err);
+    assert!(wait_until(Duration::from_secs(3), || process_gone(pid)), "the child that was started must be ended");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_process_that_cannot_be_assigned_to_its_job_fails_startup_closed_and_leaves_no_worker() {
+    let cfg = Config { inject: Some(pdfcraft_worker::supervisor::Injection::JobAssign), ..cfg() };
+    let err = Worker::spawn(&cfg).err().expect("an uncontained worker must not be handed out");
+    assert!(matches!(err, WorkerError::Containment(_)), "{err:?}");
+    let pid = pid_in(&err);
+    assert!(wait_until(Duration::from_secs(3), || process_gone(pid)), "the child that was started must be ended");
+}
+
+/// Running uncontained is possible only when the caller says so, and the worker then reports it.
+#[cfg(windows)]
+#[test]
+fn running_uncontained_is_an_explicit_opt_in_and_is_reported() {
+    let cfg = Config { inject: Some(pdfcraft_worker::supervisor::Injection::JobCreate), allow_uncontained: true, ..cfg() };
+    let w = Worker::spawn(&cfg).expect("allowed to run uncontained");
+    assert!(!w.contained(), "an uncontained worker must say so");
+}

@@ -12,7 +12,18 @@
 //! In a release these would be split: the protocol and supervisor into `pdfcraft-platform`
 //! (layer 7), the process body staying in `apps/pdfcraft-worker` (layer 8).
 
-#![deny(clippy::print_stdout, clippy::dbg_macro)]
+// This process parses untrusted input: no panicking shortcuts (AGENTS.md section 4). Tests may use them
+// (clippy.toml), and `print_stdout` is denied because stdout carries protocol frames only.
+#![deny(
+    clippy::print_stdout,
+    clippy::dbg_macro,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 
 pub mod protocol;
 pub mod supervisor;
