@@ -4,8 +4,9 @@
 
 | BDF milestone | Status | Evidence / next gate |
 |---|---|---|
-| BDF-00: reproducible fork baseline | BUILD-001: suite, wasm, deny pass; rustls bumped; re-review pending | [Evidence](bdf-evidence/BUILD-001.md#15-follow-up-rustls-02345-to-02346-rev-05): scoped suite green, `cargo xtask wasm` and `deny` pass, `rustls` bumped to 0.23.46 (RUSTSEC-2026-0346 to -0349). Hosted CI, optional fonts and MSRV 1.95 remain unrun, so the baseline is not yet declared green. BUILD-002 remains pending. |
+| BDF-00: reproducible fork baseline | BUILD-001: suite, wasm, deny, MSRV pass; re-review pending | [Evidence](bdf-evidence/BUILD-001.md#16-msrv-195-check-rev-06): scoped suite green, `cargo xtask wasm` and `deny` pass, `rustls` bumped to 0.23.46, and `cargo +1.95.0 check` of the whole workspace passes (compile check only; 22 of 35 crates declare no `rust-version`). Hosted CI and optional fonts remain unrun, so the baseline is not yet declared green. BUILD-002 remains pending. |
 
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 MSRV 1.95 check passes; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 rustls bumped to 0.23.46; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 wasm and deny gates pass after provenance checks; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 D1 to D3 fixed, scoped suite green; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -172,6 +173,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | BDF-00: BUILD-001 MSRV 1.95 check passes (compile check); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 rustls bumped to 0.23.46 (four advisories fixed); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 wasm and deny gates pass after provenance checks (rustls caveat); estimates unchanged. |
 | 2026-10-14 | minor | BDF-00: BUILD-001 D1 to D3 fixed; scoped suite green (1,220 passed, 0 failed); estimates unchanged. |

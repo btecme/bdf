@@ -10,6 +10,8 @@ Status: **evidence recorded, baseline not green, pending Codex review.** Run on 
 
 **Addendum, 2026-10-14 (rev 0.5):** [section 15](#15-follow-up-rustls-02345-to-02346-rev-05) bumps `rustls` to 0.23.46 and resolves finding F1 of section 14 (the four same-day advisories).
 
+**Addendum, 2026-10-14 (rev 0.6):** [section 16](#16-msrv-195-check-rev-06) runs the MSRV check: the workspace compiles with Rust 1.95.0 (`cargo check`, Windows, default features), with the limits and finding F6 recorded there.
+
 ## 1. Verdict
 
 | Question | Answer |
@@ -434,6 +436,54 @@ All runs use the lockfile, 2 jobs and finite timeouts (`commands.tsv`).
 
 Still unavailable or unrun: hosted Windows/Linux CI (nothing pushed), the optional-font build (`CRAFT_FONTS_DIR`), and the 1.95 MSRV. `baseline_green` stays false. F2 and F3 of section 14 (the macOS-only `fmv-macos-events` dependency and the new `craft-libs` repository) are unchanged. BUILD-002 is not started.
 
+## 16. MSRV 1.95 check (rev 0.6)
+
+Status: **The workspace compiles with Rust 1.95.0, the declared minimum: `cargo +1.95.0 check --locked --offline --workspace` and the same command with `--all-targets` both exit 0, with no warnings and no errors. The check proves compilation only (no tests were run on 1.95), on Windows with default features. BUILD-001 stays `pending_review` and `baseline_green` stays false: hosted CI and the optional-font build are still unrun.** Run on 2026-10-14. Evidence is under `target/bdf-evidence/BUILD-001-msrv/` (ignored). Paths below are relative to it.
+
+### 16.1 The 1.95.0 toolchain: install and provenance
+
+The owner asked for the check, which needs a compiler that was not on the machine, so I installed one (outside the repository) after verifying it:
+
+| Item | Checks made | Result |
+|---|---|---|
+| Release manifest | `channel-rust-1.95.0.toml` (848,342 bytes, dated 2026-04-16) hashes to the published `.sha256` (`821ff14e…81f9`). Its `.asc` (801 bytes) verifies as a good signature from the Rust release key `108F 6620 5EAE B0AA A8DD 5E1C 85AB 96E6 FA1B E5FE` (signed 2026-04-16 07:26 CDT) in a throwaway keyring. The key file (SHA-256 `e54b09a4…fbc6b`) is byte-identical to the one cross-checked against a keyserver in 14.2 and to a fresh download. | Pass. Same trust anchor as 14.2: the fingerprint cross-check, not a locally certified key. |
+| Packages | `rustc` 1.95.0 (`59807616e`, 2026-04-14; 71,577,136 bytes; `4cb1f3b5…4c67`), `cargo` 0.96.0 (10,006,024 bytes; `cab2606c…d2bf`) and `rust-std` for `x86_64-pc-windows-msvc` (22,068,624 bytes; `7c659bdc…c832`), downloaded to an isolated directory. | Each SHA-256 equals the `xz_hash` in the signed manifest. |
+| Install | `rustup toolchain install 1.95.0 --profile minimal --no-self-update`, exit 0. | rustup's default toolchain, its `profile = "default"` setting and the repository's 1.99.0 pin are unchanged; 1.95.0 runs only when asked for with `+1.95.0`. |
+| Installed files | The tarballs were extracted and compared with the installed toolchain. | 146 of 149 payload files are byte-identical. The other 3 are each package's `manifest.in` (installer metadata that rustup converts into its own `manifest-*` files); 7 installed files are rustup's own bookkeeping. rustup's stored manifest carries the same URL and hash for all three packages. |
+
+### 16.2 A process note: the disk was full
+
+When I started, C: had **0.17 GB free**. Section 15.4 said about 20 GB, which was true after I deleted the incremental cache, but the rustls verification builds and test runs then regrew it (4 GB) and left a generation of test executables built against the old rustls. Everything I deleted is regenerable build output inside the ignored `target/`:
+
+- `target/debug/incremental` (4 GB).
+- The older generation of each hashed test executable in `target/debug/deps` that predates the last `Cargo.lock` change, 76 of them (3.47 GB), together with their same-named `.pdb` files (16.74 GB). The newest generation of every test target was kept. Most of `target/debug` (30.8 of 47.6 GB) is `.pdb` debug information.
+
+Free space is now about 23 GB before the check and 18 GB after it. **Consequence:** the pre-bump test executables behind the runs in sections 12 to 14 are no longer on disk. Their logs, hashes and manifests are, and the post-bump executables remain; re-running an older binary means rebuilding at that commit. A watchdog (`disk-watchdog.log`) was set to stop cargo if free space fell under 1.5 GB; it never triggered.
+
+### 16.3 Results
+
+All runs use the lockfile, `--offline`, 2 jobs, a separate target directory (`target/msrv-1.95`, 1.45 GB) and `CARGO_INCREMENTAL=0`. `commands.tsv` has the exit codes and durations.
+
+| Check | Result |
+|---|---|
+| Declared `rust-version` of the locked graph (`cargo metadata --locked --offline --all-features`; `msrv-00-…`) | 687 packages (all platforms and features): 528 declare a minimum and 159 declare none. **None declares more than 1.95**; 27 declare exactly 1.95 (the egui 0.36.2 family, `craft-ui`, `craft-print`, `fmv-macos-events` and 13 workspace crates). |
+| Stage 1: `cargo +1.95.0 check --locked --offline --workspace -j 2` (`msrv-01-…`) | **exit 0**, 441.3 s. 352 crates checked and 116 build-script or proc-macro crates compiled, covering all 35 workspace members (the desktop app, CLI, web crate and xtask included). 0 warning lines, 0 error lines. |
+| Stage 2: the same with `--all-targets` (`msrv-02-…`) | **exit 0**, 152.2 s. 124 checked, 29 compiled: adds tests, examples and dev-dependencies. 0 warning lines, 0 error lines. |
+| Control: which compiler ran | `.rustc_info.json` in the MSRV target directory records `rustc 1.95.0 (59807616e 2026-04-14)`. `Cargo.lock` is unchanged (SHA-256 `d2ef0278…4b75c`). |
+| Control: the check can fail (`msrv-03-negative-control.txt`) | A scratch crate outside the repository declaring `rust-version = "1.96"`: `cargo +1.95.0 check` refuses it (exit 101, "rustc 1.95.0 is not supported by the following package"), and `cargo +1.99.0 check` accepts it (exit 0). So a dependency requiring a newer compiler would have stopped stage 1. |
+
+The first driver script reported "stage 1 did not exit 0" and skipped stage 2. That was a bug in my script, which read the elapsed-time column of `commands.tsv` instead of the exit-code column; stage 1's own log and `commands.tsv` show exit 0, and I ran stage 2 separately.
+
+### 16.4 What this shows and does not show
+
+- **Shows:** every crate that Windows builds with default features compiles with 1.95.0. That is also the lowest version possible while `egui` 0.36.2 (which declares 1.95) is used, so the MSRV cannot be lowered without changing the UI toolkit. A dependency update that raises a crate's minimum above 1.95 will break the claim; re-run this check when `egui` or the other 1.95 crates change.
+- **Does not show:** `cargo check` stops before code generation and linking, and no test was executed on 1.95 (tests and clippy still run on the pinned 1.99.0). Not covered: the macOS-only and Linux-specific code (`fmv-macos-events` was not compiled), the `wasm32` build (the 1.95 `wasm32` standard library is not installed), non-default features and the optional-font build. Hosted CI has no MSRV job, so nothing guards the claim between manual runs.
+- **F6. The MSRV declaration is incomplete.** The workspace sets `rust-version = "1.95"`, but a crate inherits it only if its manifest says `rust-version.workspace = true`. Only 13 of the 35 workspace members declare a minimum. The 22 that do not include the desktop app, the CLI, the web crate, xtask and core crates such as `pdfcraft-cos`, `-model`, `-engine` and `-render`, so with an older compiler they fail with a compile error rather than a clear "requires rustc 1.95" message. Not fixed here (22 manifest edits are outside this item); the recommended fix is that edit plus a CI job running the stage 1 and stage 2 commands.
+
+### 16.5 Status
+
+Supersedes the "1.95 MSRV unrun" lines of sections 14.5, 15.5 and the earlier banners: the MSRV check now passes within the limits in 16.4. Still unrun: hosted Windows/Linux CI (nothing pushed) and the optional-font build (`CRAFT_FONTS_DIR`). `baseline_green` stays false. BUILD-002 is not started.
+
 ## Appendix: fixture generator
 
 <details>
@@ -496,3 +546,4 @@ open(sys.argv[1], "wb").write(build(objs))
 | 2026-10-14 | 0.3 | Section 13: D1 to D3 fixed with regression tests, mutation checks and a green scoped suite (1,220 passed, 0 failed); one sentence of 12.5 corrected. |
 | 2026-10-14 | 0.4 | Section 14: `wasm32` and `cargo-deny` installed after provenance checks; `cargo xtask wasm` and `cargo xtask deny` pass; deny cannot see same-day rustls advisories that have no assigned id (F1). |
 | 2026-10-14 | 0.5 | Section 15: `rustls` bumped to 0.23.46 after provenance checks (two lines of `Cargo.lock`); scoped suite, live TLS check and gates pass; cargo-deny fails the old lock on four assigned rustls advisories and passes the new one. |
+| 2026-10-14 | 0.6 | Section 16: Rust 1.95.0 installed after signature and hash checks; `cargo +1.95.0 check --workspace` (and `--all-targets`) passes; 22 of 35 workspace crates declare no `rust-version` (F6); the full disk and the test binaries deleted to make room are recorded. |
