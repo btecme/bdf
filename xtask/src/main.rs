@@ -38,6 +38,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("bdf-corpus", "Generate the BUILD-002 fixture corpus and manifest into target/bdf-corpus/ (--list, --only ID, --write-manifest)", bdf::corpus),
     ("bdf-oracle", "Compare the engine with MuPDF and the generator's expectations over target/bdf-corpus/ (BUILD-002)", bdf::oracle),
+    ("bdf-bench", "Measure latency and memory of the engine and desktop app on the BUILD-002 corpus (--ui, --runs N, --cores N)", bdf::bench),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];
 

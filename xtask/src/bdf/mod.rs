@@ -6,6 +6,7 @@
 //! oracle's. `--write-manifest` also refreshes the committed copy under `docs/bdf-evidence/`.
 
 mod annot_cases;
+mod bench;
 mod form_cases;
 mod graphics_cases;
 mod hostile_cases;
@@ -28,6 +29,7 @@ use crate::assets::sha256_hex;
 use crate::gates::root;
 use model::{Case, Expect, Outcome, Tolerance};
 
+pub use bench::run as bench;
 pub use oracle::run as oracle;
 
 /// Inputs shared by the case generators.
