@@ -2,7 +2,7 @@
 # Evidence must name the actual reviewed commit and real commands/artifacts.
 schema_version = 1
 spec_version = "0.1"
-updated = "2026-10-13"
+updated = "2026-10-16"
 target = "Windows 11 x64 desktop"
 spec = "docs/bdf-build-spec.md"
 kickoff = "docs/bdf-claude-kickoff.md"
@@ -10,12 +10,13 @@ baseline_commit = "7437bde378f43856eada40af25b983812e615e8a"
 default_status = "pending"
 # Status vocabulary: pending -> pending_review -> changes_requested or verified (a correction after
 # changes_requested returns the item to pending_review).
-# Verified requires cited evidence rerun on the reviewed revision (spec section 9). Nothing is verified yet.
+# Verified requires cited evidence rerun on the reviewed revision (spec section 9). BUILD-001 and BUILD-002 were set to
+# verified by the owner on 2026-10-16 on merged main f698f3a8 (see their status_note); nothing else is verified.
 
 [[work_item]]
 id = "BUILD-001"
 title = "Establish and verify the fork baseline"
-status = "pending_review"
+status = "verified"
 review = "docs/bdf-evidence/BUILD-001-codex-review.md"
 followup = "docs/bdf-build-001-followup.md"
 evidence = "docs/bdf-evidence/BUILD-001.md"
@@ -34,8 +35,8 @@ evidence_hosted_head = "de8d6fcc4d98e3c26fbf8d6d7ad784d8801f47a4"  # exact PR he
 hosted_ci_review = "docs/bdf-evidence/BUILD-001-hosted-codex-retest.md"
 hosted_ci_green = true  # historical result at evidence_hosted_head; PR #1 has the live final-head status
 evidence_msrv_commands = "cargo +1.95.0 check --locked --offline --workspace, and with --all-targets: both exit 0, 2026-10-14"
-baseline_green = false
-status_note = "The three hosted CI failures pass independent Codex retest at de8d6fcc: 36 default worker tests, 51 with fault injection, 95 xtask tests, scoped fmt/clippy/layers/assets/parity/MSRV and packaging-target probes pass. Hosted checks at de8d6fcc: Windows x64, Ubuntu with craft-fonts, wasm, dependency policy, FreeBSD, ARM64 packaging/native install-check and packaging lint all pass; fuzz is skipped by its existing event condition. Production worker defaults remain fail-closed. Hosted CI and optional-font qualification are no longer missing. Full BUILD-001 acceptance remains pending review of its earlier UI/open-state changes and consolidated baseline evidence; this review is scoped to the three CI corrections. A subsequent merge-preparation run at 6a273136 exposed two timestamp-dependent batch assertions. The test-only correction reuses the actual source fixture; final-head hosted CI is required before merge. PR #1 has live status. See hosted_ci_review for exact commands, limitations and evidence."
+baseline_green = true  # owner decision 2026-10-16: suite, hosted workflows and optional-font build pass
+status_note = "Set to verified by the owner on 2026-10-16, on merged main f698f3a8 (draft PR #1 merged into the fork), with Codex on a break: the basis is Codex's retests recorded in the evidence files, hosted workflows green on the exact PR head de8d6fcc (fuzz skipped by its event condition), and the owner's decision; no fresh independent rerun was made at f698f3a8 itself. Limitations recorded in the evidence stand. Earlier note: The three hosted CI failures pass independent Codex retest at de8d6fcc: 36 default worker tests, 51 with fault injection, 95 xtask tests, scoped fmt/clippy/layers/assets/parity/MSRV and packaging-target probes pass. Hosted checks at de8d6fcc: Windows x64, Ubuntu with craft-fonts, wasm, dependency policy, FreeBSD, ARM64 packaging/native install-check and packaging lint all pass; fuzz is skipped by its existing event condition. Production worker defaults remain fail-closed. Hosted CI and optional-font qualification are no longer missing. Full BUILD-001 acceptance remains pending review of its earlier UI/open-state changes and consolidated baseline evidence; this review is scoped to the three CI corrections. A subsequent merge-preparation run at 6a273136 exposed two timestamp-dependent batch assertions. The test-only correction reuses the actual source fixture; final-head hosted CI is required before merge. PR #1 has live status. See hosted_ci_review for exact commands, limitations and evidence."
 priority = "P0"
 depends_on = []
 prd_milestone = "BDF-00"
@@ -61,7 +62,7 @@ stop_conditions = ["Missing build prerequisites: report exact missing prerequisi
 [[work_item]]
 id = "BUILD-002"
 title = "Measure fidelity/resources and prove worker feasibility"
-status = "pending_review"
+status = "verified"
 review = "docs/bdf-evidence/BUILD-002-codex-review.md"
 followup = "docs/bdf-build-002-followup.md"
 evidence = "docs/bdf-evidence/BUILD-002.md"
@@ -74,7 +75,7 @@ evidence_retested_commit = "1142fc8ca63e8d874faca0862bc759404bbc3a48"
 correction_review_result = "R1-R5 pass independent retest; BUILD-002 acceptance and baseline qualification remain open"
 evidence_corpus_manifest = "docs/bdf-evidence/BUILD-002-corpus-manifest.toml"
 evidence_oracle = "MuPDF 1.28.5 (mupdf-1.28.5-windows.zip sha256 13476a53e84f5527983158acb6442c7853b3cdc022f3b24880780dcfba1fcc99), separate process"
-status_note = "Codex independently retested the R1-R5 corrections at 1142fc8c: original probes pass with overflow checks on and off; worker tests pass in default (35) and fault-injection (50) configurations; 90 xtask tests pass; full strict oracle agrees exactly with CC: 306 semantic checks, 103 comparisons completed, 89 passing and 14 outside tolerance across 13 divergent cases, with 16 explicit known exceptions. Corrected the documentation count of 90 to 89. No blocking defect found in the correction scope. Worker remains a prototype; G1-G3, admission limits, hard memory cap and sandbox remain open. ADRs stay proposed and budgets unratified; BUILD-001 qualification remains pending, so BUILD-002 stays pending_review and BUILD-003 stays pending. See correction_review for commands and limitations."
+status_note = "Set to verified by the owner on 2026-10-16, on merged main f698f3a8 (draft PR #1 merged into the fork), with Codex on a break: the basis is Codex's retests recorded in the evidence files, hosted workflows green on the exact PR head de8d6fcc (fuzz skipped by its event condition), and the owner's decision; no fresh independent rerun was made at f698f3a8 itself. Limitations recorded in the evidence stand. Earlier note: Codex independently retested the R1-R5 corrections at 1142fc8c: original probes pass with overflow checks on and off; worker tests pass in default (35) and fault-injection (50) configurations; 90 xtask tests pass; full strict oracle agrees exactly with CC: 306 semantic checks, 103 comparisons completed, 89 passing and 14 outside tolerance across 13 divergent cases, with 16 explicit known exceptions. Corrected the documentation count of 90 to 89. No blocking defect found in the correction scope. Worker remains a prototype; G1-G3, admission limits, hard memory cap and sandbox remain open. ADRs stay proposed and budgets unratified; BUILD-001 qualification remains pending, so BUILD-002 stays pending_review and BUILD-003 stays pending. See correction_review for commands and limitations."
 priority = "P0"
 depends_on = ["BUILD-001"]
 prd_milestone = "BDF-01"
