@@ -1,6 +1,6 @@
 # BUILD-003 evidence: release infrastructure and the core capability inventory
 
-Status: **in progress. Slices 1 and 2 (workflow pinning and owning the four reusable workflows) are written and checked locally; none of it has run on a hosted runner yet.** Work item BUILD-003 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`. Branch `chore/build-003-release-pinning`, from the merged `main` (`f698f3a8`), pushed to the fork. Dated 2026-10-16. Local commands ran on Windows 11 x64 with Rust 1.99.0, `--offline --locked`, two jobs; raw logs are under the git-ignored `target/bdf-evidence/BUILD-003/`.
+Status: **in progress. Slices 1 and 2 (workflow pinning and owning the four reusable workflows) pass on hosted runners on head `e5c56e18` (draft PR #2); deliverables 2 to 5 are not started and Codex has not reviewed this work.** Work item BUILD-003 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`. Branch `chore/build-003-release-pinning`, from the merged `main` (`f698f3a8`), pushed to the fork. Dated 2026-10-16. Local commands ran on Windows 11 x64 with Rust 1.99.0, `--offline --locked`, two jobs; raw logs are under the git-ignored `target/bdf-evidence/BUILD-003/`.
 
 ## 1. Slice 1: pin every workflow reference (deliverable 1, finding F07)
 
@@ -33,13 +33,34 @@ Supporting scripts (new, in this repository): `packaging/windows/install-wix.ps1
 
 Local checks of this slice: `cargo xtask pins` reports 28 references, 0 unpinned; the whole packaging directory's PowerShell parses; `cargo fmt`, layers and assets pass. No local check can stand in for a hosted runner here.
 
-## 3. Hosted validation: pending
+## 3. Hosted validation (draft PR #2)
 
-None of the four replacements has run. Each can fail for reasons only a runner shows (a package name on FreeBSD, an actionlint finding in an existing workflow, a missing tool on the ARM64 image, craft-fonts paths on Windows). They are validated by the pull request for this branch, and a failure is fixed on the branch, not hidden. The `release.yml` dry run runs only when the pull request touches `packaging/windows/**`, which this branch does.
+Observed through GitHub's API (run and job conclusions) and, for the one failure, the job log in a signed-in browser pane.
+
+**First head, `62a122dc`:** four of five workflows passed on their first run: CI ([run 38930488150](https://github.com/btecme/bdf/actions/runs/38930488150), including the newly pinned `cargo-deny-action` and `ci.yml` with `contents: read`), FreeBSD ([38930488340](https://github.com/btecme/bdf/actions/runs/38930488340)), Windows ARM64 ([38930488163](https://github.com/btecme/bdf/actions/runs/38930488163)) and the unsigned x64 package ([38930488327](https://github.com/btecme/bdf/actions/runs/38930488327)). **Packaging lint failed** ([run 38930488253](https://github.com/btecme/bdf/actions/runs/38930488253)): actionlint passed on every workflow, but the shell-script step failed with `unrecognized option '--rcfile=packaging/.shellcheckrc'`. That was my error: shellcheck has no such option and finds `.shellcheckrc` by itself.
+
+**Fix, `e5c56e18`:** the flag was removed; nothing else changed.
+
+**Result on `e5c56e18`** (every workflow succeeded; the one skipped job is named):
+
+| Workflow / job | Result | Job |
+|---|---|---|
+| CI / test (ubuntu-latest) | Pass | [117084390564](https://github.com/btecme/bdf/actions/runs/38933887003/job/117084390564) |
+| CI / test (windows-latest) | Pass | [117084390907](https://github.com/btecme/bdf/actions/runs/38933887003/job/117084390907) |
+| CI / dependency licences and advisories | Pass | [117084390964](https://github.com/btecme/bdf/actions/runs/38933887003/job/117084390964) |
+| CI / wasm32 check | Pass | [117084390975](https://github.com/btecme/bdf/actions/runs/38933887003/job/117084390975) |
+| CI / fuzz | **Skipped** by its event condition (schedule or manual only) | [117084392301](https://github.com/btecme/bdf/actions/runs/38933887003/job/117084392301) |
+| Windows ARM64 / package (cross-compiled on x64) | Pass | [117084393056](https://github.com/btecme/bdf/actions/runs/38933886873/job/117084393056) |
+| Windows ARM64 / install and run on ARM64 | Pass (`windows-11-arm`; runs `install-test.ps1`) | [117090704883](https://github.com/btecme/bdf/actions/runs/38933886873/job/117090704883) |
+| Package (Windows x64, unsigned) | Pass: build, static MSI checks, real install/run/uninstall, checksums, artifact | [117084390130](https://github.com/btecme/bdf/actions/runs/38933886843/job/117084390130) |
+| FreeBSD 15 (build + test) | Pass | [117084391878](https://github.com/btecme/bdf/actions/runs/38933887582/job/117084391878) |
+| Packaging lint | Pass (actionlint, shellcheck, PowerShell parse, XML, icon ids, desktop entry, AppStream, Flatpak manifests) | [117084390565](https://github.com/btecme/bdf/actions/runs/38933887060/job/117084390565) |
+
+**What this does and does not show.** All `uses:` in this repository are SHA-pinned (28 references, guarded by `cargo xtask pins`), no workflow calls another organization's workflow, and the one release-named workflow is unsigned, secret-free and publishes nothing; in that sense the acceptance "release execution cannot change through an unreviewed remote branch ref" holds for the workflow files here. It does not mean the pinned third-party actions, the `rustup` bootstrap on FreeBSD, or the `cargo-deny-action` image are immune to change at those pins; and the replacements have had no independent review. The x64 artifact (`pdfcraft-windows-x64-UNSIGNED`) is an unsigned build, not a release. I did not read the per-step logs of the passing jobs, so a check that silently does less than intended would not show here; that is a reason for review, not evidence.
 
 ## 4. Open and not started
 
-* Hosted results for the four workflows, and the first run of `cargo xtask pins` in CI (it is part of the xtask tests).
+* Review of the four rewritten workflows (none has been reviewed by anyone but their author), and a look at the passing jobs' step logs.
 * Downloads inside our own workflows and scripts: the WiX package and the actionlint tarball are hash-checked; the `rustup` bootstrap script on FreeBSD (`https://sh.rustup.rs`) is fetched at run time and is not hash-pinned (it is a script that changes with rustup releases; pinning it needs a decision on how much to trust the first fetch). The OCR models fetched by `cargo xtask models` are verified by SHA-256 against `ATTRIBUTION.toml`.
 * `cargo-deny-action` is a Docker action; its image is built from its own repository at the pinned commit, with the tool version it chooses. A digest or `cargo install --locked` of a pinned version would be tighter.
 * Deliverables 2 to 5 (hosted parity and BDF qualification job contracts; the core capability inventory and desktop-core profile with unknown-defaults-to-denied; the BDF identity migration record; confirming network and MCP stay off by default) are not started. Required-job and repository-protection documentation must separate settings from observed run results; branch protection is a GitHub setting only the owner can change.
@@ -50,4 +71,5 @@ None of the four replacements has run. Each can fail for reasons only a runner s
 | Date | Change |
 |---|---|
 | 2026-10-16 | Slice 1: references pinned, permissions minimized, `cargo xtask pins` added; nested floating references and the licence gap recorded. |
-| 2026-10-16 | Slice 2: the four reusable workflows replaced by workflows in this repository after the owner's decision; unsigned Windows x64 package job; hash-checked WiX and actionlint; hosted validation pending. |
+| 2026-10-16 | Slice 2: the four reusable workflows replaced by workflows in this repository after the owner's decision; unsigned Windows x64 package job; hash-checked WiX and actionlint. |
+| 2026-10-16 | Hosted validation on draft PR #2: all workflows pass on `e5c56e18` (fuzz skipped by event); one lint failure of mine fixed on the way. |
