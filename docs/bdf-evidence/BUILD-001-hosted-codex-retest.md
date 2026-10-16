@@ -1,4 +1,4 @@
-# BUILD-001 â€” Codex retest of the hosted CI corrections
+# BUILD-001 — Codex retest of the hosted CI corrections
 
 Status: **all three CI corrections pass independent review and retesting; no blocking finding in this scope.**
 

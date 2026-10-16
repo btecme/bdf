@@ -192,7 +192,7 @@ findings = ["F08", "F11"]
 requirements = ["CORE-01", "CORE-06", "CORE-08", "CORE-10"]
 touch = ["crates/ui-egui", "crates/automation", "apps/pdfcraft-cli/tests", "crates/app-service/tests"]
 deliverables = ["UI/CLI/MCP open/view/rotate/undo/redo/save/close all dispatch through app-service.", "MCP compact/meta, command dispatch, batches/resources and UI control have no direct-session or policy bypass.", "Per-surface allowed/denied/conflict/fault test matrix and headless scripts/renders.", "Delete superseded duplicate orchestration rather than maintaining two production sources of truth."]
-acceptance = ["Spec Â§2 workflow passes across every adapter, with independent save/reopen evidence.", "Refusals preserve document bytes, history, outputs and recovery.", "Visible availability and server execution agree on the release profile."]
+acceptance = ["Spec §2 workflow passes across every adapter, with independent save/reopen evidence.", "Refusals preserve document bytes, history, outputs and recovery.", "Visible availability and server execution agree on the release profile."]
 stop_conditions = ["Any production alternate entry point bypasses service policy: complete migration before expanding features."]
 
 [[work_item]]
