@@ -101,6 +101,7 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         ("clippy", Box::new(|| run_args(&["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))),
         ("test", Box::new(|| run_args(&["test", "--workspace"]))),
         ("layers", Box::new(|| layers(&[]))),
+        ("pins", Box::new(|| crate::pins::run(&[]))),
         ("wasm", Box::new(|| wasm(&[]))),
         ("assets", Box::new(|| crate::assets::run(&[]))),
         ("deny", Box::new(|| deny(&[]))),

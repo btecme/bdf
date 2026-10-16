@@ -19,5 +19,8 @@ concurrency:
 
 jobs:
   lint:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@main
+    # Pinned to a reviewed commit of the reusable workflow (BUILD-003, finding F07); it was tracked at @main.
+    # The pin does not reach the `uses:` lines inside that workflow, several of which still name
+    # craft-common-actions/actions/*@main: see docs/bdf-evidence/BUILD-003.md. To update, review the new
+    # commit (and what it calls) and change the SHA; `cargo xtask pins` rejects any floating reference here.
+    uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@43f4e83c68764f9d880f8a6c10328bc550465f2b # main on 2026-10-16

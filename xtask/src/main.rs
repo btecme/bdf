@@ -11,6 +11,7 @@ mod gates;
 mod layers;
 mod macos_integration;
 mod parity;
+mod pins;
 mod screenshots;
 mod version;
 
@@ -20,6 +21,7 @@ type Command = fn(&[String]) -> anyhow::Result<()>;
 const COMMANDS: &[(&str, &str, Command)] = &[
     ("version", "Print the workspace version, or `version set X.Y.Z[-pre]` to change it and refresh Cargo.lock", version_cmd),
     ("layers", "Enforce the crate dependency layering (plan/architecture.md §3)", gates::layers),
+    ("pins", "Require every action and reusable workflow in .github/ to be pinned to a full commit SHA (BUILD-003)", pins::run),
     ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8", gates::wasm),
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     ("ci", "fmt --check, clippy -D warnings, test, layers, wasm, assets, deny, parity (stops at first failure)", gates::ci),
