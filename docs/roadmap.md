@@ -1,5 +1,21 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **BDF fork planning, 2026-10-13:** Windows 11 desktop is the priority; documents stay local and general-office workflows lead. The [BDF PRD](bdf-prd-draft.md) defines separate release gates and the [foundation review](bdf-foundation-review.md) records source-confirmed findings and unverified risks. Upstream milestones and readiness estimates below have not been remeasured.
+
+| BDF milestone | Status | Evidence / next gate |
+|---|---|---|
+| BDF-00: reproducible fork baseline | BUILD-001: independent retest passes; merge-preparation test correction awaiting hosted CI | [Codex retest](bdf-evidence/BUILD-001-hosted-codex-retest.md) at `de8d6fcc`: 36/51 worker tests and 95 xtask tests pass, with packaging-script probes, scoped gates and MSRV. All four configured workflows passed on the reviewed `de8d6fcc` [PR #1](https://github.com/btecme/bdf/pull/1) head: Windows x64, Ubuntu with craft-fonts, wasm/dependency policy, FreeBSD, ARM64 packaging/native install-check and packaging lint. Fuzz is skipped by event; non-Windows fault-injection tests remain unrun. Merge preparation at `6a273136` exposed two timestamp-dependent batch-test assertions; a test-only fixture-reuse correction passes a forced second-boundary probe and awaits final-head hosted CI. PR #1 carries the live merge/check state. Earlier UI changes/consolidated evidence retain their separately tracked overall acceptance. BUILD-003 stays pending. |
+| BDF-01: measured foundation | BUILD-002: R1–R5 retest passes; acceptance pending | [Independent Codex retest](bdf-evidence/BUILD-002-codex-retest.md): original counterexamples, worker suites and xtask tests pass; full strict oracle agrees with CC (306 semantic checks; 103 comparisons made; **89 pass, 14 outside tolerance across 13 cases**; 16 known exceptions). Documentation count corrected from 90 to 89. Renderer adaptations G1–G3, admission limits, hard memory cap and sandbox remain open. ADRs remain proposed, budgets unratified and BUILD-001 qualification pending; BUILD-003 remains pending. |
+
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (BDF-00: the three hosted CI failures are corrected and all four workflows pass on the PR head, fuzz skipped by event; BUILD-001 stays pending review; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (BDF-01: independent R1–R5 retest passes; visual count corrected to 89/103; overall acceptance remains pending; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (BDF-00: BUILD-001 evidence correction on the rustls key-exchange advisory; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 MSRV 1.95 check passes; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 rustls bumped to 0.23.46; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 wasm and deny gates pass after provenance checks; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 D1 to D3 fixed, scoped suite green; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (BDF-00: BUILD-001 test synchronization; baseline still not green; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (BDF-00: BUILD-001 Windows baseline evidence, scoped UI tests fail on the baseline itself; upstream estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M4: Extract and Split preserve shared Type 3 glyph resources; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M2: packed TIFF-predictor RGB rows retain their byte boundaries; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -161,6 +177,20 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | BDF-01: BUILD-002 corrections R1 to R5 (red-then-green); strict oracle gate; pending re-review, not verified; ADRs proposed; BUILD-003 pending; estimates unchanged. |
+| 2026-10-15 | minor | [BUILD-002 Codex review](bdf-evidence/BUILD-002-codex-review.md): five reproduced supervisor/harness findings; changes requested, ADRs remain proposed and BUILD-003 pending. |
+| 2026-10-15 | minor | BDF-01: BUILD-002 evidence (corpus, oracle, benchmark, worker prototype); budgets proposed, not ratified; estimates unchanged. |
+| 2026-10-15 | minor | BDF-00: BUILD-001 evidence correction (rustls key-exchange advisory does not apply to the update check); estimates unchanged. |
+| 2026-10-14 | minor | BDF-00: BUILD-001 MSRV 1.95 check passes (compile check); estimates unchanged. |
+| 2026-10-14 | minor | [Codex review of fff77e17](bdf-evidence/fff77e17-codex-review.md): no blocking bump finding; dependency checks independently pass, baseline status unchanged. |
+| 2026-10-14 | minor | BDF-00: BUILD-001 rustls bumped to 0.23.46 (four advisories fixed); estimates unchanged. |
+| 2026-10-14 | minor | BDF-00: BUILD-001 wasm and deny gates pass after provenance checks (rustls caveat); estimates unchanged. |
+| 2026-10-14 | minor | BDF-00: BUILD-001 D1 to D3 fixed; scoped suite green (1,220 passed, 0 failed); estimates unchanged. |
+| 2026-10-14 | minor | BDF-00: BUILD-001 test synchronization (14 of 16 failures corrected, 2 expose async-open behaviour changes); estimates unchanged. |
+| 2026-10-13 | minor | BUILD-001 Codex review completed; correction requested and BUILD-002 kept pending. |
+| 2026-10-13 | minor | BDF-00: BUILD-001 baseline evidence (Windows build and gates pass; scoped UI tests fail on the baseline itself); upstream estimates unchanged. |
+| 2026-10-13 | minor | BDF-00 links implementation spec and bounded kickoff; no implementation status or upstream estimate advanced. |
+| 2026-10-13 | minor | Added BDF-00 fork baseline row and desktop-first planning links; upstream estimates unchanged. |
 | 2026-10-12 | minor | M13: CLI check directory identity, with overlap and symlink regressions; estimates unchanged |
 | 2026-10-12 | minor | M4: shared Type 3 glyph resources survive extraction, with save/reopen and independent raster regressions; estimates unchanged |
 | 2026-10-12 | minor | M2: packed TIFF-predictor RGB row boundaries, with decoding and page-render regressions; estimates unchanged |

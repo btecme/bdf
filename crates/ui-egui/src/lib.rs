@@ -136,6 +136,9 @@ pub mod window_controls;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod open_worker_tests;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod open_worker_regression_tests;
+
 use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::{DocView, RasterMemory};
@@ -1143,6 +1146,19 @@ impl PdfCraftApp {
         Ok(token)
     }
 
+    /// A native open is read and prepared on the worker, and its document, password prompt or
+    /// refusal arrives on a later frame. The browser has no worker: its opens finish inline.
+    fn open_in_flight(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            !self.pending_opens.is_empty()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn poll_pending_opens(&mut self) {
         let mut ready = Vec::new();
@@ -1267,7 +1283,11 @@ impl PdfCraftApp {
         activate: bool,
     ) -> Result<DocId, String> {
         let id = self.session.commit_open(prepared);
-        self.password_prompt = None;
+        // The prompt that asked for this document is done with. Another document's prompt is not:
+        // an unlock finishing must not discard a file that is still waiting for its password.
+        if self.password_prompt.as_ref().is_some_and(|prompt| prompt.name == name && prompt.path == path) {
+            self.password_prompt = None;
+        }
         // The reading-colours preference is app-wide: a newly opened document starts with it.
         // Idempotent: the engine returns `false` when the document has the setting already.
         self.session.set_reading_colors(id, self.reading_colors);
@@ -1686,6 +1706,15 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) {
+        self.open_path_then(path, None);
+    }
+
+    /// [`Self::open_path`], and then run the command `then` on the document once it is open (or
+    /// unlocked): a tool chosen with no document open asks for a file and runs on it. Nothing
+    /// runs when the file doesn't open. The open may still be in flight when this returns, so the
+    /// command travels with it instead of being run here.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_path_then(&mut self, path: &str, then: Option<&'static str>) {
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
         // Taken before reading: a build that rewrites the file meanwhile still counts as a change.
         let stamp = file_watch::Stamp::at(path);
@@ -1703,6 +1732,14 @@ impl PdfCraftApp {
                     {
                         self.watch.known_as(doc, stamp);
                     }
+                    if let Some(command) = then {
+                        if let Some(prompt) = self.password_prompt.as_mut().filter(|prompt| prompt.path.as_deref() == Some(path)) {
+                            // Encrypted: the tool runs once the password is in.
+                            prompt.then = Some(command);
+                        } else if self.views.len() > before && self.active.is_some() {
+                            self.execute(command);
+                        }
+                    }
                 }
                 Err(error) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &error.to_string())]),
             }
@@ -1718,7 +1755,7 @@ impl PdfCraftApp {
             activate: true,
             after_open: None,
             recovered: None,
-            then: None,
+            then,
         }) {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
         }
@@ -1971,15 +2008,7 @@ impl PdfCraftApp {
         let dialog = Self::open_picker().set_title(tl!(spec.label).trim_end_matches('…'));
         let command = spec.id;
         self.ask_one(pickers::Ask::File(dialog), None, move |app, path| {
-            let path = path.to_string_lossy().into_owned();
-            let before = app.views.len();
-            app.open_path(&path);
-            if let Some(prompt) = app.password_prompt.as_mut().filter(|p| p.path.as_deref() == Some(path.as_str())) {
-                // Encrypted: the tool runs once the password is in.
-                prompt.then = Some(command);
-            } else if app.views.len() > before && app.active.is_some() {
-                app.execute(command);
-            }
+            app.open_path_then(&path.to_string_lossy(), Some(command));
         });
     }
 
@@ -2805,8 +2834,11 @@ impl eframe::App for PdfCraftApp {
             }
         }
         // Don't replace a pending prompt or import. A startup file may need its own password
-        // prompt, so its bytes stay queued until the current interaction finishes.
+        // prompt, so its bytes stay queued until the current interaction finishes. An open that is
+        // still being prepared (a password just submitted, a file just picked) is part of it: the
+        // startup file would otherwise open ahead of the document the user is waiting for.
         if self.password_prompt.is_none()
+            && !self.open_in_flight()
             && self.image_import.is_none()
             && self.dialog.is_none()
             && self.close_request.is_none()

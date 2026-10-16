@@ -25,6 +25,20 @@ the low-disk artifacts, run `cargo clean --profile low-disk`.
 Building PdfCraft requires Rust 1.95 or later: the UI crate and its `egui` and `craft-ui`
 dependencies need it, and the workspace `rust-version` states the same minimum.
 
+### BDF toolchain pin and Windows prerequisites
+
+The BDF baseline (work item BUILD-001, [evidence](bdf-evidence/BUILD-001.md)) pins Rust **1.99.0**
+in `rust-toolchain.toml`, with `clippy` and `rustfmt`, and `.github/workflows/ci.yml` uses the same
+version. With `rustup` installed, the first `cargo` command in the checkout installs the pinned
+toolchain. The pin is what was built and tested; it does not verify the 1.95 minimum above. Bump
+it deliberately, re-run the baseline checks and change `ci.yml` with it.
+
+On Windows 11 x64 the baseline was built with the `x86_64-pc-windows-msvc` host toolchain
+(install [rustup](https://rustup.rs/)), Visual Studio Build Tools 2022 with the MSVC x64/x86
+build tools (v143) and a Windows 10/11 SDK. A clean machine has not been tested. Use `-j 2` and
+a finite timeout for local builds; a first desktop-plus-CLI debug build with a cold `target/`
+took about 20 minutes on a 6-core, 16 GB machine.
+
 ## Interface appearance
 
 Display theme saves System, Light or Dark separately from the palette currently drawn. New

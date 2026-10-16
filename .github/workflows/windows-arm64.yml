@@ -28,6 +28,9 @@ permissions:
 jobs:
   windows-arm64:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    # That workflow installs `stable` plus the ARM64 target, but cargo then runs the compiler pinned in
+    # rust-toolchain.toml, which lacked the target (E0463 on the first hosted run). It has no input to choose
+    # a toolchain, so packaging/windows/package.ps1 adds the target to the compiler in use (BUILD-001).
     uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
     with:
       app-name: pdfcraft

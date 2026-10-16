@@ -8,6 +8,9 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::Edit;
 use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore};
 
+mod support;
+use support::{password_prompt_for, view_named, wait_until, wait_until_shown};
+
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
@@ -80,7 +83,8 @@ fn a_crashed_session_is_offered_and_recovered_unsaved() {
     h.get_by_label("Recover unsaved documents?");
     h.get_by_label("work.pdf");
     h.get_by_label("Recover").click();
-    h.run_steps(4);
+    // The snapshot is read and prepared on the open worker.
+    wait_until(&mut h, "work.pdf is recovered as the first tab", |app| view_named(app, "work.pdf") == Some(0));
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let doc = app.session.get(app.views[0].id).unwrap();
@@ -180,13 +184,15 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     let mut h = harness(s.clone());
     h.get_by_label_contains("password-protected");
     h.get_by_label("Recover").click();
-    h.run_steps(3);
+    // The encrypted snapshot is opened on the open worker, which finds it needs a password.
+    wait_until(&mut h, "work.pdf asks for its password", |app| password_prompt_for(app, "work.pdf", false));
+    wait_until_shown(&mut h, "the password field is drawn", |h| h.query_by_role(Role::PasswordInput).is_some());
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();
     field.type_text("pw");
     h.run_steps(2);
     h.key_press(Key::Enter);
-    h.run_steps(4);
+    wait_until(&mut h, "work.pdf is recovered once its password is accepted", |app| view_named(app, "work.pdf") == Some(0));
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let d = app.session.get(app.views[0].id).unwrap();
@@ -205,7 +211,8 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
     assert_eq!(s.list().len(), 1);
     let mut h = harness(s.clone());
     h.get_by_label("Recover").click();
-    h.run_steps(3);
+    wait_until(&mut h, "the snapshot of work.pdf asks for its password", |app| password_prompt_for(app, "work.pdf", false));
+    wait_until_shown(&mut h, "the password field is drawn", |h| h.query_by_role(Role::PasswordInput).is_some());
     assert!(h.state().password_prompt.is_some(), "the snapshot asks for its password");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
@@ -215,7 +222,8 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
     let app = h.state_mut();
     app.open_bytes("B.pdf", Some("/docs/B.pdf".into()), encrypted(fixture(1), "pw-b")).unwrap();
     app.submit_password(Some("pw-b".into()));
-    h.run_steps(3);
+    // B's password is checked on the open worker.
+    wait_until(&mut h, "B.pdf opens once its password is accepted", |app| view_named(app, "B.pdf") == Some(0));
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let b = app.session.get(app.views[0].id).unwrap();
@@ -280,6 +288,8 @@ fn missing_corrupt_or_mismatched_metadata_recovers_the_snapshot_without_an_origi
         crashed_session(&s, fixture(3), None, Some("original.pdf"));
         let mut meta = s.list().remove(0);
         let saved = s.read(&meta.key).unwrap();
+        // Without readable metadata the snapshot is named after its key.
+        let orphan = format!("{}.pdf", meta.key);
         let sidecar = s.dir().join(format!("{}.json", meta.key));
         match case {
             "missing" => std::fs::remove_file(&sidecar).unwrap(),
@@ -291,7 +301,7 @@ fn missing_corrupt_or_mismatched_metadata_recovers_the_snapshot_without_an_origi
         }
         let mut h = harness(s.clone());
         h.get_by_label("Recover").click();
-        h.run_steps(4);
+        wait_until(&mut h, &format!("{orphan} is recovered without its metadata ({case})"), |app| view_named(app, &orphan) == Some(0));
         let app = h.state();
         assert_eq!(app.views.len(), 1, "{case}");
         let doc = app.session.get(app.views[0].id).unwrap();
@@ -313,17 +323,20 @@ fn an_encrypted_snapshot_without_metadata_still_requires_its_password() {
     crashed_session(&s, encrypted(fixture(2), "pw"), Some("pw"), Some("original.pdf"));
     let meta = s.list().remove(0);
     let saved = s.read(&meta.key).unwrap();
+    // Without its metadata the snapshot is named after its key.
+    let orphan = format!("{}.pdf", meta.key);
     std::fs::remove_file(s.dir().join(format!("{}.json", meta.key))).unwrap();
     let mut h = harness(s.clone());
     h.get_by_label("Recover").click();
-    h.run_steps(3);
+    wait_until(&mut h, &format!("the snapshot {orphan} asks for its password"), |app| password_prompt_for(app, &orphan, false));
+    wait_until_shown(&mut h, "the password field is drawn", |h| h.query_by_role(Role::PasswordInput).is_some());
     assert!(h.state().views.is_empty());
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();
     field.type_text("pw");
     h.run_steps(2);
     h.key_press(Key::Enter);
-    h.run_steps(4);
+    wait_until(&mut h, &format!("{orphan} is recovered once its password is accepted"), |app| view_named(app, &orphan) == Some(0));
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let doc = app.session.get(app.views[0].id).unwrap();

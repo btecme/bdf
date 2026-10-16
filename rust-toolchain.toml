@@ -1,0 +1,9 @@
+# Pinned for a reproducible BDF baseline (work item BUILD-001, docs/bdf-evidence/BUILD-001.md).
+# The baseline was built, linted and tested with 1.99.0 on x86_64-pc-windows-msvc. The workspace
+# MSRV is `rust-version` in Cargo.toml (1.95); this pin does not verify that MSRV. Bump the
+# channel deliberately, re-run the baseline checks, and keep `toolchain:` in
+# .github/workflows/ci.yml on the same version.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

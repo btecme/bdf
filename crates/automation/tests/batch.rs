@@ -9,6 +9,7 @@ fn result(auto: &mut Automation, args: Value) -> Value {
     }
 }
 
+// Creation stamps ModDate, so preservation checks must reuse the original fixture bytes.
 fn pdf() -> Vec<u8> {
     Session::new().create_from_text("Original", "Original text").unwrap().as_ref().clone()
 }
@@ -47,10 +48,11 @@ fn batch_recurses_preserves_paths_continues_errors_and_never_replaces_outputs() 
 #[test]
 fn batch_is_nonrecursive_by_default_and_stop_reports_unprocessed_files() {
     let dir = tempfile::tempdir().unwrap();
+    let original = pdf();
     std::fs::create_dir_all(dir.path().join("input/sub")).unwrap();
     std::fs::write(dir.path().join("input/0.pdf"), b"broken").unwrap();
-    std::fs::write(dir.path().join("input/1.pdf"), pdf()).unwrap();
-    std::fs::write(dir.path().join("input/sub/2.pdf"), pdf()).unwrap();
+    std::fs::write(dir.path().join("input/1.pdf"), &original).unwrap();
+    std::fs::write(dir.path().join("input/sub/2.pdf"), &original).unwrap();
     let mut auto = Automation::new().with_root(dir.path()).unwrap();
     let report = result(&mut auto, json!({"paths":["input"],"steps":["optimize"],"out_dir":"out","stop_on_error":true}));
     assert_eq!(report["failed"], 1);
@@ -61,7 +63,7 @@ fn batch_is_nonrecursive_by_default_and_stop_reports_unprocessed_files() {
     let report = result(&mut auto, json!({"paths":["input"],"steps":["optimize"],"out_dir":"out"}));
     assert_eq!(report["completed"], 1);
     assert!(!dir.path().join("out/sub").exists());
-    assert!(std::fs::metadata(dir.path().join("out/1.pdf")).unwrap().len() <= pdf().len() as u64);
+    assert!(std::fs::metadata(dir.path().join("out/1.pdf")).unwrap().len() <= original.len() as u64);
 }
 
 #[test]
@@ -107,12 +109,13 @@ fn explicitly_selected_subfolder_is_processed_without_recursive() {
 #[test]
 fn explicit_file_can_write_a_numbered_copy_beside_its_source() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("page.pdf"), pdf()).unwrap();
+    let original = pdf();
+    std::fs::write(dir.path().join("page.pdf"), &original).unwrap();
     let mut auto = Automation::new().with_root(dir.path()).unwrap();
     let report = result(&mut auto, json!({"paths":["page.pdf"],"steps":["convert"],"out_dir":"."}));
     assert_eq!(report["completed"], 1, "{report}");
-    assert_eq!(std::fs::read(dir.path().join("page.pdf")).unwrap(), pdf());
-    assert_eq!(std::fs::read(dir.path().join("page (2).pdf")).unwrap(), pdf());
+    assert_eq!(std::fs::read(dir.path().join("page.pdf")).unwrap(), original);
+    assert_eq!(std::fs::read(dir.path().join("page (2).pdf")).unwrap(), original);
 }
 
 #[cfg(unix)]
@@ -165,7 +168,8 @@ fn batch_ocr_uses_existing_models_or_reports_the_missing_models_per_file() {
 #[test]
 fn batch_output_collisions_are_safe_under_concurrent_writers() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("page.pdf"), pdf()).unwrap();
+    let original = pdf();
+    std::fs::write(dir.path().join("page.pdf"), &original).unwrap();
     let barrier = std::sync::Barrier::new(2);
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..2)
@@ -182,7 +186,7 @@ fn batch_output_collisions_are_safe_under_concurrent_writers() {
         assert_ne!(reports[0]["files"][0]["output"], reports[1]["files"][0]["output"]);
     });
     for name in ["page.pdf", "page (2).pdf"] {
-        assert_eq!(std::fs::read(dir.path().join("out").join(name)).unwrap(), pdf());
+        assert_eq!(std::fs::read(dir.path().join("out").join(name)).unwrap(), original);
     }
     assert_eq!(std::fs::read_dir(dir.path().join("out")).unwrap().count(), 2, "no staging files remain");
 }
