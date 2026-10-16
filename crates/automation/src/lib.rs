@@ -13,6 +13,7 @@
 
 mod a11y;
 mod batch;
+pub mod capability;
 mod comments;
 mod content;
 mod conventions;
