@@ -12,8 +12,17 @@ use pdfcraft_worker::supervisor::Config;
 
 pub const WORKER: &str = env!("CARGO_BIN_EXE_pdfcraft-worker");
 
+/// Adapt a config for the platform the tests run on. Containment (the worker dies with its parent) is
+/// implemented only on Windows, and the production default refuses to start a worker that cannot be
+/// contained (`allow_uncontained == false`, asserted by its own tests). Where there is no containment
+/// the protocol, render and cancel tests opt in explicitly so they still exercise the real paths; they
+/// make no claim about parent-death, CPU or memory limits there, which are tested on Windows only.
+pub fn portable(cfg: Config) -> Config {
+    Config { allow_uncontained: !cfg!(windows), ..cfg }
+}
+
 pub fn cfg() -> Config {
-    Config::new(WORKER)
+    portable(Config::new(WORKER))
 }
 
 /// A valid one-page PDF with a line of text, built by hand so the tests need no fixture files.
@@ -109,9 +118,11 @@ pub fn process_gone(pid: u32) -> bool {
     !String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
 }
 
+/// Elsewhere: `kill -0` succeeds while the process exists (FreeBSD has no `/proc` by default, so a
+/// `/proc` check would report every process gone and the tests that wait for it would assert nothing).
 #[cfg(not(windows))]
 pub fn process_gone(pid: u32) -> bool {
-    !std::path::Path::new(&format!("/proc/{pid}")).exists()
+    !Command::new("kill").args(["-0", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
 }
 
 pub fn wait_until(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
@@ -151,5 +162,5 @@ pub fn fake(mode: &str) -> Config {
     let exe = std::env::current_exe().unwrap();
     let path = exe.parent().and_then(|p| p.parent()).unwrap().join("examples").join(if cfg!(windows) { "fake_worker.exe" } else { "fake_worker" });
     assert!(path.is_file(), "build the example first (cargo build -p pdfcraft-worker --examples): {}", path.display());
-    Config { args: vec![mode.to_string()], ..Config::new(path) }
+    portable(Config { args: vec![mode.to_string()], ..Config::new(path) })
 }

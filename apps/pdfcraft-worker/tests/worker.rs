@@ -101,6 +101,8 @@ fn a_header_claiming_four_gigabytes_ends_the_worker_without_it_allocating() {
     header[16..20].copy_from_slice(&(u32::MAX - 15).to_le_bytes());
     raw.send_bytes(&header);
     assert_eq!(raw.wait_exit(Duration::from_secs(5)), Some(2), "a protocol violation ends the worker with code 2");
+    // Elsewhere only the exit code is asserted: the measured peak (it must not have tried to hold 4 GiB)
+    // needs the Windows process counters.
     #[cfg(windows)]
     {
         // The process is gone, but its peak counters belong to the process object.
@@ -294,6 +296,42 @@ fn cancel_of_a_render_that_started_and_then_stopped_is_prompt() {
 }
 
 // ---- R3: validate the configuration, and fail closed when containment cannot be established ----
+
+/// The production default must stay fail-closed on every platform; the test helpers opt out of it
+/// explicitly (`common::portable`), never the default.
+#[test]
+fn the_production_default_does_not_allow_an_uncontained_worker() {
+    let production = pdfcraft_worker::supervisor::Config::new(WORKER);
+    assert!(!production.allow_uncontained);
+    assert_eq!(cfg().allow_uncontained, !cfg!(windows), "only the test helpers opt in, and only where containment does not exist");
+}
+
+/// Where containment does not exist the default config refuses to start a worker, and ends the process
+/// it had already spawned. (On Windows the same default succeeds; its containment is tested below.)
+#[cfg(not(windows))]
+#[test]
+fn where_containment_is_unavailable_the_default_config_refuses_startup_and_leaves_no_worker() {
+    let production = pdfcraft_worker::supervisor::Config::new(WORKER);
+    let err = Worker::spawn(&production).err().expect("an uncontained worker must not be handed out by default");
+    let WorkerError::Containment(why) = &err else { panic!("not a containment error: {err:?}") };
+    assert!(why.contains("only on Windows") && why.contains("was ended"), "{why}");
+    let digits: String = why.split("worker process ").nth(1).expect("the pid is named").chars().take_while(char::is_ascii_digit).collect();
+    let pid: u32 = digits.parse().expect("a pid");
+    assert!(wait_until(Duration::from_secs(3), || process_gone(pid)), "the refused worker (pid {pid}) must not be left running");
+    // A session built on the default refuses in the same way and holds no worker.
+    let session = Session::open(&production, tiny_pdf("refused"), None).err().expect("must refuse");
+    assert!(matches!(session, WorkerError::Containment(_)), "{session:?}");
+}
+
+/// The opt-in works, and says what it gives up.
+#[cfg(not(windows))]
+#[test]
+fn an_explicitly_uncontained_worker_runs_and_reports_that_it_is_uncontained() {
+    let w = Worker::spawn(&cfg()).expect("the explicit opt-in starts a worker");
+    assert!(!w.contained(), "no parent-death containment exists on this platform");
+    assert!(w.memory().is_none(), "no OS memory counters are read here, so a memory cap cannot be enforced");
+    w.shutdown();
+}
 
 #[test]
 fn a_cpu_limit_of_zero_is_an_invalid_configuration_not_a_silently_uncontained_worker() {

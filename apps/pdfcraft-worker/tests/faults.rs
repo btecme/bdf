@@ -84,6 +84,9 @@ fn cancel_answers_at_once_and_the_worker_is_gone_within_the_grace_period() {
     assert!(wait_until(Duration::from_secs(2), || process_gone(pid)));
 }
 
+/// The cap is enforced by polling the OS memory counters, which the supervisor reads on Windows only;
+/// without them an uncontained worker is not limited, so the guarantee is not asserted elsewhere.
+#[cfg(windows)]
 #[test]
 fn a_worker_over_the_memory_cap_is_terminated() {
     let cap = 200 * 1024 * 1024;

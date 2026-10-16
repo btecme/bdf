@@ -19,6 +19,13 @@
 //! * none of this touches the parent's own state: [`Session`] keeps the accepted document, and a
 //!   dead worker is replaced and, for a read-only render, retried once.
 //!
+//! Platform support: the containment above (kill-on-parent-exit, the CPU limit, the memory counters
+//! behind the memory cap) is implemented on Windows only. Elsewhere the default configuration refuses to
+//! start a worker, so there is no supported production platform other than Windows yet; the protocol,
+//! render, deadline, validation and cancel paths still run there when a caller opts in with
+//! `allow_uncontained`, and the portable tests do so, but an uncontained worker can outlive its parent
+//! and its memory cap and CPU limit are not enforced.
+//!
 //! What it does **not** do: process separation is not a sandbox. The worker keeps the user's
 //! ambient file and network access; see the architecture decision record.
 
@@ -55,7 +62,8 @@ pub struct Config {
     pub cores: Option<u32>,
     /// Run a worker that could not be placed in a job object. Off: a worker whose containment cannot
     /// be established is ended and startup fails. Turn it on only where containment does not exist
-    /// (other operating systems) and the caller accepts that the worker can outlive its parent.
+    /// (other operating systems than Windows) and the caller accepts that the worker can outlive its
+    /// parent and that `memory_cap` and `cores` are not enforced for it.
     pub allow_uncontained: bool,
     /// Make a step of the containment setup fail, to test that startup fails closed.
     #[cfg(feature = "fault-injection")]
