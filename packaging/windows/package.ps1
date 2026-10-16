@@ -32,6 +32,23 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
 }
 
+# The compiler cargo will run is the one rustup selects from rust-toolchain.toml in the repository, which
+# can differ from the `stable` a CI step installed together with the target. The target is then missing
+# for the compiler in use and the build fails with E0463 ("can't find crate for `core`", seen on the
+# hosted ARM64 run). Ask rustup from the repository root, so the target is added to the compiler that
+# will build, and only when it is missing; this adds nothing to a build whose target is already there
+# (every x64 build on an x64 host).
+function Initialize-RustTarget([string] $Triple, [string] $RepoRoot) {
+  if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) { return }
+  Push-Location $RepoRoot
+  try {
+    Write-Output "compiler in use: $(rustc --version)"
+    if (@(rustup target list --installed) -notcontains $Triple) {
+      Invoke-Native "rustup target add $Triple (for the compiler in use)" { rustup target add $Triple }
+    }
+  } finally { Pop-Location }
+}
+
 # The version lives in one place: [workspace.package] version in the root Cargo.toml.
 $Version = $env:PDFCRAFT_VERSION
 if (-not $Version) {
@@ -62,6 +79,7 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PDFCRAFT_REQUIRE_WINRES = '1'
+  Initialize-RustTarget $Target $Root
   Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
 }
 
