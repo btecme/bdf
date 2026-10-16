@@ -47,7 +47,8 @@ jobs:
         run: ./actionlint -color
 
       - name: Packaging shell scripts
-        run: git ls-files 'packaging/*.sh' | xargs shellcheck --rcfile=packaging/.shellcheckrc
+        # shellcheck finds packaging/.shellcheckrc by itself (it looks in each script's directory and above).
+        run: git ls-files 'packaging/*.sh' | xargs shellcheck
 
       - name: Packaging PowerShell scripts parse
         shell: pwsh
