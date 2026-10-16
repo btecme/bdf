@@ -127,6 +127,11 @@ pub fn run_measured(cmd: &mut Command, timeout: Duration, cap: usize, cores: Opt
         }
         thread::sleep(Duration::from_millis(2));
     };
+    // Windows: closing the job kills whatever the child left running (kill-on-job-close). Such a
+    // process can still hold the output pipes, and a drain thread ends only when every holder has
+    // closed its end, so the job has to be closed before the threads are joined. Elsewhere there is
+    // no job to close (`confine` returns a unit placeholder, which `drop` would only lint about).
+    #[cfg(windows)]
     drop(job);
     let stdout = out.join().unwrap_or_default();
     let stderr = err.join().unwrap_or_default();
@@ -183,6 +188,32 @@ mod tests {
         let o = run(&mut c, Duration::from_secs(60), 1000).unwrap();
         assert!(!o.timed_out, "the child must finish: a full pipe would have blocked it");
         assert!(o.stdout.len() <= 1000);
+    }
+
+    /// `cmd` starts a detached `ping` that inherits the output pipes and then exits. The drain threads
+    /// end only when the last holder of a pipe lets go, so unless the job is closed first (killing the
+    /// ping) the join waits out the whole minute.
+    #[cfg(windows)]
+    #[test]
+    fn closing_the_job_frees_a_pipe_held_by_a_process_the_child_left_behind() {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "/B", "ping", "-n", "60", "127.0.0.1"]);
+        let (o, _, confined) = run_measured(&mut c, Duration::from_secs(120), 1 << 16, Some(2)).unwrap();
+        assert!(confined, "the child must be in a job for this to test anything");
+        assert!(!o.timed_out);
+        assert!(o.ms < 15_000, "took {} ms: the leftover process held the pipe until it ended on its own", o.ms);
+    }
+
+    /// The same for the timeout path: only `cmd` is killed directly; its `ping` child keeps the pipes.
+    #[cfg(windows)]
+    #[test]
+    fn a_timeout_also_ends_the_children_of_the_child_when_confined() {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "ping", "-n", "60", "127.0.0.1"]);
+        let (o, _, confined) = run_measured(&mut c, Duration::from_millis(500), 1 << 16, Some(2)).unwrap();
+        assert!(confined);
+        assert!(o.timed_out);
+        assert!(o.ms < 15_000, "took {} ms: the grandchild outlived the timeout", o.ms);
     }
 
     #[cfg(windows)]
