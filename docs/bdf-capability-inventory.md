@@ -13,7 +13,7 @@ BDF v1 is a Windows 11 desktop PDF workbench whose core is the PRD requirements 
 | **Deferred** | Not in v1; planned behind its own safety and fidelity qualification | No |
 | **Excluded** | Not in v1 and not planned, or unsafe by default | No |
 
-**Default deny.** A capability that is not listed is denied. For a core tool, a parameter that is not listed is denied, a refused parameter is denied, and an enumerated mode that is excluded or unknown is denied. The tests fail whenever a tool, command, catalogue command, parameter or enumerated mode exists that the inventory does not classify, so a new capability cannot enter the core by being added. `check_tool_call(name, args)` and `check_command(id)` in the module give the decision.
+**Default deny.** A capability that is not listed is denied. For a core tool, a parameter that is not listed is denied, a refused parameter is denied, and an enumerated mode that is excluded or unknown is denied, where an omitted or null mode counts as its default. The tests fail whenever a tool, command, catalogue command, parameter or enumerated mode exists that the inventory does not classify, so a new capability cannot enter the core by being added. `check_tool_call(name, args)` and `check_command(id)` in the module give the decision.
 
 **Limits.** The check inspects tool arguments, not the parameters of the *commands* that `command_run` and `command_batch` run (it only requires those commands to be core). Core commands must validate their own parameters until the command parameter modes are inventoried.
 
@@ -48,27 +48,29 @@ Requirements with no core tool or command: **CORE-09** (simple signature appeara
 
 Parameters a core tool refuses (any value but false or null), and enumerated modes split into core and excluded. Every other parameter of a core tool is allowed and listed in the module.
 
-| Tool | Parameter | Core | Excluded |
-|---|---|---|---|
-| `doc_save` | `flatten_fill_sign` | other values | **refused** |
-| `doc_split` | `bookmarks` | other values | **refused** |
-| `doc_split` | `max_mb` | other values | **refused** |
-| `page_extract` | `delete` | other values | **refused** |
-| `page_render` | `hide_text_block` | other values | **refused** |
-| `comment_add` | `endings` | `None`, `OpenArrow`, `ClosedArrow` | `Square`, `Circle`, `Diamond`, `Butt`, `ROpenArrow`, `RClosedArrow`, `Slash` |
-| `comment_add` | `type` | `note`, `highlight`, `underline`, `strikeout`, `rectangle`, `arrow`, `ink`, `textbox` | `squiggly`, `replace`, `oval`, `line`, `stamp`, `polygon`, `cloud`, `polyline`, `callout`, `caret`, `attachment` |
-| `comment_set_status` | `status` | `none`, `accepted`, `rejected`, `cancelled`, `completed` | (none) |
-| `doc_combine` | `field_conflicts` | `rename` | `merge` |
-| `doc_print` | `binding` | (none) | `left`, `right` |
-| `doc_print` | `booklet_subset` | (none) | `both`, `front`, `back` |
-| `doc_print` | `comments_forms` | `document` | `document-and-markups`, `document-and-stamps`, `form-fields-only` |
-| `doc_print` | `duplex` | `off` | `long-edge`, `short-edge` |
-| `doc_print` | `layout` | `fit`, `actual` | `shrink`, `custom`, `multiple`, `booklet`, `poster` |
-| `doc_print` | `order` | (none) | `horizontal`, `horizontal-reversed`, `vertical`, `vertical-reversed`, `cut-stack` |
-| `doc_print` | `orientation` | `auto`, `portrait`, `landscape` | (none) |
-| `doc_print` | `subset` | `all`, `odd`, `even` | (none) |
-| `page_rotate` | `orientation` | `all` | `landscape`, `portrait` |
-| `page_rotate` | `subset` | `all` | `even`, `odd` |
+| Tool | Parameter | Default when omitted or null | Core | Excluded |
+|---|---|---|---|---|
+| `doc_save` | `flatten_fill_sign` | (none) | other values | **refused** |
+| `doc_split` | `bookmarks` | (none) | other values | **refused** |
+| `doc_split` | `max_mb` | (none) | other values | **refused** |
+| `page_extract` | `delete` | (none) | other values | **refused** |
+| `page_render` | `hide_text_block` | (none) | other values | **refused** |
+| `comment_add` | `endings` | (none: required, or only read by an excluded mode) | `None`, `OpenArrow`, `ClosedArrow` | `Square`, `Circle`, `Diamond`, `Butt`, `ROpenArrow`, `RClosedArrow`, `Slash` |
+| `comment_add` | `type` | (none: required, or only read by an excluded mode) | `note`, `highlight`, `underline`, `strikeout`, `rectangle`, `arrow`, `ink`, `textbox` | `squiggly`, `replace`, `oval`, `line`, `stamp`, `polygon`, `cloud`, `polyline`, `callout`, `caret`, `attachment` |
+| `comment_set_status` | `status` | (none: required, or only read by an excluded mode) | `none`, `accepted`, `rejected`, `cancelled`, `completed` | (none) |
+| `doc_combine` | `field_conflicts` | `rename` | `rename` | `merge` |
+| `doc_print` | `binding` | (none: required, or only read by an excluded mode) | (none) | `left`, `right` |
+| `doc_print` | `booklet_subset` | (none: required, or only read by an excluded mode) | (none) | `both`, `front`, `back` |
+| `doc_print` | `comments_forms` | `document-and-markups` | `document`, `document-and-markups` | `document-and-stamps`, `form-fields-only` |
+| `doc_print` | `duplex` | `off` | `off` | `long-edge`, `short-edge` |
+| `doc_print` | `layout` | `fit` | `fit`, `actual` | `shrink`, `custom`, `multiple`, `booklet`, `poster` |
+| `doc_print` | `order` | (none: required, or only read by an excluded mode) | (none) | `horizontal`, `horizontal-reversed`, `vertical`, `vertical-reversed`, `cut-stack` |
+| `doc_print` | `orientation` | `auto` | `auto`, `portrait`, `landscape` | (none) |
+| `doc_print` | `subset` | `all` | `all`, `odd`, `even` | (none) |
+| `page_rotate` | `orientation` | `all` | `all` | `landscape`, `portrait` |
+| `page_rotate` | `subset` | `all` | `all` | `even`, `odd` |
+
+A mode that is omitted or null runs as its default, so the profile judges the default exactly like an explicit value; every default is a core mode, and the tools read the same constants (`crates/automation/src/defaults.rs`) that the inventory names, so the two cannot drift. `doc_print.comments_forms` defaults to `document-and-markups` (print what is on screen, comments included). That default is **core by decision** (Codex review R3): refusing it would deny every ordinary print. `document-and-stamps` and `form-fields-only` stay excluded.
 
 Why these: annotation kinds follow CORE-03 (note, highlight, underline, strikeout, rectangle, arrow, freehand, text box); printing follows CORE-07 (actual size or fit; poster, booklet, shrink and multiple-up layouts could scale large sheets silently); `flatten_fill_sign`, extract-and-`delete` and split by bookmarks or size are irreversible or outside the CORE-05 list; `page_render.hide_text_block` belongs to text editing.
 
@@ -168,7 +170,7 @@ The main bypasses, in order of consequence: `pdfcraft-cli run` and `mcp:tools/ca
 
 ## 7. Keeping it true
 
-Run `cargo test -p pdfcraft-automation capability`. A new tool, command, catalogue command, core-tool parameter or enumerated mode fails a test until it is classified; a removed one fails until its row is removed; a core tool whose command is not core (or the reverse) fails. Changing a verdict to `Core` is a product decision (it widens the v1 scope) and belongs in a reviewed change that also cites the requirement. This page is a hand-kept rendering of the module (no committed tool generates it), so update it when the module changes; the counts above are for 2026-10-16.
+Run `cargo test -p pdfcraft-automation capability`. A new tool, command, catalogue command, core-tool parameter or enumerated mode fails a test until it is classified; a removed one fails until its row is removed; a core tool whose command is not core (or the reverse) fails. Changing a verdict to `Core` is a product decision (it widens the v1 scope) and belongs in a reviewed change that also cites the requirement. The counts above are for 2026-10-16.
 
 ## Revision history
 

@@ -42,6 +42,11 @@ pub enum Verdict {
 #[derive(Clone, Copy, Debug)]
 pub struct EnumRule {
     pub param: &'static str,
+    /// The mode the tool uses when the parameter is omitted or null (a constant the tool itself reads,
+    /// in `defaults.rs`), judged like an explicit value. `None` when the parameter is only read in a
+    /// mode that is excluded anyway (such as `order` under the `multiple` layout), so an omitted value
+    /// selects nothing.
+    pub default: Option<&'static str>,
     pub core: &'static [&'static str],
     pub excluded: &'static [&'static str],
 }
@@ -129,7 +134,7 @@ pub static TOOLS: &[ToolCap] = &[
     ToolCap { name: "command_batch", verdict: Verdict::Gated, requirement: "CORE-10", why: "Runs several registry commands: allowed only if every step names a core command.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "command_list", verdict: Verdict::Core, requirement: "CORE-10", why: "Lists the commands and their mapped tools; read-only.", params: &["doc", "enabled_only", "filter"], denied_params: &[], enums: &[] },
     ToolCap { name: "command_run", verdict: Verdict::Gated, requirement: "CORE-10", why: "Runs any registry command by id: allowed only for a command that is itself core.", params: &[], denied_params: &[], enums: &[] },
-    ToolCap { name: "comment_add", verdict: Verdict::Core, requirement: "CORE-03", why: "Annotate (the v1 kinds only; see the excluded modes).", params: &["all", "at", "author", "color", "contents", "doc", "dynamic", "endings", "fill", "find", "font_size", "from", "icon", "knee", "opacity", "page", "path", "points", "quads", "rect", "stamp", "strokes", "to", "type", "width"], denied_params: &[], enums: &[EnumRule { param: "endings", core: &["None", "OpenArrow", "ClosedArrow"], excluded: &["Square", "Circle", "Diamond", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, EnumRule { param: "type", core: &["note", "highlight", "underline", "strikeout", "rectangle", "arrow", "ink", "textbox"], excluded: &["squiggly", "replace", "oval", "line", "stamp", "polygon", "cloud", "polyline", "callout", "caret", "attachment"] }] },
+    ToolCap { name: "comment_add", verdict: Verdict::Core, requirement: "CORE-03", why: "Annotate (the v1 kinds only; see the excluded modes).", params: &["all", "at", "author", "color", "contents", "doc", "dynamic", "endings", "fill", "find", "font_size", "from", "icon", "knee", "opacity", "page", "path", "points", "quads", "rect", "stamp", "strokes", "to", "type", "width"], denied_params: &[], enums: &[EnumRule { param: "endings", default: None, core: &["None", "OpenArrow", "ClosedArrow"], excluded: &["Square", "Circle", "Diamond", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, EnumRule { param: "type", default: None, core: &["note", "highlight", "underline", "strikeout", "rectangle", "arrow", "ink", "textbox"], excluded: &["squiggly", "replace", "oval", "line", "stamp", "polygon", "cloud", "polyline", "callout", "caret", "attachment"] }] },
     ToolCap { name: "comment_delete", verdict: Verdict::Core, requirement: "CORE-03", why: "Annotate (the v1 kinds only; see the excluded modes).", params: &["doc", "id", "index", "page"], denied_params: &[], enums: &[] },
     ToolCap { name: "comment_edit", verdict: Verdict::Core, requirement: "CORE-03", why: "Annotate (the v1 kinds only; see the excluded modes).", params: &["color", "contents", "doc", "fill", "id", "index", "move", "opacity", "page", "rect", "width"], denied_params: &[], enums: &[] },
     ToolCap { name: "comment_image_preview", verdict: Verdict::Deferred, requirement: "", why: "Comment tools beyond add, edit, delete, reply and status are deferred.", params: &[], denied_params: &[], enums: &[] },
@@ -137,7 +142,7 @@ pub static TOOLS: &[ToolCap] = &[
     ToolCap { name: "comment_lock", verdict: Verdict::Deferred, requirement: "", why: "Comment tools beyond add, edit, delete, reply and status are deferred.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "comment_mark", verdict: Verdict::Deferred, requirement: "", why: "Comment tools beyond add, edit, delete, reply and status are deferred.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "comment_reply", verdict: Verdict::Core, requirement: "CORE-03", why: "Annotate (the v1 kinds only; see the excluded modes).", params: &["author", "doc", "id", "index", "page", "text"], denied_params: &[], enums: &[] },
-    ToolCap { name: "comment_set_status", verdict: Verdict::Core, requirement: "CORE-03", why: "Annotate (the v1 kinds only; see the excluded modes).", params: &["author", "doc", "id", "index", "page", "status"], denied_params: &[], enums: &[EnumRule { param: "status", core: &["none", "accepted", "rejected", "cancelled", "completed"], excluded: &[] }] },
+    ToolCap { name: "comment_set_status", verdict: Verdict::Core, requirement: "CORE-03", why: "Annotate (the v1 kinds only; see the excluded modes).", params: &["author", "doc", "id", "index", "page", "status"], denied_params: &[], enums: &[EnumRule { param: "status", default: None, core: &["none", "accepted", "rejected", "cancelled", "completed"], excluded: &[] }] },
     ToolCap { name: "comments_hide", verdict: Verdict::Deferred, requirement: "", why: "Comment tools beyond add, edit, delete, reply and status are deferred.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "comments_summarize", verdict: Verdict::Deferred, requirement: "", why: "AI summarization is deferred from v1 (and needs a provider, so the network).", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "content_delete", verdict: Verdict::Deferred, requirement: "", why: "Rewriting existing text or images is deferred from v1.", params: &[], denied_params: &[], enums: &[] },
@@ -148,7 +153,7 @@ pub static TOOLS: &[ToolCap] = &[
     ToolCap { name: "doc_background", verdict: Verdict::Deferred, requirement: "", why: "Page assembly beyond the v1 operations, and page marks, are deferred.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_batch", verdict: Verdict::Deferred, requirement: "", why: "Batch processing and action wizards are deferred; they run deferred operations.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_close", verdict: Verdict::Core, requirement: "CORE-01", why: "Open and view.", params: &["discard_changes", "doc"], denied_params: &[], enums: &[] },
-    ToolCap { name: "doc_combine", verdict: Verdict::Core, requirement: "CORE-05", why: "Organize pages (the v1 operations only).", params: &["field_conflicts", "groups", "open", "out", "pages", "passwords", "paths"], denied_params: &[], enums: &[EnumRule { param: "field_conflicts", core: &["rename"], excluded: &["merge"] }] },
+    ToolCap { name: "doc_combine", verdict: Verdict::Core, requirement: "CORE-05", why: "Organize pages (the v1 operations only).", params: &["field_conflicts", "groups", "open", "out", "pages", "passwords", "paths"], denied_params: &[], enums: &[EnumRule { param: "field_conflicts", default: Some(crate::defaults::COMBINE_FIELD_CONFLICTS), core: &["rename"], excluded: &["merge"] }] },
     ToolCap { name: "doc_compare", verdict: Verdict::Deferred, requirement: "", why: "Comparison and overlays are deferred from v1.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_compare_mark", verdict: Verdict::Deferred, requirement: "", why: "Comparison and overlays are deferred from v1.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_compare_report", verdict: Verdict::Deferred, requirement: "", why: "Comparison and overlays are deferred from v1.", params: &[], denied_params: &[], enums: &[] },
@@ -170,7 +175,7 @@ pub static TOOLS: &[ToolCap] = &[
     ToolCap { name: "doc_open", verdict: Verdict::Core, requirement: "CORE-01", why: "Open and view.", params: &["password", "path"], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_open_revision", verdict: Verdict::Deferred, requirement: "", why: "Revision access arrives with the shared service and revision contracts (BUILD-007).", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_optimize", verdict: Verdict::Deferred, requirement: "", why: "Aggressive optimization is deferred from v1.", params: &[], denied_params: &[], enums: &[] },
-    ToolCap { name: "doc_print", verdict: Verdict::Core, requirement: "CORE-07", why: "Print.", params: &["auto_rotate", "binding", "booklet_subset", "border", "collate", "comments_forms", "copies", "cut_marks", "doc", "duplex", "grayscale", "layout", "options", "order", "orientation", "overlap", "pages", "paper", "path", "per_sheet", "printer", "reverse", "scale", "subset"], denied_params: &[], enums: &[EnumRule { param: "binding", core: &[], excluded: &["left", "right"] }, EnumRule { param: "booklet_subset", core: &[], excluded: &["both", "front", "back"] }, EnumRule { param: "comments_forms", core: &["document"], excluded: &["document-and-markups", "document-and-stamps", "form-fields-only"] }, EnumRule { param: "duplex", core: &["off"], excluded: &["long-edge", "short-edge"] }, EnumRule { param: "layout", core: &["fit", "actual"], excluded: &["shrink", "custom", "multiple", "booklet", "poster"] }, EnumRule { param: "order", core: &[], excluded: &["horizontal", "horizontal-reversed", "vertical", "vertical-reversed", "cut-stack"] }, EnumRule { param: "orientation", core: &["auto", "portrait", "landscape"], excluded: &[] }, EnumRule { param: "subset", core: &["all", "odd", "even"], excluded: &[] }] },
+    ToolCap { name: "doc_print", verdict: Verdict::Core, requirement: "CORE-07", why: "Print.", params: &["auto_rotate", "binding", "booklet_subset", "border", "collate", "comments_forms", "copies", "cut_marks", "doc", "duplex", "grayscale", "layout", "options", "order", "orientation", "overlap", "pages", "paper", "path", "per_sheet", "printer", "reverse", "scale", "subset"], denied_params: &[], enums: &[EnumRule { param: "binding", default: None, core: &[], excluded: &["left", "right"] }, EnumRule { param: "booklet_subset", default: None, core: &[], excluded: &["both", "front", "back"] }, EnumRule { param: "comments_forms", default: Some(crate::defaults::PRINT_COMMENTS_FORMS), core: &["document", "document-and-markups"], excluded: &["document-and-stamps", "form-fields-only"] }, EnumRule { param: "duplex", default: Some(crate::defaults::PRINT_DUPLEX), core: &["off"], excluded: &["long-edge", "short-edge"] }, EnumRule { param: "layout", default: Some(crate::defaults::PRINT_LAYOUT), core: &["fit", "actual"], excluded: &["shrink", "custom", "multiple", "booklet", "poster"] }, EnumRule { param: "order", default: None, core: &[], excluded: &["horizontal", "horizontal-reversed", "vertical", "vertical-reversed", "cut-stack"] }, EnumRule { param: "orientation", default: Some(crate::defaults::PRINT_ORIENTATION), core: &["auto", "portrait", "landscape"], excluded: &[] }, EnumRule { param: "subset", default: Some(crate::defaults::PRINT_SUBSET), core: &["all", "odd", "even"], excluded: &[] }] },
     ToolCap { name: "doc_protect", verdict: Verdict::Deferred, requirement: "", why: "Adding encryption or removing protection is a separate qualified feature.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_reduce", verdict: Verdict::Deferred, requirement: "", why: "Aggressive optimization is deferred from v1.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_remove_hidden", verdict: Verdict::Deferred, requirement: "", why: "Permanent redaction and sanitization are deferred from v1 (never an opaque rectangle).", params: &[], denied_params: &[], enums: &[] },
@@ -238,7 +243,7 @@ pub static TOOLS: &[ToolCap] = &[
     ToolCap { name: "page_number", verdict: Verdict::Deferred, requirement: "", why: "Page assembly beyond the v1 operations, and page marks, are deferred.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "page_render", verdict: Verdict::Core, requirement: "CORE-01", why: "Open and view.", params: &["doc", "dpi", "page"], denied_params: &["hide_text_block"], enums: &[] },
     ToolCap { name: "page_replace", verdict: Verdict::Deferred, requirement: "", why: "Page assembly beyond the v1 operations, and page marks, are deferred.", params: &[], denied_params: &[], enums: &[] },
-    ToolCap { name: "page_rotate", verdict: Verdict::Core, requirement: "CORE-05", why: "Organize pages (the v1 operations only).", params: &["degrees", "doc", "orientation", "pages", "subset"], denied_params: &[], enums: &[EnumRule { param: "orientation", core: &["all"], excluded: &["landscape", "portrait"] }, EnumRule { param: "subset", core: &["all"], excluded: &["even", "odd"] }] },
+    ToolCap { name: "page_rotate", verdict: Verdict::Core, requirement: "CORE-05", why: "Organize pages (the v1 operations only).", params: &["degrees", "doc", "orientation", "pages", "subset"], denied_params: &[], enums: &[EnumRule { param: "orientation", default: Some(crate::defaults::ROTATE_ORIENTATION), core: &["all"], excluded: &["landscape", "portrait"] }, EnumRule { param: "subset", default: Some(crate::defaults::ROTATE_SUBSET), core: &["all"], excluded: &["even", "odd"] }] },
     ToolCap { name: "page_set_box", verdict: Verdict::Deferred, requirement: "", why: "Page assembly beyond the v1 operations, and page marks, are deferred.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "pdfa_convert", verdict: Verdict::Deferred, requirement: "", why: "PDF/A, preflight and print readiness claims are deferred from v1.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "pdfa_verify", verdict: Verdict::Deferred, requirement: "", why: "PDF/A, preflight and print readiness claims are deferred from v1.", params: &[], denied_params: &[], enums: &[] },
@@ -578,34 +583,43 @@ pub fn check_tool_call(name: &str, args: &Value) -> Decision {
         Verdict::Gated => return check_dispatcher(name, args),
         Verdict::Core => {}
     }
-    let obj = match args {
-        Value::Null => return Decision::Allow,
-        Value::Object(o) => o,
-        _ => return deny(&what, "its arguments must be an object"),
-    };
+    match args {
+        Value::Null => check_core_args(cap, &what, &serde_json::Map::new()),
+        Value::Object(o) => check_core_args(cap, &what, o),
+        _ => deny(&what, "its arguments must be an object"),
+    }
+}
+
+/// The parameter and mode rules of a core tool. Modes are judged as they will run: a missing or null
+/// argument selects the rule's default, which must be core like any explicit value.
+fn check_core_args(cap: &ToolCap, what: &str, obj: &serde_json::Map<String, Value>) -> Decision {
     for (key, value) in obj {
         if cap.denied_params.contains(&key.as_str()) {
             if is_unset(value) {
                 continue;
             }
-            return deny(&what, format!("parameter `{key}` is excluded from v1"));
+            return deny(what, format!("parameter `{key}` is excluded from v1"));
         }
         if !cap.params.contains(&key.as_str()) {
-            return deny(&what, format!("parameter `{key}` is not in the inventory (default deny)"));
+            return deny(what, format!("parameter `{key}` is not in the inventory (default deny)"));
         }
     }
     for rule in cap.enums {
-        let Some(value) = obj.get(rule.param) else { continue };
-        if value.is_null() {
-            continue;
-        }
-        let Some(values) = enum_values(value) else {
-            return deny(&what, format!("parameter `{}` must be a string or an array of strings", rule.param));
+        let given = obj.get(rule.param).filter(|v| !v.is_null());
+        let (values, source) = match given {
+            Some(value) => match enum_values(value) {
+                Some(values) => (values, ""),
+                None => return deny(what, format!("parameter `{}` must be a string or an array of strings", rule.param)),
+            },
+            None => match rule.default {
+                Some(default) => (vec![default], " (the default, used because it was omitted or null)"),
+                None => continue,
+            },
         };
         for v in values {
             if !rule.core.contains(&v) {
                 let kind = if rule.excluded.contains(&v) { "an excluded mode" } else { "an unknown mode (default deny)" };
-                return deny(&what, format!("`{}` = `{v}` is {kind}", rule.param));
+                return deny(what, format!("`{}` = `{v}`{source} is {kind}", rule.param));
             }
         }
     }
@@ -826,6 +840,167 @@ mod tests {
         assert!(!check_tool_call("doc_print", &json!({ "doc": 1, "layout": "poster" })).is_allowed());
         assert!(!check_tool_call("doc_print", &json!({ "doc": 1, "layout": "unheard-of" })).is_allowed(), "an unknown mode");
         assert!(!check_tool_call("doc_combine", &json!({ "paths": ["a.pdf"], "field_conflicts": "merge" })).is_allowed());
+    }
+
+    // ---- R3 (Codex review): a mode's default is an effective mode ----
+
+    static SYNTHETIC: ToolCap = ToolCap {
+        name: "synthetic",
+        verdict: Verdict::Core,
+        requirement: "CORE-07",
+        why: "a tool whose default mode is excluded",
+        params: &["doc", "mode"],
+        denied_params: &[],
+        enums: &[EnumRule { param: "mode", default: Some("risky"), core: &["safe"], excluded: &["risky"] }],
+    };
+
+    fn synthetic(args: Value) -> Decision {
+        check_core_args(&SYNTHETIC, "tool `synthetic`", args.as_object().expect("an object"))
+    }
+
+    #[test]
+    fn a_default_that_is_an_excluded_mode_denies_the_omitted_null_and_explicit_forms_alike() {
+        let omitted = synthetic(json!({ "doc": 1 }));
+        let null = synthetic(json!({ "doc": 1, "mode": null }));
+        let explicit = synthetic(json!({ "doc": 1, "mode": "risky" }));
+        assert!(!omitted.is_allowed() && !null.is_allowed() && !explicit.is_allowed(), "{omitted:?} {null:?} {explicit:?}");
+        let Decision::Deny(why) = &omitted else { panic!("omitted must be denied") };
+        assert!(why.contains("the default"), "the refusal says the default was the reason: {why}");
+        assert!(synthetic(json!({ "doc": 1, "mode": "safe" })).is_allowed(), "an explicit core mode overrides the default");
+    }
+
+    #[test]
+    fn every_defaulted_mode_is_a_core_mode_and_reads_the_same_omitted_null_or_explicit() {
+        for cap in TOOLS.iter().filter(|t| t.verdict == Verdict::Core) {
+            assert!(
+                check_tool_call(cap.name, &json!({})).is_allowed(),
+                "{}: a call that omits every mode must be allowed, so every default must be core",
+                cap.name
+            );
+            for rule in cap.enums {
+                let Some(default) = rule.default else { continue };
+                assert!(
+                    rule.core.contains(&default),
+                    "{}.{}: the default `{default}` must be a core mode (decide it explicitly)",
+                    cap.name,
+                    rule.param
+                );
+                let omitted = check_tool_call(cap.name, &json!({}));
+                let null = check_tool_call(cap.name, &json!({ rule.param: null }));
+                let explicit = check_tool_call(cap.name, &json!({ rule.param: default }));
+                assert_eq!(
+                    (&omitted, &null),
+                    (&explicit, &explicit),
+                    "{}.{}: omitted, null and explicit-default forms must agree",
+                    cap.name,
+                    rule.param
+                );
+            }
+        }
+    }
+
+    /// The review's counterexample: the print default selects `document-and-markups`.
+    #[test]
+    fn the_print_default_is_judged_like_the_explicit_value_it_selects() {
+        let omitted = check_tool_call("doc_print", &json!({ "doc": 1, "path": "print.pdf" }));
+        let explicit = check_tool_call("doc_print", &json!({ "doc": 1, "path": "print.pdf", "comments_forms": "document-and-markups" }));
+        let null = check_tool_call("doc_print", &json!({ "doc": 1, "path": "print.pdf", "comments_forms": null }));
+        assert!(omitted.is_allowed() && explicit.is_allowed() && null.is_allowed(), "printing what is on screen, comments included, is core");
+        for excluded in ["document-and-stamps", "form-fields-only"] {
+            assert!(!check_tool_call("doc_print", &json!({ "doc": 1, "comments_forms": excluded })).is_allowed(), "{excluded} stays excluded");
+        }
+    }
+
+    fn call(a: &mut crate::Automation, tool: &str, args: Value) -> Value {
+        match a.call(tool, &args) {
+            Ok(mut content) => match content.remove(0) {
+                crate::Content::Json(v) => v,
+                other => panic!("{tool}: {other:?}"),
+            },
+            Err(e) => panic!("{tool} {args}: {e}"),
+        }
+    }
+
+    /// Two pages, 200 x 300 points, so the page is portrait.
+    fn two_pages() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 200 300] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>".to_string(),
+            "<< /Length 0 >>\nstream\n\nendstream".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>".to_string(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// The constants the inventory names are what the tools do: with the parameter omitted, null or set to
+    /// the declared default the real tool gives the same result, and a different value gives a different one.
+    #[test]
+    fn the_declared_defaults_are_what_the_tools_actually_do() {
+        let dir = tempfile::tempdir().expect("a temporary folder");
+        let mut a = crate::Automation::new();
+        let id = a.session.open("two.pdf", None, std::sync::Arc::new(two_pages()), None).expect("open").0;
+        call(&mut a, "comment_add", json!({ "doc": id, "page": 1, "type": "note", "at": [40, 40], "contents": "markup" }));
+        let print = |a: &mut crate::Automation, name: &str, extra: Value| -> (Value, Vec<u8>) {
+            let path = dir.path().join(format!("{name}.pdf"));
+            let mut args = json!({ "doc": id, "path": path.to_string_lossy() });
+            if let (Some(base), Some(more)) = (args.as_object_mut(), extra.as_object()) {
+                base.extend(more.clone());
+            }
+            let result = call(a, "doc_print", args);
+            let bytes = std::fs::read(&path).expect("the printed file");
+            (json!({ "sheets": result["sheets"], "pages": result["pages"] }), bytes)
+        };
+        for rule in tool("doc_print").expect("listed").enums {
+            let Some(default) = rule.default else { continue };
+            let omitted = print(&mut a, "omitted", json!({}));
+            let null = print(&mut a, "null", json!({ rule.param: null }));
+            let explicit = print(&mut a, "explicit", json!({ rule.param: default }));
+            assert_eq!(omitted, null, "doc_print.{}: null must equal omitted", rule.param);
+            assert_eq!(omitted, explicit, "doc_print.{}: the declared default `{default}` must be what omitting it does", rule.param);
+        }
+        // The default prints the comment; `document` does not: the declared markup default is not a no-op.
+        let default = print(&mut a, "default", json!({}));
+        let document_only = print(&mut a, "document_only", json!({ "comments_forms": "document" }));
+        assert_ne!(default.1, document_only.1, "printing markups must change the output of a page that has a comment");
+        let odd = print(&mut a, "odd", json!({ "subset": "odd" }));
+        assert_eq!(odd.0["pages"], json!(1), "subset=odd prints one of the two pages");
+        assert_eq!(default.0["pages"], json!(2), "the default subset prints every page");
+
+        // page_rotate: omitted, null and `all` rotate the same pages; `landscape` matches none of a portrait document.
+        let rotate = |a: &mut crate::Automation, extra: Value| -> Result<Value, String> {
+            let mut args = json!({ "doc": id, "degrees": 90, "pages": [1] });
+            if let (Some(base), Some(more)) = (args.as_object_mut(), extra.as_object()) {
+                base.extend(more.clone());
+            }
+            a.call("page_rotate", &args)
+                .map(|mut c| match c.remove(0) {
+                    crate::Content::Json(v) => v,
+                    _ => Value::Null,
+                })
+                .map_err(|e| e.to_string())
+        };
+        for rule in tool("page_rotate").expect("listed").enums {
+            let Some(default) = rule.default else { continue };
+            let omitted = rotate(&mut a, json!({})).expect("rotates");
+            let null = rotate(&mut a, json!({ rule.param: null })).expect("rotates");
+            let explicit = rotate(&mut a, json!({ rule.param: default })).expect("rotates");
+            assert_eq!(omitted["rotated"], null["rotated"], "page_rotate.{}", rule.param);
+            assert_eq!(omitted["rotated"], explicit["rotated"], "page_rotate.{}: `{default}` is the default", rule.param);
+        }
+        assert!(rotate(&mut a, json!({ "orientation": "landscape" })).is_err(), "a different mode gives a different result");
     }
 
     #[test]
