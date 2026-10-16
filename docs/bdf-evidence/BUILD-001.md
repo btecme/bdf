@@ -508,6 +508,14 @@ The first driver script reported "stage 1 did not exit 0" and skipped stage 2. T
 
 Supersedes the "1.95 MSRV unrun" lines of sections 14.5, 15.5 and the earlier banners: the MSRV check now passes within the limits in 16.4. Still unrun: hosted Windows/Linux CI (nothing pushed) and the optional-font build (`CRAFT_FONTS_DIR`). `baseline_green` stays false. BUILD-002 is not started.
 
+## 17. Optional-font build (rev 0.8)
+
+Run 2026-10-15 at branch `chore/build-002-fidelity-resources` (`89c0459d`). `https://github.com/storytold/craft-fonts` was cloned after the owner's go-ahead to `../craft-fonts` (outside this repository, 39.8 MiB), at `3d9ab3a132ed0eff457e424226a435a901da30d3`, the commit `ci.yml` pins. Provenance: the organization is the one that owns the upstream repository, the repository is the build input `CLAUDE.md` and `AGENTS.md` name, its history is by the project's authors, and its attribution file lists OFL-1.1 fonts with pinned upstream sources. No font file was copied into this repository.
+
+With `CRAFT_FONTS_DIR` set to that directory and `CRAFT_FONTS_REQUIRED=1` (so a missing font fails instead of skipping), in a separate target directory (`target/fonts-build`), `cargo test --offline --locked -j 2 -p pdfcraft-fonts -p pdfcraft-edit -p pdfcraft-engine -p pdfcraft-automation` exited 0, and `cargo xtask assets` passes. This is the Windows local run of the Japanese-font build input over the crates that use it; the hosted workflow runs it on Linux over the whole workspace. Logs: `target/bdf-evidence/BUILD-002-followup/fonts-test.log` and `fonts-assets.log`.
+
+**Status:** the optional-font build is qualified locally for those four crates. Hosted CI is not yet qualified: the branch was pushed to the owner's fork (`btecme/bdf`), but `ci.yml` runs only on pull requests, pushes to `main` and manual dispatch, so a run needs a pull request or a dispatch. BUILD-001 is not declared green until that run passes.
+
 ## Appendix: fixture generator
 
 <details>
@@ -572,3 +580,4 @@ open(sys.argv[1], "wb").write(build(objs))
 | 2026-10-14 | 0.5 | Section 15: `rustls` bumped to 0.23.46 after provenance checks (two lines of `Cargo.lock`); scoped suite, live TLS check and gates pass; cargo-deny fails the old lock on four assigned rustls advisories and passes the new one. |
 | 2026-10-14 | 0.6 | Section 16: Rust 1.95.0 installed after signature and hash checks; `cargo +1.95.0 check --workspace` (and `--all-targets`) passes; 22 of 35 workspace crates declare no `rust-version` (F6); the full disk and the test binaries deleted to make room are recorded. |
 | 2026-10-15 | 0.7 | Section 15.6: corrects the 14.4 sentence on the post-quantum downgrade advisory (RUSTSEC-2026-0349): the update check uses the ring provider, which offers no hybrid group, so the advisory does not apply. The bump itself is unchanged. |
+| 2026-10-15 | 0.8 | Section 17: optional-font build passes locally for the four crates that use it (craft-fonts at the commit CI pins); hosted CI still unrun. |
