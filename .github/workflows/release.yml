@@ -60,7 +60,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: package-windows-x64
-      - name: Install WiX (hash-checked)
+      - name: Test that the WiX installer installs only the verified package
+        shell: pwsh
+        run: ./packaging/windows/test-install-wix.ps1
+      - name: Install WiX (hash-checked, from a source that offers nothing else)
         shell: pwsh
         run: ./packaging/windows/install-wix.ps1
       - name: Build and package (unsigned)
