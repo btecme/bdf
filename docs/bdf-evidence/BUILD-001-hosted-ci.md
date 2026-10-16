@@ -1,6 +1,6 @@
 # BUILD-001 — hosted CI observations
 
-Status: **the three first-run failures are resolved; independent Codex retest passes on `de8d6fcc`.** Current hosted CI is green; overall BUILD-001 acceptance remains separately pending. The first-run diagnosis below is retained as history. See [the independent retest](BUILD-001-hosted-codex-retest.md).
+Status: **the three first-run failures are resolved; independent Codex retest passes on `de8d6fcc`.** All four workflows passed on that reviewed head; overall BUILD-001 acceptance remains separately pending. A later merge-preparation run exposed timestamp-dependent batch-test assertions; see the independent retest record for the test-only correction and PR #1 for live checks. The first-run diagnosis below is retained as history. See [the independent retest](BUILD-001-hosted-codex-retest.md).
 
 ## First ARM64 run
 

@@ -32,10 +32,10 @@ evidence_msrv_toolchain = "rustc 1.95.0 (59807616e 2026-04-14), signed manifest 
 evidence_hosted_ci = "docs/bdf-evidence/BUILD-001-hosted-ci.md"
 evidence_hosted_head = "de8d6fcc4d98e3c26fbf8d6d7ad784d8801f47a4"  # exact PR head: all four workflows pass; fuzz skipped by event
 hosted_ci_review = "docs/bdf-evidence/BUILD-001-hosted-codex-retest.md"
-hosted_ci_green = true
+hosted_ci_green = true  # historical result at evidence_hosted_head; PR #1 has the live final-head status
 evidence_msrv_commands = "cargo +1.95.0 check --locked --offline --workspace, and with --all-targets: both exit 0, 2026-10-14"
 baseline_green = false
-status_note = "The three hosted CI failures pass independent Codex retest at de8d6fcc: 36 default worker tests, 51 with fault injection, 95 xtask tests, scoped fmt/clippy/layers/assets/parity/MSRV and packaging-target probes pass. Current-head hosted Windows x64, Ubuntu with craft-fonts, wasm, dependency policy, FreeBSD, ARM64 packaging/native install-check and packaging lint all pass; fuzz is skipped by its existing event condition. Production worker defaults remain fail-closed. Hosted CI and optional-font qualification are no longer missing. Full BUILD-001 acceptance remains pending review of its earlier UI/open-state changes and consolidated baseline evidence; this review is scoped to the three CI corrections. No current CI failure is being carried forward. See hosted_ci_review for exact commands, limitations and evidence."
+status_note = "The three hosted CI failures pass independent Codex retest at de8d6fcc: 36 default worker tests, 51 with fault injection, 95 xtask tests, scoped fmt/clippy/layers/assets/parity/MSRV and packaging-target probes pass. Hosted checks at de8d6fcc: Windows x64, Ubuntu with craft-fonts, wasm, dependency policy, FreeBSD, ARM64 packaging/native install-check and packaging lint all pass; fuzz is skipped by its existing event condition. Production worker defaults remain fail-closed. Hosted CI and optional-font qualification are no longer missing. Full BUILD-001 acceptance remains pending review of its earlier UI/open-state changes and consolidated baseline evidence; this review is scoped to the three CI corrections. A subsequent merge-preparation run at 6a273136 exposed two timestamp-dependent batch assertions. The test-only correction reuses the actual source fixture; final-head hosted CI is required before merge. PR #1 has live status. See hosted_ci_review for exact commands, limitations and evidence."
 priority = "P0"
 depends_on = []
 prd_milestone = "BDF-00"
@@ -192,7 +192,7 @@ findings = ["F08", "F11"]
 requirements = ["CORE-01", "CORE-06", "CORE-08", "CORE-10"]
 touch = ["crates/ui-egui", "crates/automation", "apps/pdfcraft-cli/tests", "crates/app-service/tests"]
 deliverables = ["UI/CLI/MCP open/view/rotate/undo/redo/save/close all dispatch through app-service.", "MCP compact/meta, command dispatch, batches/resources and UI control have no direct-session or policy bypass.", "Per-surface allowed/denied/conflict/fault test matrix and headless scripts/renders.", "Delete superseded duplicate orchestration rather than maintaining two production sources of truth."]
-acceptance = ["Spec §2 workflow passes across every adapter, with independent save/reopen evidence.", "Refusals preserve document bytes, history, outputs and recovery.", "Visible availability and server execution agree on the release profile."]
+acceptance = ["Spec Â§2 workflow passes across every adapter, with independent save/reopen evidence.", "Refusals preserve document bytes, history, outputs and recovery.", "Visible availability and server execution agree on the release profile."]
 stop_conditions = ["Any production alternate entry point bypasses service policy: complete migration before expanding features."]
 
 [[work_item]]

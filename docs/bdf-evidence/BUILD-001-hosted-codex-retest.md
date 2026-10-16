@@ -1,4 +1,4 @@
-# BUILD-001 — Codex retest of the hosted CI corrections
+# BUILD-001 â€” Codex retest of the hosted CI corrections
 
 Status: **all three CI corrections pass independent review and retesting; no blocking finding in this scope.**
 
@@ -95,8 +95,39 @@ push, merge, release or registration had been performed; the PR was still a draf
 subsequently authorized pushing this review record and merging PR #1 after final-head CI passes.
 This authorization does not change the qualification limits recorded above.
 
+## Merge preparation: timestamp-dependent batch tests
+
+The owner authorized pushing the independent review record and merging PR #1 after green CI.
+The documentation commit `6a273136` triggered a fresh run. Windows x64, wasm, dependency policy,
+packaging lint and ARM64 packaging/native installation passed, but [Ubuntu job 116972788807](https://github.com/btecme/bdf/actions/runs/38900956477/job/116972788807)
+failed two existing `pdfcraft-automation --test batch` assertions. This supersedes any implication
+that later heads automatically inherit the green result on `de8d6fcc`.
+
+Both assertions called `pdf()` again to generate expected bytes after processing. Decoding the
+logged object streams shows the original fixture has `/ModDate (D:20261016123730Z)` and the
+new expectation has `/ModDate (D:20261016123731Z)`. The generated timestamp alone explains the
+byte differences. The tests must compare outputs with the exact input bytes they supplied.
+
+The correction retains one `original` fixture in each failing test and compares both source and
+numbered copies against it. The concurrent-writer test still checks distinct output names, exact
+bytes and absence of staging files. The related optimized-size test also uses its actual source
+fixture's length. No product code, timestamp behavior, workflow or test exclusion changes.
+
+A temporary two-second delay before the assertions reproduces both old failures locally:
+**6 passed / 2 failed**. With the correction, the same delayed probe passes **8/8** on Windows.
+The delays are then removed and the final batch suite passes **8/8** without them. The first
+local attempt reached its 240-second compilation timeout before tests; the cached retry completed
+under a 600-second limit with two build jobs. This timeout is not reported as a test result.
+
+The final scoped automation Clippy check (all targets, `-D warnings`), format, layers, assets
+and wasm checks all pass. Local commands, exits and logs are under
+`target/bdf-evidence/BUILD-001-merge/`, pinned by its 20-file `MANIFEST.sha256`
+(SHA-256 `aff3ab0fa60de946abdaf2442679d242ffcce81914e6dbbbe8215b8e958f178b`). The earlier 32-file retest manifest remains unchanged. Final-head hosted CI is required before merge; the
+PR records its live result without requiring another documentation-only commit to rerun CI.
+
 ## Revision history
 
 | Date | Change |
 |---|---|
 | 2026-10-16 | Independent source review, local retests and current-head hosted log verification close all three CI failures. |
+| 2026-10-16 | Merge preparation exposed timestamp-dependent batch assertions; retained original fixtures and verified the delayed before/after probe. |
