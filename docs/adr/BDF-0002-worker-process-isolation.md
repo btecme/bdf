@@ -1,6 +1,6 @@
 # BDF-0002: Run open and render of untrusted documents in a supervised worker process
 
-> **Status:** Proposed for owner approval · **Date:** 2026-10-15 · **Work item:** BUILD-002 · **Evidence:** [BUILD-002](../bdf-evidence/BUILD-002.md) section 6 · **Prototype:** `apps/pdfcraft-worker`
+> **Status:** Accepted by the owner (2026-10-15): adopt the supervised worker architecture, integrated in BUILD-010; the prototype is not the product component and the open items below remain · **Date:** 2026-10-15 · **Work item:** BUILD-002 · **Evidence:** [BUILD-002](../bdf-evidence/BUILD-002.md) section 6 · **Prototype:** `apps/pdfcraft-worker`
 
 ## Context
 

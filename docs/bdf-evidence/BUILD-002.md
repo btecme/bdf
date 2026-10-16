@@ -1,6 +1,6 @@
 # BUILD-002 evidence: fidelity, resources and worker feasibility
 
-Status: **corrected after Codex review (`changes_requested`), pending re-review.** Section 9 records the corrections R1 to R5; where the original text below says otherwise, section 9 is the current account and the original figures are kept as the first run. Run on 2026-10-15 (UTC-5) on branch `chore/build-002-fidelity-resources`, which continues `chore/build-001-baseline` (BUILD-001 is itself `pending_review`, not `verified`; see section 8). This is the report for work item BUILD-002 in [bdf-work-items.toml](../bdf-work-items.toml); the item is `pending_review`, not `verified`. Raw results, renders and logs are unpublished and live under the git-ignored `target/bdf-evidence/BUILD-002/` and `target/bdf-corpus/`. Paths below are relative to those unless stated. Nothing was pushed, merged or published.
+Status: **R1–R5 corrections pass independent Codex retest; overall acceptance remains pending.** See [the retest](BUILD-002-codex-retest.md). Section 9 records the corrections R1 to R5; where the original text below says otherwise, section 9 is the current account and the original figures are kept as the first run. Run on 2026-10-15 (UTC-5) on branch `chore/build-002-fidelity-resources`, which continues `chore/build-001-baseline` (BUILD-001 is itself `pending_review`, not `verified`; see section 8). This is the report for work item BUILD-002 in [bdf-work-items.toml](../bdf-work-items.toml); the item is `pending_review`, not `verified`. Raw results, renders and logs are unpublished and live under the git-ignored `target/bdf-evidence/BUILD-002/` and `target/bdf-corpus/`. Paths below are relative to those unless stated. Nothing was pushed, merged or published.
 
 **Result:** the corpus, fidelity harness, benchmark and worker prototype exist and are committed; the engine is robust and, on this corpus, semantically complete; the proposed budgets have large headroom on these fixtures; and an out-of-process worker is feasible in safe Rust. The engine has three real defects the harness found (image downscaling, form fields without appearance streams, one page-tree recovery case) and does not enforce the specification's input limits. Decisions are in [BDF-0001](../adr/BDF-0001-renderer-retain-and-adapt.md), [BDF-0002](../adr/BDF-0002-worker-process-isolation.md) and [BDF-0003](../adr/BDF-0003-proposed-performance-budgets.md), all proposed for owner approval. Budgets are **proposed, not ratified**.
 
@@ -229,7 +229,7 @@ The worker crate also declares the never-panic lints (no `unwrap`/`expect`/`pani
 |---|---|---|
 | Required visual comparisons made | not reported (103 made) | **103 of 103, 0 coverage gaps** |
 | Semantic checks | 306 of 306 | unchanged (the semantic part was not touched) |
-| Visual within tolerance | 91 of 103 | **90 of 103** |
+| Visual within tolerance | 91 of 103 | **89 of 103** |
 | Verdicts | 65 match, 11 visual divergence, 10 both open, 6 equal recovery, 2 both refuse, 2 engine recovers / oracle refuses, 2 limit not enforced, 1 recovery gap, 1 engine recovers more | **63 match, 13 visual divergence**, the rest unchanged |
 | Strict gate | did not exist | **0 failures**, 16 known exceptions |
 | Negative control | 3 of 69 accepted | 3 of 69 accepted (the same three: same-density text pairs the semantic checks cover) |
@@ -237,6 +237,8 @@ The worker crate also declares the never-panic lints (no `unwrap`/`expect`/`pani
 **Why the counts moved.** No threshold was changed. The colour metrics rejected two comparisons the grey ones had passed: `annot-note-popup` (a text-note icon) and `annot-fileattachment` (a file-attachment icon). Both are annotations without an appearance stream, whose icon the specification leaves to the reader, and the two readers draw them in different colours (crops: `triage/colour-annot-*.png`). They are recorded as known exceptions with that reason, not as engine defects; the visual-divergence count rises 11 to 13 and matches fall 65 to 63. The 16 exceptions are the 13 visual divergences, `damaged-bad-kid` (G3) and the two `limit not enforced` cases (`hostile-pages-2001`, `hostile-size-251mib`; F10). A block metric near the noise floor was already disclosed in 4.2; the same limits are now applied to colour and should be reviewed together when budgets are ratified.
 
 **What the strict gate does not do.** It does not make an excused divergence correct: it makes the list of known divergences explicit, complete and unable to drift. G1 to G3 stay open until fixed, and fixing one will fail the gate until its entry is removed.
+
+**Independent retest, 2026-10-15:** Codex reran the five counterexamples, both worker test configurations, the xtask tests and the full strict oracle on `1142fc8c`. R1 to R5 pass; semantic checks, visual metrics and verdicts exactly match `oracle-v3/results.json`. The corrected-run table originally said 90 passing comparisons; the raw results contain **89 passing and 14 failing comparisons across 13 divergent cases** (91 minus the two newly detected colour differences). This documentation count is corrected here and in BDF-0001. See [Codex retest](BUILD-002-codex-retest.md) for commands, evidence and remaining qualification gates.
 
 ### 9.3 Admission before allocation; limits of containment (documentation, R-wide)
 
@@ -281,9 +283,18 @@ Worker peak working sets are the same (12-13, 62, 47, 214-220 and 117 MiB). The 
 
 BUILD-002 is **not verified**. G1 to G3, F10 admission limits, the hard memory limit and sandbox, cold launch and frame-time measurements, and every non-Windows platform remain open. BUILD-001 is still `pending_review`; the baseline is not labelled verified, and BUILD-003 has not been started.
 
+## 10. Owner decisions and the exception gate (2026-10-15)
+
+**Decisions recorded in the ADRs:** BDF-0001 keep the current renderer, provisionally; BDF-0002 adopt the supervised worker architecture, integrated in BUILD-010; BDF-0003 adopt the proposed ceilings as acceptance targets (adopted as targets, not measured results; unmeasured rows stay unmeasured). The 16 oracle exceptions are retained temporarily. BUILD-001 is not green until hosted CI and the optional-font build are qualified; neither has been run (hosted CI needs a push, and the font build needs a clone of `craft-fonts`; both wait for the owner's go-ahead).
+
+**R6 (`41f642c3`): exceptions are tied to a defect and pinned to reviewed metrics.** Every entry in `xtask/baselines/bdf-oracle-known.toml` has `tracks`: G1 (image sampling: 4 scans), G2 (widget fallback: `form-text-no-ap`), G3 (`damaged-bad-kid`), F10 (the two limit cases), or a documented difference: G6 thin-line policy (2 plan sheets), `oracle-artefact` (`vector-pattern`), `reader-defined` (the two annotation icons), `stroke-placement` (`plan-symbols-5k`, `form-sig-button`, `annot-shapes-no-ap`). Any other value fails the gate. The 13 visual entries also carry the reviewed metrics of all 14 page comparisons. Because a verdict can stay "visual divergence" while the output worsens, `--strict` now also fails if a baselined metric grows beyond 10% plus a small floor, a baselined page is not compared, or a compared page is not baselined; the remedy is to look at the images and re-baseline (`--print-baselines`), with the reason in the commit.
+
+Evidence (`target/bdf-evidence/BUILD-002-followup/`): `red-r6-drift.log` (two drift tests fail against a stub), `red-r6-tracks.log` (the tracks test fails with the check removed), `green-r6-drift.log` (93 xtask tests pass), `e2e-drift.log` (a doctored baseline is reported: `scan-gray-300` page 1 mae worsened), `oracle-v4.log` (full strict run with the new gate, exit 0, 103 of 103 comparisons, 16 exceptions, no drift; `oracle-v4/results.json` `13f7cddeb2fb…3283` differs from v3 only in timings and renders), fmt, clippy `-D warnings` and `cargo +1.95.0 check` pass. The drift limit is a safety net against silent degradation; it does not make any excused difference acceptable.
+
 ## Revision history
 
 | Date | Revision | Change |
 |---|---|---|
 | 2026-10-15 | 0.1 | Initial BUILD-002 evidence: corpus, fidelity, latency and memory, worker feasibility, three proposed decisions. |
 | 2026-10-15 | 0.2 | Corrections after Codex review (R1 to R5): section 9; narrowed the unchanged-sources claim (section 2); ADRs revised and still proposed. |
+| 2026-10-15 | 0.3 | Owner decisions on the three ADRs; exceptions tied to defects and pinned to reviewed metrics (R6, section 10). |

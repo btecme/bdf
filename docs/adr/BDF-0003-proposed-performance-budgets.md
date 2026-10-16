@@ -1,6 +1,6 @@
 # BDF-0003: Proposed performance and memory budgets
 
-> **Status:** Proposed for owner ratification · **Date:** 2026-10-15 · **Work item:** BUILD-002 · **Evidence:** [BUILD-002](../bdf-evidence/BUILD-002.md) section 5
+> **Status:** Accepted by the owner (2026-10-15): the ceilings in the table are adopted as acceptance targets, not as measured results; the unmeasured rows stay unmeasured until qualified · **Date:** 2026-10-15 · **Work item:** BUILD-002 · **Evidence:** [BUILD-002](../bdf-evidence/BUILD-002.md) section 5
 
 The PRD's budgets (section 8) were proposed before any measurement. BUILD-002 measured them on one
 machine, with 30 timed runs per scenario, on a release build, on a synthetic corpus. This record

@@ -1,6 +1,6 @@
 # BDF-0001: Retain the inherited renderer and adapt it where measured
 
-> **Status:** Proposed for owner approval · **Date:** 2026-10-15 · **Work item:** BUILD-002 · **Evidence:** [BUILD-002](../bdf-evidence/BUILD-002.md) sections 4 and 5
+> **Status:** Accepted by the owner, provisionally (2026-10-15): keep the current renderer; the adaptations and the revisit condition below stand · **Date:** 2026-10-15 · **Work item:** BUILD-002 · **Evidence:** [BUILD-002](../bdf-evidence/BUILD-002.md) sections 4 and 5
 
 ## Context
 
@@ -19,11 +19,11 @@ each file, on a 100-case synthetic corpus, with tolerances fixed before the firs
   combining marks and a composite font), form fields, bookmarks, attachments, page labels, annotation
   and link counts. The engine reads encrypted files with all four encryption schemes and a Unicode
   password.
-- **Visual fidelity is close where it counts.** 90 of 103 page comparisons are within tolerance, judged
+- **Visual fidelity is close where it counts.** 89 of 103 page comparisons are within tolerance, judged
   on grey and, since the BUILD-002 corrections, on colour as well (the first run judged grey only, and
   91 passed). All 103 required comparisons were made; none was skipped. The passing ones differ from
   MuPDF by at most 0.08% of pixels and a mean error of 2.3 grey levels.
-- **The 13 comparisons outside tolerance have five causes**, triaged by looking at both images (the
+- **The 14 comparisons outside tolerance, across 13 cases, have five causes**, triaged by looking at both images (the
   fifth, below, was found by the colour check):
   1. *Image downscaling uses point sampling*, not area averaging, so a 300 dpi scan shown at 96 dpi
      keeps speckle and a 600 dpi black-and-white scan shows jagged, aliased strokes (5 comparisons).
