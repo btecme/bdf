@@ -15,6 +15,8 @@ skrifa = "0.44"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
 toml = "1"
+# Reads .github workflow files as YAML for `cargo xtask pins` (BUILD-003, R2); pure safe Rust, no build script.
+yaml-rust2 = { version = "0.13", default-features = false }
 
 # Peak memory of a measured child process (BUILD-002). A maintained safe wrapper over the Win32
 # process APIs; the workspace forbids unsafe code, so nothing in xtask calls them directly.
