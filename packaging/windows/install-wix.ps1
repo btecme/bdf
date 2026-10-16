@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Install the WiX Toolset v5 command-line tool (`wix`) from a package whose hash was checked first, and
-  check afterwards that the installed bytes are those bytes.
+  check afterwards that the installed files are the files of that package.
 
 .DESCRIPTION
   package.ps1 builds the MSI with `wix build`. The .nupkg is downloaded from nuget.org's immutable
@@ -17,8 +17,10 @@
     * the tool goes to a fresh `--tool-path`, not the machine's global tool folder, so a `wix` already
       installed there is neither reused nor run.
 
-  After the install, the package hash NuGet recorded for what it unpacked (`wix.<version>.nupkg.sha512`)
-  must equal the recorded value; if it is missing or differs, the install is refused. `wix` is then run by
+  After the install, every file the verified package ships under tools/ must exist in the installed tool
+  folder with the same SHA-256, and the installed tool folder must hold no other file; any difference
+  refuses the install. (NuGet's own `.nupkg.sha512` record is not used: for a correct install its value
+  differs between .NET SDK versions, so it can neither prove nor refute anything.) `wix` is then run by
   its full path from the new tool folder, which is also put first on PATH for later steps.
 
   Updating WiX means changing Version and Sha512 together after reviewing the new release (BUILD-003,
@@ -96,14 +98,37 @@ try {
   $env:NUGET_HTTP_CACHE_PATH = $saved.NUGET_HTTP_CACHE_PATH
 }
 
-# What NuGet unpacked must be the verified package: it records the hash of the package it installed.
-$recorded = @(Get-ChildItem -LiteralPath $tools, $packages -Recurse -Filter "wix.$Version.nupkg.sha512" -File -ErrorAction SilentlyContinue)
-if ($recorded.Count -eq 0) { throw "no wix.$Version.nupkg.sha512 under ${tools} or ${packages}: cannot confirm what was installed; refusing." }
-foreach ($r in $recorded) {
-  $value = (Get-Content -LiteralPath $r.FullName -Raw).Trim()
-  if ($value -cne $Sha512) { throw "the installed package ($($r.FullName)) has SHA-512 $value, not the verified $Sha512; refusing." }
+# What NuGet unpacked must be the verified package: compare every file the package ships under tools/
+# with the installed copy, and refuse any extra file.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$installedRoot = Join-Path $tools ".store\wix\$Version\wix\$Version"
+$installedTools = Join-Path $installedRoot 'tools'
+$expectedHashes = @{}
+$zip = [IO.Compression.ZipFile]::OpenRead($file)
+try {
+  foreach ($entry in $zip.Entries) {
+    if ($entry.FullName -like 'tools/*' -and -not $entry.FullName.EndsWith('/')) {
+      $sha256 = [System.Security.Cryptography.SHA256]::Create()
+      $stream = $entry.Open()
+      try { $expectedHashes[[Uri]::UnescapeDataString($entry.FullName)] = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '') } finally { $stream.Dispose() }
+    }
+  }
+} finally { $zip.Dispose() }
+if ($expectedHashes.Count -eq 0) { throw 'the verified package ships no files under tools/; refusing.' }
+if (-not (Test-Path -LiteralPath $installedTools)) { throw "the installed tool folder $installedTools does not exist; cannot confirm what was installed; refusing." }
+$present = @{}
+foreach ($f in Get-ChildItem -LiteralPath $installedTools -Recurse -File) {
+  $relative = $f.FullName.Substring($installedTools.Length).TrimStart('\', '/').Replace('\', '/')
+  $present["tools/$relative"] = $f.FullName
 }
-Write-Output "ok the installed package is the verified one ($($recorded.Count) record(s))"
+foreach ($relative in $expectedHashes.Keys) {
+  if (-not $present.ContainsKey($relative)) { throw "the verified package ships $relative but it is not installed; refusing." }
+  if ((Get-FileHash -LiteralPath $present[$relative] -Algorithm SHA256).Hash -ne $expectedHashes[$relative]) { throw "the installed $relative differs from the verified package; refusing." }
+}
+foreach ($relative in $present.Keys) {
+  if (-not $expectedHashes.ContainsKey($relative)) { throw "the installed tool folder holds $relative, which the verified package does not ship; refusing." }
+}
+Write-Output "ok all $($expectedHashes.Count) tool file(s) match the verified package"
 
 $wix = Join-Path $tools 'wix.exe'
 if (-not (Test-Path -LiteralPath $wix)) { throw "wix.exe is not in $tools after the install." }
