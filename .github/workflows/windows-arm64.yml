@@ -1,6 +1,10 @@
-# Windows on ARM (#61): package the ARM64 release the way release.yml does (cross-compiled on an
-# x64 runner, unsigned here), then install that MSI on a Windows 11 ARM64 runner and run it, and
-# run the test suite natively on ARM64.
+# Windows on ARM64: cross-compile and package the ARM64 build on an x64 runner (unsigned), then install it
+# on a Windows 11 ARM64 runner, check it and run it.
+#
+# Written for BDF (BUILD-003, finding F07). It replaces a call to a reusable workflow in another
+# organization's repository that was tracked at a branch and itself called more branch refs. Everything
+# this job runs is in this repository: the steps below, packaging/windows/*.ps1, and actions pinned to
+# full commit SHAs (`cargo xtask pins` enforces that).
 name: Windows ARM64
 
 on:
@@ -12,6 +16,7 @@ on:
       - Cargo.lock
       - "**/Cargo.toml"
       - "**/build.rs"
+      - rust-toolchain.toml
       - .github/workflows/windows-arm64.yml
       - packaging/windows/**
   schedule:
@@ -25,16 +30,52 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  windows-arm64:
-    # Pinned to a reviewed commit of the reusable workflow (BUILD-003, finding F07); it was tracked at @main.
-    # The pin does not reach the `uses:` lines inside that workflow, several of which still name
-    # craft-common-actions/actions/*@main: see docs/bdf-evidence/BUILD-003.md. To update, review the new
-    # commit (and what it calls) and change the SHA; `cargo xtask pins` rejects any floating reference here.
-    # That workflow installs `stable` plus the ARM64 target, but cargo then runs the compiler pinned in
-    # rust-toolchain.toml, which lacked the target (E0463 on the first hosted run). It has no input to choose
-    # a toolchain, so packaging/windows/package.ps1 adds the target to the compiler in use (BUILD-001).
-    uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@43f4e83c68764f9d880f8a6c10328bc550465f2b # main on 2026-10-16
-    with:
-      app-name: pdfcraft
-      app-dir: PdfCraft
+  package:
+    name: package (cross-compiled on x64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.0 # keep in step with rust-toolchain.toml
+          targets: aarch64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-arm64-package
+      - name: Install WiX (hash-checked)
+        shell: pwsh
+        run: ./packaging/windows/install-wix.ps1
+      - name: Build and package (unsigned)
+        shell: pwsh
+        env:
+          DIST: ${{ github.workspace }}\dist\arm64
+        run: ./packaging/windows/package.ps1 -Arch arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pdfcraft-windows-arm64
+          path: dist/arm64/*
+          if-no-files-found: error
+          retention-days: 7
+
+  install:
+    name: install and run on ARM64
+    needs: package
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pdfcraft-windows-arm64
+          path: dist
+      - name: Install the MSI, check it, run it, uninstall it
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
+          ./packaging/windows/install-test.ps1 -Msi $msi -Arch arm64

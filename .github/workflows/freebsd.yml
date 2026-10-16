@@ -1,5 +1,11 @@
 # Builds and tests the workspace on FreeBSD, inside a FreeBSD VM on a Linux runner
 # (GitHub has no FreeBSD runners). GPU tests skip themselves when the VM has no adapter.
+#
+# Written for BDF (BUILD-003, finding F07). It replaces a call to a reusable workflow in another
+# organization's repository that was tracked at a branch. The VM action is pinned to a commit SHA, the
+# craft-fonts input to a commit, and the Rust toolchain is installed by rustup at the version
+# pinned in rust-toolchain.toml. Packaging (packaging/freebsd/package.sh) is not run here; it was not run
+# by the replaced workflow either.
 name: FreeBSD
 
 on:
@@ -10,6 +16,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - "**/Cargo.toml"
+      - rust-toolchain.toml
       - .github/workflows/freebsd.yml
       - packaging/freebsd/**
   workflow_dispatch:
@@ -23,10 +30,44 @@ permissions:
 
 jobs:
   freebsd:
-    # Pinned to a reviewed commit of the reusable workflow (BUILD-003, finding F07); it was tracked at @main.
-    # The pin does not reach the `uses:` lines inside that workflow, several of which still name
-    # craft-common-actions/actions/*@main: see docs/bdf-evidence/BUILD-003.md. To update, review the new
-    # commit (and what it calls) and change the SHA; `cargo xtask pins` rejects any floating reference here.
-    uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@43f4e83c68764f9d880f8a6c10328bc550465f2b # main on 2026-10-16
-    with:
-      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+    name: FreeBSD 15 (build + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The optional craft-fonts build input, at the commit CI uses.
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+          path: craft-fonts
+
+      - name: Build and test in a FreeBSD VM
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        with:
+          release: "15.1"
+          usesh: true
+          cpu: 4
+          mem: 12288
+          copyback: false
+          prepare: |
+            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib dejavu
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          run: |
+            set -eu
+            . "$HOME/.cargo/env"
+            git config --global --add safe.directory "*"
+            # The toolchain pinned in rust-toolchain.toml, installed explicitly (rustup does not
+            # reliably install it on first use).
+            channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+            test -n "$channel"
+            rustup toolchain install "$channel" --profile minimal
+            rustc --version
+            test -d craft-fonts
+            export CRAFT_FONTS_DIR="$PWD/craft-fonts"
+            export CRAFT_FONTS_REQUIRED=1
+            export CARGO_PROFILE_DEV_DEBUG=0
+            cargo build --workspace --all-targets --locked
+            cargo test --workspace --locked

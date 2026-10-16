@@ -1,10 +1,16 @@
-# Quick static checks for the release pipeline (seconds, no Rust build): workflow syntax,
-# packaging shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata.
+# Quick static checks (seconds, no Rust build): workflow syntax, the packaging shell and PowerShell scripts,
+# XML well-formedness, the MSI icon-id rule, the Linux desktop entry and AppStream metadata, and the two
+# Flatpak manifests' agreement.
+#
+# Written for BDF (BUILD-003, finding F07). It replaces a call to a reusable workflow in another
+# organization's repository that was tracked at a branch, covering the checks docs/releasing.md listed
+# for it. It could not be compared line by line with the replaced job; any check it did that is not
+# listed here is a gap (see docs/bdf-evidence/BUILD-003.md).
 name: Packaging lint
 
 on:
   push:
-    branches: [main, release]
+    branches: [main]
     paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
   pull_request:
     paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
@@ -19,8 +25,73 @@ concurrency:
 
 jobs:
   lint:
-    # Pinned to a reviewed commit of the reusable workflow (BUILD-003, finding F07); it was tracked at @main.
-    # The pin does not reach the `uses:` lines inside that workflow, several of which still name
-    # craft-common-actions/actions/*@main: see docs/bdf-evidence/BUILD-003.md. To update, review the new
-    # commit (and what it calls) and change the SHA; `cargo xtask pins` rejects any floating reference here.
-    uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@43f4e83c68764f9d880f8a6c10328bc550465f2b # main on 2026-10-16
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # actionlint 1.7.12 (github.com/rhysd/actionlint, tag v1.7.12 = 914e7df2), checked against the
+      # SHA-256 recorded in this file before it is unpacked. To update, review the release and change the
+      # version and the hash together.
+      - name: Install actionlint (hash-checked)
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check
+          tar -xzf actionlint.tar.gz actionlint
+      - name: Workflow syntax and expressions
+        run: ./actionlint -color
+
+      - name: Packaging shell scripts
+        run: git ls-files 'packaging/*.sh' | xargs shellcheck --rcfile=packaging/.shellcheckrc
+
+      - name: Packaging PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in git ls-files 'packaging/*.ps1') {
+            $errors = $null; $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$tokens, [ref]$errors)
+            foreach ($e in $errors) { Write-Output "${f}:$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+          }
+          if ($bad) { throw "$bad PowerShell parse error(s)" }
+
+      - name: Install validators
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends desktop-file-utils appstream libxml2-utils
+
+      - name: XML is well-formed (WiX, plist, MIME, AppStream template)
+        run: |
+          xmllint --noout packaging/windows/*.wxs packaging/macos/Info.plist.in \
+            packaging/linux/ai.storyteller.pdfcraft.mime.xml packaging/linux/ai.storyteller.pdfcraft.metainfo.xml.in
+
+      - name: MSI icon ids end in .ico or .exe (Windows Installer requires it)
+        run: |
+          ids=$(grep -ho '<Icon Id="[^"]*"' packaging/windows/*.wxs | sed 's/<Icon Id="//; s/"$//')
+          test -n "$ids"
+          for id in $ids; do
+            case "$id" in *.ico | *.exe) ;; *) echo "icon id '$id' must end in .ico or .exe" >&2; exit 1 ;; esac
+          done
+
+      - name: Linux desktop entry and AppStream metadata
+        run: |
+          desktop-file-validate packaging/linux/ai.storyteller.pdfcraft.desktop
+          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' \
+            packaging/linux/ai.storyteller.pdfcraft.metainfo.xml.in > "$RUNNER_TEMP/ai.storyteller.pdfcraft.metainfo.xml"
+          appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.pdfcraft.metainfo.xml"
+
+      - name: The two Flatpak manifests agree on runtime and sandbox permissions
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          a = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.pdfcraft.yml"))
+          b = yaml.safe_load(open("packaging/linux/flatpak/ai.storyteller.pdfcraft.bundle.yml"))
+          bad = [k for k in ("runtime", "runtime-version", "finish-args") if a.get(k) != b.get(k)]
+          if bad:
+              sys.exit("the Flatpak manifests differ in: " + ", ".join(bad))
+          PY
