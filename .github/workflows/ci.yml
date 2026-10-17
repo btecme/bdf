@@ -75,28 +75,77 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
 
+      # The gate steps below run even when an earlier one failed, so one run reports every failing gate.
       - name: Clippy
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        if: runner.os != 'Linux'
+        if: ${{ !cancelled() && runner.os != 'Linux' }}
         run: cargo test --workspace
 
       - name: Test (with craft-fonts)
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: cargo test --workspace
 
       - name: Layering
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: cargo xtask layers
 
       - name: Assets (licences and attribution)
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: cargo xtask assets
 
       - name: CLI without the MCP server still builds
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: cargo check -p pdfcraft-cli --no-default-features
+
+  parity:
+    # Contract: docs/bdf-ci-contracts.md. `cargo xtask parity` validates parity/acrobat-features.toml
+    # against the command registry, the automation tools and the tests that the entries cite, and fails
+    # on any inconsistency. It reports progress; it does not measure fidelity to Acrobat.
+    name: parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.0  # keep in step with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: xtask
+      - name: Parity checklist is consistent with the registry, tools and tests
+        run: cargo xtask parity
+
+  bdf-gates:
+    # Contract: docs/bdf-ci-contracts.md. The BDF-specific checks that exist today and can fail; each step
+    # reports on its own. The corpus, oracle, worker and UI qualification jobs are NOT here: they do not
+    # exist yet, and a job that passed without running them would be a misleading green check.
+    name: BDF gates (pins, network, core inventory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.0  # keep in step with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: bdf-gates
+      - name: Every workflow reference is pinned to a commit SHA
+        run: cargo xtask pins
+      - name: Network libraries only in the reviewed place
+        if: ${{ !cancelled() }}
+        run: cargo xtask network
+      - name: Core capability inventory is complete and consistent
+        if: ${{ !cancelled() }}
+        # A test filter that matches nothing passes, so the number that ran is checked too.
+        run: |
+          cargo test -p pdfcraft-automation --lib capability:: 2>&1 | tee capability.log
+          passed=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' capability.log | head -n 1)
+          if [ -z "$passed" ] || [ "$passed" -lt 14 ]; then
+            echo "::error::expected the 14 capability inventory tests to run and pass, saw: ${passed:-none}"
+            exit 1
+          fi
 
   wasm:
     name: wasm32 check

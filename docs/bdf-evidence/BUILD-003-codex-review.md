@@ -2,6 +2,10 @@
 
 Status: **changes requested on the submitted slices; BUILD-003 remains incomplete.**
 
+Latest: [the correction retest](BUILD-003-codex-retest.md) closes R1 and R3; the owner approved
+annotation-inclusive core printing on 2026-10-16. R2 remains open because aliases used as mapping keys bypass the new scanner. The initial
+findings below are retained as the original review record.
+
 Reviewed 2026-10-16: [PR #2](https://github.com/btecme/bdf/pull/2) at
 `e2063c687aa357eaafc61ddd3c067e4184993af6` (workflow ownership/pinning), and stacked
 [PR #3](https://github.com/btecme/bdf/pull/3) at

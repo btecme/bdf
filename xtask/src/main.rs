@@ -10,6 +10,7 @@ mod fuzz;
 mod gates;
 mod layers;
 mod macos_integration;
+mod network;
 mod parity;
 mod pins;
 mod screenshots;
@@ -22,9 +23,10 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("version", "Print the workspace version, or `version set X.Y.Z[-pre]` to change it and refresh Cargo.lock", version_cmd),
     ("layers", "Enforce the crate dependency layering (plan/architecture.md §3)", gates::layers),
     ("pins", "Require every action and reusable workflow in .github/ to be pinned to a full commit SHA (BUILD-003)", pins::run),
+    ("network", "Fail when a workspace crate other than the desktop app depends on an HTTP or WebSocket library (BUILD-003)", gates::network),
     ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8", gates::wasm),
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
-    ("ci", "fmt --check, clippy -D warnings, test, layers, wasm, assets, deny, parity (stops at first failure)", gates::ci),
+    ("ci", "fmt --check, clippy -D warnings, test, layers, pins, network, wasm, assets, deny, parity (stops at first failure)", gates::ci),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
     ("corpus", "Fetch the pinned pdf.js test corpus into corpus/ (git-ignored) and verify it; --update-pin re-records the pin", gates::corpus),
     ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),
