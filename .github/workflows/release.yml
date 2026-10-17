@@ -1,43 +1,93 @@
-name: Release
+# Windows x64 package build. UNSIGNED, and it publishes nothing.
+#
+# Written for BDF (BUILD-003, finding F07). The workflow it replaces ran on every push to the `release`
+# branch, called a reusable workflow in another organization's repository by branch name, passed it
+# Apple and Windows signing secrets, and created a draft GitHub Release. BDF has no signing identity of
+# its own yet, so this one:
+#   * runs only by hand, or as a dry run when the packaging inputs change in a pull request;
+#   * declares read-only repository permissions and is given no secrets, so it cannot sign or publish;
+#   * produces the MSI and the portable zip, checks the MSI statically (test-msi.ps1, inside
+#     package.ps1) and by really installing, running and uninstalling it (install-test.ps1);
+#   * keeps the result as a workflow artifact with SHA256SUMS.txt, labelled unsigned.
+# A signed release job, a GitHub Release and other platforms come back as separate, reviewed work once a
+# signing identity and a distribution endpoint exist; until then package qualification is pending, not
+# faked. Every `uses:` below is pinned to a full commit SHA (`cargo xtask pins`).
+name: Package (Windows x64, unsigned)
 
 on:
-  push:
-    branches: [release]
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml)"
-        type: string
-        default: ""
-
-permissions:
-  contents: write
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - packaging/windows/**
+      - rust-toolchain.toml
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  release:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
-    with:
-      app-name: pdfcraft
-      app-title: PdfCraft
-      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
-      version: ${{ inputs.version }}
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+  windows-x64:
+    name: Windows x64 MSI and portable zip (unsigned)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The optional craft-fonts build input, at the commit CI uses (Japanese and Arabic fonts embedded).
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+          path: craft-fonts
+      - name: Point the build at craft-fonts
+        shell: pwsh
+        run: |
+          "CRAFT_FONTS_DIR=$env:GITHUB_WORKSPACE\craft-fonts" | Add-Content -Path $env:GITHUB_ENV
+          "CRAFT_FONTS_REQUIRED=1" | Add-Content -Path $env:GITHUB_ENV
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.0 # keep in step with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: package-windows-x64
+      - name: Test that the WiX installer installs only the verified package
+        shell: pwsh
+        run: ./packaging/windows/test-install-wix.ps1
+      - name: Install WiX (hash-checked, from a source that offers nothing else)
+        shell: pwsh
+        run: ./packaging/windows/install-wix.ps1
+      - name: Build and package (unsigned)
+        shell: pwsh
+        env:
+          DIST: ${{ github.workspace }}\dist\x64
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Install the MSI, check it, run it, uninstall it
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist/x64/*.msi | Select-Object -First 1).FullName
+          ./packaging/windows/install-test.ps1 -Msi $msi -Arch x64
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Push-Location dist/x64
+          Get-ChildItem -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+          Pop-Location
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pdfcraft-windows-x64-UNSIGNED
+          path: dist/x64/*
+          if-no-files-found: error
+          retention-days: 14

@@ -1,14 +1,31 @@
 # Releasing PdfCraft
 
-Every push to the `release` branch runs `.github/workflows/release.yml`. It builds installers for
-macOS, Windows, Linux, FreeBSD and the web, signs the ones it has certificates for, and creates or
-updates a **draft** GitHub Release named `PdfCraft v<version>`. Nobody sees a draft until a
-maintainer publishes it.
+> **BDF status (BUILD-003, 2026-10-16): there is no release pipeline yet.** The upstream pipeline
+> described below (a push to `release` builds, signs and drafts a GitHub Release for six platforms)
+> was removed from this fork's workflows because it called another organization's workflow by branch
+> name and passed it signing secrets. What exists now is
+> [`.github/workflows/release.yml`](../.github/workflows/release.yml), a **Windows x64 package build
+> that is unsigned and publishes nothing**: it runs by hand (or as a dry run when
+> `packaging/windows/**` changes in a pull request), has read-only permissions and no secrets, builds
+> the MSI and portable zip, runs the static MSI checks, really installs/runs/uninstalls the MSI, and
+> keeps the result as a workflow artifact with `SHA256SUMS.txt`. A signed release, a GitHub Release
+> and the other platforms need a signing identity and a distribution endpoint, which BDF does not have
+> yet; until then package qualification is pending, not faked. **Do not configure signing secrets in
+> this repository and do not push a `release` branch.** The rest of this document describes the
+> packaging scripts, which are unchanged, and the upstream process they were built for, which is not
+> active here.
+
+## Upstream process (not active in BDF)
+
+Upstream, every push to the `release` branch ran a workflow that built installers for macOS, Windows,
+Linux, FreeBSD and the web, signed the ones it had certificates for, and created or updated a
+**draft** GitHub Release named `PdfCraft v<version>`. Nobody saw a draft until a maintainer
+published it.
 
 The pipeline was ported from PhotoCraft's. User-facing names say **PdfCraft**; files, binaries and
 ids stay lowercase (`pdfcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.pdfcraft`).
 
-## Cutting a release
+## Cutting a release (upstream process; not active in BDF)
 
 1. **Bump the version** on `main`. It lives only in `[workspace.package] version` in the root
    `Cargo.toml`:
@@ -40,7 +57,7 @@ Linux, Flatpak, FreeBSD and web jobs build and check everything, the signing job
 environment's branch rule, and the draft-release job (which needs them) is skipped, so nothing is
 published (`gh workflow run release.yml --ref <branch>`).
 
-## What gets built
+## What the upstream pipeline built (BDF currently builds only the Windows x64 package, unsigned)
 
 | Platform | Artifacts | Built on |
 |---|---|---|
@@ -182,7 +199,7 @@ Locally (on Linux, with nfpm): `packaging/linux/package.sh` or `--formats "deb t
 
 ### FreeBSD
 
-GitHub has no FreeBSD runners, so the `freebsd` job runs `packaging/freebsd/package.sh` in a FreeBSD
+GitHub has no FreeBSD runners, so the upstream release `freebsd` job ran `packaging/freebsd/package.sh` in a FreeBSD
 VM with the packages from `.github/workflows/freebsd.yml`. The tarball is a `/usr/local`-style tree
 with the same desktop entry, metainfo and icons as Linux. FreeBSD has no code signing for loose
 binaries; check the tarball against `SHA256SUMS.txt`.
@@ -195,10 +212,11 @@ covered in [`packaging/web/README.md`](../packaging/web/README.md).
 
 ## Secrets
 
-The signing secrets live in the repository's **`release` environment** (*Settings ▸ Environments ▸
-release*), restricted to the `release` branch; every job in `release.yml` declares
-`environment: release`. Each secret is optional: if one is missing, that platform's artifacts are
-unsigned and the run shows a warning.
+**BDF configures none, and the current `release.yml` is given none.** The table lists what the
+upstream pipeline took, and what `packaging/windows/sign.ps1` and `packaging/macos/` read if a future
+signing job provides them. They would live in a protected environment (*Settings ▸ Environments*)
+restricted to a reviewed branch, and be passed only to a job that is meant to sign. Each secret is
+optional: if one is missing, that platform's artifacts are unsigned and the run shows a warning.
 
 | Secret | Used for |
 |---|---|
@@ -209,14 +227,18 @@ unsigned and the run shows a warning.
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | service principal for Azure Trusted Signing (instead of a `.pfx`) |
 | `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` | Trusted Signing endpoint, account and certificate profile |
 
-`GITHUB_TOKEN` creates the release; only the final job gets `contents: write`.
+Upstream, `GITHUB_TOKEN` created the release and only the final job got `contents: write`. BDF's
+`release.yml` has `contents: read` only.
 
 ## Checks
 
-`.github/workflows/packaging-lint.yml` runs on changes to `packaging/` and the workflows: actionlint, shellcheck,
-a PowerShell parse, xmllint (WiX, plist, MIME), `desktop-file-validate`, `appstreamcli validate`, and
-the MSI icon-id check. The FreeBSD and Windows ARM64 workflows also exercise their packaging before a
-release does.
+`.github/workflows/packaging-lint.yml` runs on changes to `packaging/` and the workflows: actionlint
+(a pinned release whose SHA-256 is checked), shellcheck, a PowerShell parse, xmllint (WiX, plist,
+MIME, AppStream template), `desktop-file-validate`, `appstreamcli validate`, the MSI icon-id check
+and the Flatpak manifests' agreement. `cargo xtask pins` (also a test in `cargo test -p xtask`) fails
+on any workflow reference that is not a full commit SHA. The Windows ARM64 workflow packages and
+installs its build before a release would; the FreeBSD workflow builds and tests (it does not run
+`packaging/freebsd/package.sh`).
 
 ## Scanner detections
 
