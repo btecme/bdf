@@ -13,9 +13,11 @@
 
 mod a11y;
 mod batch;
+pub mod capability;
 mod comments;
 mod content;
 mod conventions;
+mod defaults;
 mod forms;
 mod links;
 #[cfg(feature = "mcp")]
@@ -197,13 +199,13 @@ impl Automation {
                     Some(_) => self.pages(&a, "pages")?,
                     None => (0..doc.info.pages.len()).collect(),
                 };
-                let parity = match a.opt_str("subset")?.unwrap_or("all") {
+                let parity = match a.opt_str("subset")?.unwrap_or(defaults::ROTATE_SUBSET) {
                     "all" => pdfcraft_engine::PageParity::Both,
                     "even" => pdfcraft_engine::PageParity::Even,
                     "odd" => pdfcraft_engine::PageParity::Odd,
                     s => return Err(ToolError::InvalidArgs(format!("unknown subset {s:?} (all, even, odd)"))),
                 };
-                let orientation = match a.opt_str("orientation")?.unwrap_or("all") {
+                let orientation = match a.opt_str("orientation")?.unwrap_or(defaults::ROTATE_ORIENTATION) {
                     "all" => pdfcraft_engine::PageOrientation::Both,
                     "landscape" => pdfcraft_engine::PageOrientation::Landscape,
                     "portrait" => pdfcraft_engine::PageOrientation::Portrait,
@@ -1517,10 +1519,10 @@ impl Automation {
             }
             Some(_) => return Err(ToolError::InvalidArgs("groups must list a number (or null) for each path".into())),
         };
-        let field_conflicts = match a.opt_str("field_conflicts")? {
-            None | Some("rename") => pdfcraft_organize::FieldConflicts::Rename,
-            Some("merge") => pdfcraft_organize::FieldConflicts::Merge,
-            Some(other) => {
+        let field_conflicts = match a.opt_str("field_conflicts")?.unwrap_or(defaults::COMBINE_FIELD_CONFLICTS) {
+            "rename" => pdfcraft_organize::FieldConflicts::Rename,
+            "merge" => pdfcraft_organize::FieldConflicts::Merge,
+            other => {
                 return Err(ToolError::InvalidArgs(format!("field_conflicts must be \"rename\" or \"merge\", not {other:?}")));
             }
         };
