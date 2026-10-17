@@ -79,6 +79,14 @@ Observed through GitHub's API (run and job conclusions) and, for the one failure
 
 **Hosted validation of the corrections (draft PR #2).** First head `e5d4dacb`: packaging lint passed; the x64 package and ARM64 package failed as described above. Corrected head `f8bbf3c0`: **all five workflows pass**: [CI](https://github.com/btecme/bdf/actions/runs/38954319648) (fuzz skipped by its event condition, as before), [FreeBSD](https://github.com/btecme/bdf/actions/runs/38954319598), [Windows ARM64](https://github.com/btecme/bdf/actions/runs/38954319528), [Package (Windows x64, unsigned)](https://github.com/btecme/bdf/actions/runs/38954319523), which runs the isolation self-test on the hosted SDK before installing WiX, and [Packaging lint](https://github.com/btecme/bdf/actions/runs/38954319551). Observed through GitHub's API; I did not read the passing jobs' step logs, so the self-test's own output on the runner has not been inspected line by line here.
 
+## Correction after the Codex retest (R2 follow-up, PR #2)
+
+[Retest](BUILD-003-codex-retest.md): R1 and R3 closed; R2 stays open for one case. An alias used as a mapping key (`name: &stepkey uses` ... `- *stepkey : actions/checkout@main`) resolves to the string `uses`, actionlint 1.7.12 accepts the workflow, and the scanner read the alias as some other key (0 scanned, 0 violations).
+
+* **Red:** the new test `an_alias_used_as_the_uses_key_is_resolved` (Codex's full workflow, an alias key in a flow mapping, a pinned alias key, and aliases to another string and to a collection) fails on the reviewed code with `left: 0, right: 1`.
+* **Fix.** The reader remembers the text of every anchored scalar by anchor id and resolves an alias in key position through it, so the alias key is `uses` exactly when the anchor was the string `uses`. An alias to another string, or to an anchored collection, is not the key `uses`. Alias values stay refused, as before.
+* **Checks:** the ten pinning tests pass (nine before plus this one), rustfmt and `clippy -D warnings` on xtask are clean, and `cargo xtask pins` reports 28 references, 0 unpinned or unreadable. Mutation: making an alias key never resolve fails the new test.
+
 ## 4. Slice 3: the core capability inventory (deliverable 3)
 
 Branch `chore/build-003-capability-inventory`, stacked on the PR #2 branch. The inventory is [bdf-capability-inventory.md](../bdf-capability-inventory.md) (readable) and `crates/automation/src/capability.rs` (data, decision API, tests).
@@ -124,3 +132,4 @@ Branch `chore/build-003-capability-inventory`, stacked on the PR #2 branch. The 
 | 2026-10-16 | Corrections R1 (WiX installed only from the verified package; poisoned-source test) and R2 (pin scanner parses YAML; `yaml-rust2` added to xtask) after the Codex review. |
 | 2026-10-16 | The hosted run showed R1's first post-install check depended on the .NET SDK version; replaced by a file-by-file comparison with the verified package. |
 | 2026-10-16 | Correction R3 after the Codex review: an omitted or null mode is judged as its default; `comments_forms` default `document-and-markups` is core by decision; defaults shared with the tools. |
+| 2026-10-17 | R2 follow-up after the Codex retest: an alias used as the `uses` key is resolved; red-then-green test and one mutation. |
