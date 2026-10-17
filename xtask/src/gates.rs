@@ -71,6 +71,24 @@ pub fn layers(_: &[String]) -> anyhow::Result<()> {
     bail!("{} layering violation(s)", violations.len())
 }
 
+/// The product's network use stays in the one reviewed place (`xtask/src/network.rs`).
+pub fn network(_: &[String]) -> anyhow::Result<()> {
+    let crates = layers::from_metadata(&metadata()?).map_err(|e| anyhow!(e))?;
+    if crates.is_empty() {
+        bail!("network: cargo metadata listed no workspace crates, so nothing was checked");
+    }
+    let mut problems = crate::network::check(&crates);
+    problems.extend(crate::network::stale_allowances(&crates));
+    println!("network libraries: {} workspace crate(s) checked, {} problem(s)", crates.len(), problems.len());
+    for p in &problems {
+        println!("  {p}");
+    }
+    if !problems.is_empty() {
+        bail!("{} network dependency problem(s)", problems.len());
+    }
+    Ok(())
+}
+
 pub fn wasm(_: &[String]) -> anyhow::Result<()> {
     let crates = layers::from_metadata(&metadata()?).map_err(|e| anyhow!(e))?;
     let set: Vec<String> = crates
@@ -102,6 +120,7 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         ("test", Box::new(|| run_args(&["test", "--workspace"]))),
         ("layers", Box::new(|| layers(&[]))),
         ("pins", Box::new(|| crate::pins::run(&[]))),
+        ("network", Box::new(|| network(&[]))),
         ("wasm", Box::new(|| wasm(&[]))),
         ("assets", Box::new(|| crate::assets::run(&[]))),
         ("deny", Box::new(|| deny(&[]))),
