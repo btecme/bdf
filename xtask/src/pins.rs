@@ -8,14 +8,17 @@
 //! The files are read with a YAML parser, so every spelling of the `uses` key (quoted, with spaces
 //! before the colon, in a flow mapping, as a complex key, with the value on the next line or in a
 //! block scalar) is found, and `uses:` text inside a `run` script or a description is not mistaken for
-//! a reference. A value that is not a plain string (an alias, a mapping, a sequence), and a file that is
-//! not valid YAML, are reported rather than skipped: what cannot be read cannot be shown to be pinned.
+//! a reference. An alias used as a key is resolved to the string it names, so `*k : actions/checkout@main`
+//! is a `uses` when `&k` is `uses`. A value that is not a plain string (an alias, a mapping, a sequence),
+//! and a file that is not valid YAML, are reported rather than skipped: what cannot be read cannot be
+//! shown to be pinned.
 //!
 //! The check reads only this repository's files. It cannot see inside a pinned reusable workflow, whose
 //! own `uses:` lines are resolved by GitHub when the job runs: a pinned caller can still run floating
 //! nested references. That residual is recorded in `docs/bdf-evidence/BUILD-003.md`, not hidden by
 //! this check.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -43,6 +46,10 @@ enum Frame {
 struct Reader<'a> {
     file: &'a str,
     stack: Vec<Frame>,
+    /// The text of every anchored scalar by anchor id, so an alias used as a mapping key can be resolved:
+    /// `*k : actions/checkout@main` is a `uses` key when `&k` was the string `uses`. An alias to anything
+    /// else (an anchored collection has no entry) is not the key `uses`.
+    anchored: HashMap<usize, String>,
     out: Vec<Use>,
 }
 
@@ -52,7 +59,11 @@ impl Reader<'_> {
     fn node(&mut self, event: &Event, mark: Marker) {
         let Some(Frame::Map { expecting_key, key_is_uses }) = self.stack.last_mut() else { return };
         if *expecting_key {
-            *key_is_uses = matches!(event, Event::Scalar(text, ..) if text == "uses");
+            *key_is_uses = match event {
+                Event::Scalar(text, ..) => text == "uses",
+                Event::Alias(id) => self.anchored.get(id).is_some_and(|text| text == "uses"),
+                _ => false,
+            };
             *expecting_key = false;
             return;
         }
@@ -76,7 +87,13 @@ impl Reader<'_> {
 impl MarkedEventReceiver for Reader<'_> {
     fn on_event(&mut self, ev: Event, mark: Marker) {
         match &ev {
-            Event::Scalar(..) | Event::Alias(_) => self.node(&ev, mark),
+            Event::Scalar(text, _, anchor, _) => {
+                if *anchor != 0 {
+                    self.anchored.insert(*anchor, text.clone());
+                }
+                self.node(&ev, mark);
+            }
+            Event::Alias(_) => self.node(&ev, mark),
             Event::MappingStart(..) => {
                 self.node(&ev, mark);
                 self.stack.push(Frame::Map { expecting_key: true, key_is_uses: false });
@@ -96,7 +113,7 @@ impl MarkedEventReceiver for Reader<'_> {
 /// The `uses` references in a workflow or composite-action file (every document in it), and the places
 /// that could not be read.
 pub fn scan(file: &str, text: &str) -> Vec<Use> {
-    let mut reader = Reader { file, stack: Vec::new(), out: Vec::new() };
+    let mut reader = Reader { file, stack: Vec::new(), anchored: HashMap::new(), out: Vec::new() };
     if let Err(e) = Parser::new_from_str(text).load(&mut reader, true) {
         let line = e.marker().line();
         reader.unreadable(line, &format!("not valid YAML ({}); a file that cannot be read cannot be shown to be pinned", e.info()));
@@ -243,6 +260,49 @@ mod tests {
             assert_eq!(found.len(), 1, "{what}: expected one violation in {text:?}, got {found:?}");
             assert!(found[0].starts_with("w.yml:") && found[0].contains("@main"), "{what}: {found:?}");
         }
+    }
+
+    /// R2 (Codex retest): an alias that resolves to the string `uses` is the `uses` key. actionlint accepts
+    /// this workflow, so the scanner must report its floating reference, not read the alias as another key.
+    #[test]
+    fn an_alias_used_as_the_uses_key_is_resolved() {
+        let workflow = "name: &stepkey uses
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - *stepkey : actions/checkout@main
+";
+        let found = bad(workflow);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("w.yml:7:") && found[0].contains("@main"), "{found:?}");
+        // The same key through an alias in a flow mapping, and a pinned reference stays clean.
+        assert_eq!(
+            bad("k: &u uses
+steps:
+  - {*u : actions/checkout@main}
+")
+            .len(),
+            1
+        );
+        let pinned = format!(
+            "k: &u uses
+steps:
+  - *u : actions/checkout@{SHA}
+"
+        );
+        assert!(bad(&pinned).is_empty() && scan("w.yml", &pinned).len() == 1, "{:?}", bad(&pinned));
+        // An alias to some other string, or to a collection, is not the key `uses`.
+        assert!(
+            bad("k: &n name
+c: &c [a]
+steps:
+  - *n : actions/checkout@main
+  - *c : x
+")
+            .is_empty()
+        );
     }
 
     #[test]
