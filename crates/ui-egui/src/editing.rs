@@ -692,6 +692,7 @@ impl PdfCraftApp {
     /// save has happened, whatever the refresh does next. A refresh that fails, or an edit made since the bytes were
     /// taken, leaves the document unsaved with its edits and its recovery copy (`forget_recovery` is only reached
     /// when the document really is clean), pointing at the file that was written.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn record_committed_save(&mut self, id: pdfcraft_engine::DocId, dest: &str, bytes: std::sync::Arc<Vec<u8>>, generation: u64) -> bool {
         // Our own write is not a change on disk to reload (#431).
         self.watch.known_now(id, dest);
