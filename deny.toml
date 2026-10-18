@@ -43,6 +43,18 @@ ignore = [
     # private-key operations use aws-lc-rs on native targets and are refused in the browser
     # (ADR-0009). Revisit when a fixed `rsa` ships.
     { id = "RUSTSEC-2023-0071", reason = "rsa is used for verification only (ADR-0009)" },
+
+    # zvariant, zbus_names and zvariant_derive (RUSTSEC-2026-0370, -0371, -0372, published 2026-10-16): the three
+    # crates were folded into zbus 6 and stopped being maintained on their own. These are informational
+    # "unmaintained" notices: no vulnerability, no patched version, the remedy is a move to zbus 6. They reach the
+    # build on Linux only, through zbus 5.19 (used by pdfcraft-platform's portal theme watcher) and through
+    # egui's accessibility stack (accesskit_unix, atspi), which the project does not control; the Windows app does
+    # not link them. One entry per crate, so a different crate or a real vulnerability in these still fails the
+    # check. Revisit when accesskit_unix and atspi move to zbus 6, then move pdfcraft-platform with them and delete
+    # all three entries.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained (merged into zbus 6); Linux accessibility and portal code only" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained (merged into zbus 6); Linux accessibility and portal code only" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained (merged into zbus 6); Linux accessibility and portal code only" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md
