@@ -5,9 +5,10 @@
 //! the disk, then replace the target with it. Every step can fail, and a failure at any step before the
 //! replacement leaves the target exactly as it was; the failure says which step it was.
 //!
-//! * **Exclusive staging.** The file is created new, with an unpredictable name, so a name planted in
-//!   advance is skipped rather than written through ([`crate::staging`]). It is private while it
-//!   holds the document: `0600` on Unix, no sharing on Windows.
+//! * **Exclusive, private staging.** The file is created new, with an unpredictable name, so a name planted in
+//!   advance is skipped rather than written through ([`crate::staging`]). It is private from before the first
+//!   byte is written to after it has replaced the target: `0600` on Unix; on Windows it is given the target's
+//!   own access list before any byte goes in (see below), and is opened with no sharing while it is written.
 //! * **Flush.** The staging file is flushed with `sync_all` before it replaces anything, and a failed
 //!   flush fails the save. (macOS asks for a full flush that SMB and FUSE volumes refuse; there a plain
 //!   `fsync` is the strongest the volume offers.) On Unix the folder is flushed after the replacement
@@ -19,12 +20,18 @@
 //!   the new file the folder's inherited one, which can make a restricted document readable by more
 //!   people) and refuses a read-only or locked target. `ReplaceFile` can fail part way, so it is given
 //!   a backup name, and the original is put back if it is gone afterwards.
+//! * **Windows staging takes the target's access list first.** No safe API sets an access list, but
+//!   `ReplaceFile` gives the file it moves into place the access list of the file it replaces, and it will do
+//!   that for a hard link of the target. So an empty staging file replaces a hard link of the target, which
+//!   hands it the target's access list while it is still empty, and only then are the document's bytes
+//!   written into it. At every later point (while written, flushed, closed, after a failure, after a crash
+//!   that leaves the file behind) the staged bytes are exactly as readable as the target. Where that
+//!   cannot be set up (no hard links) the save is refused before any byte is written, unless the volume has no
+//!   access lists at all (FAT, exFAT), where there is nothing to keep private.
 //!
 //! What this does not do: it does not follow a symbolic link (the link itself is replaced, so a save
-//! can't be redirected out of the folder it was aimed at), it does not preserve a file's owner, and on
-//! Windows the staging file carries the folder's inherited permissions between being closed and
-//! replacing the target, because setting an access list needs unsafe code the workspace forbids.
-//! The exclusive handle keeps others out while the bytes are being written.
+//! can't be redirected out of the folder it was aimed at), and it does not preserve a file's owner. A new file
+//! has no target to take an access list from; it gets the folder's inherited one, as the saved file will.
 
 use std::fs::{File, Metadata};
 use std::io::{self, Write};
@@ -134,12 +141,45 @@ pub struct Steps<'a> {
     pub write: &'a dyn Fn(&mut File, &[u8]) -> io::Result<()>,
     pub flush: &'a dyn Fn(&File) -> io::Result<()>,
     pub replace: &'a dyn Fn(&Replacement) -> io::Result<()>,
+    /// Windows: make a hard link of the target, the first step of giving the staging file the target's access list.
+    pub link: &'a dyn Fn(&Path, &Path) -> io::Result<()>,
+    /// Windows: move the empty staging file over that hard link, which is what hands it the access list.
+    pub adopt_acl: &'a dyn Fn(&Replacement) -> io::Result<()>,
+    /// Windows: whether the target's volume keeps access lists at all.
+    pub has_acls: &'a dyn Fn(&Path) -> io::Result<bool>,
 }
 
 impl Steps<'static> {
     pub fn real() -> Self {
-        Steps { write: &real_write, flush: &real_flush, replace: &real_replace }
+        Steps {
+            write: &real_write,
+            flush: &real_flush,
+            replace: &real_replace,
+            link: &real_link,
+            adopt_acl: &real_replace,
+            has_acls: &volume_has_acls,
+        }
     }
+}
+
+fn real_link(target: &Path, link: &Path) -> io::Result<()> {
+    std::fs::hard_link(target, link)
+}
+
+/// Whether the volume `path` is on keeps access lists (NTFS and ReFS do; FAT and exFAT do not).
+#[cfg(windows)]
+fn volume_has_acls(path: &Path) -> io::Result<bool> {
+    let os = |e: winsafe::co::ERROR| io::Error::from_raw_os_error(e.raw() as i32);
+    let text = path.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the file name is not valid Unicode"))?;
+    let root = winsafe::GetVolumePathName(text).map_err(os)?;
+    let mut flags = winsafe::co::FILE_VOL::default();
+    winsafe::GetVolumeInformation(Some(&root), None, None, None, Some(&mut flags), None).map_err(os)?;
+    Ok(flags.has(winsafe::co::FILE_VOL::PERSISTENT_ACLS))
+}
+
+#[cfg(not(windows))]
+fn volume_has_acls(_: &Path) -> io::Result<bool> {
+    Ok(true)
 }
 
 fn real_write(file: &mut File, bytes: &[u8]) -> io::Result<()> {
@@ -210,7 +250,7 @@ pub fn write_replace_with(
     let existing = inspect(path).map_err(|e| PersistError::at(Stage::Inspect, e))?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
-    let (staging, file) = create_staging(dir, name, form, suffixes).map_err(|e| PersistError::at(Stage::Stage, e))?;
+    let (staging, file) = make_staging(dir, name, form, suffixes, path, &existing, steps)?;
     let cleanup = |e: PersistError| {
         let _ = std::fs::remove_file(&staging);
         e
@@ -258,6 +298,93 @@ pub fn write_output(path: &Path, bytes: &[u8], form: StagingName) -> io::Result<
         return std::fs::write(&target, bytes);
     }
     write_replace(&target, bytes, form).map(|_| ()).map_err(PersistError::into_io)
+}
+
+/// Create the staging file for saving over `target`, private from the start (see the module doc).
+fn make_staging(
+    dir: &Path,
+    name: &str,
+    form: StagingName,
+    suffixes: impl IntoIterator<Item = u64>,
+    target: &Path,
+    existing: &Existing,
+    steps: &Steps,
+) -> Result<(PathBuf, File), PersistError> {
+    let plain = create_staging(dir, name, form, suffixes).map_err(|e| PersistError::at(Stage::Stage, e))?;
+    #[cfg(windows)]
+    if matches!(existing, Existing::File(_)) {
+        return private_staging(plain, target, existing, steps);
+    }
+    let _ = (target, existing, steps);
+    Ok(plain)
+}
+
+/// Windows: turn the empty staging file `plain` into one that has `target`'s access list, before any byte is written.
+///
+/// 1. Hard-link the target under a new name (the link and the target are one file with one access list).
+/// 2. Replace that link with the empty staging file. `ReplaceFile` gives the file it moves into place the access list
+///    of the file it replaces, so the staging file now carries the target's, and the target is untouched.
+/// 3. Open the result for writing.
+///
+/// Every failure removes the names made here (never the target) and refuses the save before any byte has been
+/// written. The one exception is a volume that cannot make hard links *and* keeps no access lists: there is nothing
+/// to keep private, so the plain staging file is used.
+#[cfg(windows)]
+fn private_staging(plain: (PathBuf, File), target: &Path, existing: &Existing, steps: &Steps) -> Result<(PathBuf, File), PersistError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Opens the reparse point itself, so a link swapped in for the name is not followed.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let (empty, handle) = plain;
+    let tagged = |suffix: &str| {
+        let mut name = empty.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(suffix);
+        empty.with_file_name(name)
+    };
+    let (link, backup) = (tagged(".acl"), tagged(".acl.bak"));
+    let remove_all = |names: &[&Path]| names.iter().for_each(|n| drop(std::fs::remove_file(n)));
+    // Keeps the kind of the underlying error (a read-only or locked target is still "permission denied").
+    let refuse = |kind: io::ErrorKind, why: String| PersistError::at(Stage::Stage, io::Error::new(kind, why));
+
+    if let Err(e) = (steps.link)(target, &link) {
+        return match (steps.has_acls)(target) {
+            // No access lists on this volume: the saved file has none either, so the staged bytes are as
+            // protected as they can be.
+            Ok(false) => Ok((empty, handle)),
+            Ok(true) | Err(_) => {
+                drop(handle);
+                remove_all(&[&empty]);
+                Err(refuse(
+                    e.kind(),
+                    format!("{}: a temporary copy can't be kept as private as this file on this volume ({e}); nothing was written", target.display()),
+                ))
+            }
+        };
+    }
+    // `ReplaceFile` needs the empty file closed.
+    drop(handle);
+    let adopt = Replacement { staging: &empty, target: &link, existing, backup: &backup };
+    if let Err(e) = (steps.adopt_acl)(&adopt) {
+        remove_all(&[&empty, &link, &backup]);
+        return Err(refuse(
+            e.kind(),
+            format!("{}: couldn't give the temporary copy the file's access list ({e}); nothing was written", target.display()),
+        ));
+    }
+    // The old name of the link is now a second link to the target: drop it.
+    remove_all(&[&backup]);
+    let opened = std::fs::OpenOptions::new()
+        .write(true)
+        .share_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(&link)
+        .and_then(|f| if f.metadata()?.is_file() { Ok(f) } else { Err(io::Error::other("the temporary file is not a regular file")) });
+    match opened {
+        Ok(file) => Ok((link, file)),
+        Err(e) => {
+            remove_all(&[&link]);
+            Err(refuse(e.kind(), format!("{}: couldn't open the temporary copy ({e}); nothing was written", target.display())))
+        }
+    }
 }
 
 /// Look at what is at `path`. A folder, or anything that is not a regular file or a link, is refused.
@@ -561,7 +688,8 @@ mod tests {
         }
 
         /// BUILD-004: a rename gives the saved file the folder's inherited access list; the replacement must
-        /// not. The second half is the baseline: the rename the old code used does change it.
+        /// not. (The staging file now carries the target's list from the start, so even the rename would keep it;
+        /// the staging tests below are what show a plain staging file would not.)
         #[test]
         fn a_restricted_targets_access_list_survives_the_save() {
             let dir = test_dir("acl");
@@ -572,11 +700,134 @@ mod tests {
             save(&target, b"NEW").unwrap();
             assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
             assert_eq!(acl(&target).unwrap(), before, "the restricted access list must be kept");
-            // The old behaviour, for contrast: renaming over the target loses it. If the folder's inherited list
-            // happened to equal the restricted one this would be vacuous, so it fails loudly instead.
-            let renaming = Steps { replace: &|r| std::fs::rename(r.staging, r.target), ..Steps::real() };
-            save_with(&target, b"NEWER", &renaming).unwrap();
-            assert_ne!(acl(&target).unwrap(), before, "a plain rename was expected to change the access list");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// The one other file in the folder besides `target`: the staging file, whatever it is called.
+        fn staging_beside(dir: &Path, target: &Path) -> PathBuf {
+            let others: Vec<PathBuf> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p != target).collect();
+            assert_eq!(others.len(), 1, "expected exactly the staging file beside the target: {others:?}");
+            others.into_iter().next().unwrap()
+        }
+
+        /// R1 (Codex review): the staged bytes must be no more readable than the target at every point they exist. The
+        /// folder here grants more (inherited entries) than the target's own list, so a staging file that merely
+        /// inherited the folder's list would be readable by accounts the target refuses. The observer is the access
+        /// list itself, read at each boundary: while the bytes are written, at the flush, with the handle closed just
+        /// before the replacement, and at the failure (where a crash would leave the file behind).
+        #[test]
+        fn staged_bytes_are_never_more_readable_than_the_target_at_any_stage() {
+            let dir = test_dir("private-staging");
+            let target = dir.join("secret.pdf");
+            std::fs::write(&target, b"OLD").unwrap();
+            assert!(restrict(&target), "icacls must be available to run this test");
+            let target_acl = acl(&target).unwrap();
+            let folder_acl = acl(&dir).unwrap();
+            assert!(folder_acl.contains("(I)") || !folder_acl.is_empty(), "the folder has an inherited list for the file to wrongly take");
+            let seen = Cell::new(0u32);
+            let check = |when: &str| {
+                seen.set(seen.get() + 1);
+                let staging = staging_beside(&dir, &target);
+                assert_eq!(acl(&staging).unwrap(), target_acl, "staged bytes are exposed {when}: {staging:?}");
+            };
+            let steps = Steps {
+                write: &|f, bytes| {
+                    check("before the first byte is written");
+                    f.write_all(bytes)?;
+                    check("after the bytes were written");
+                    Ok(())
+                },
+                flush: &|f| {
+                    f.sync_all()?;
+                    check("at the flush");
+                    Ok(())
+                },
+                // The handle is closed here: this is where a crash would have left the file readable.
+                replace: &|r| {
+                    check("with the handle closed, before the replacement");
+                    assert_eq!(r.target, target);
+                    Err(io::Error::other("injected: the process dies here"))
+                },
+                ..Steps::real()
+            };
+            let e = save_with(&target, b"SYNTHETIC SECRET NEW BYTES", &steps).unwrap_err();
+            assert_eq!(e.stage, Stage::Replace);
+            assert_eq!(seen.get(), 4, "every boundary was observed");
+            assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+            assert_eq!(acl(&target).unwrap(), target_acl);
+            assert_eq!(entries(&dir), ["secret.pdf"], "the failure leaves no staging, link or backup name");
+            // And the whole save, with nothing injected, ends with the new bytes under the same list.
+            save(&target, b"SYNTHETIC SECRET NEW BYTES").unwrap();
+            assert_eq!(std::fs::read(&target).unwrap(), b"SYNTHETIC SECRET NEW BYTES");
+            assert_eq!(acl(&target).unwrap(), target_acl);
+            assert_eq!(entries(&dir), ["secret.pdf"]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// The same property, shown to be real: a staging file made the old way (plain, inheriting the folder's list)
+        /// does differ from the target's, so the test above cannot pass by accident.
+        #[test]
+        fn a_plainly_created_staging_file_would_have_been_readable_by_more() {
+            let dir = test_dir("plain-staging");
+            let target = dir.join("secret.pdf");
+            std::fs::write(&target, b"OLD").unwrap();
+            assert!(restrict(&target));
+            let (plain, _handle) = create_staging(&dir, "secret.pdf", StagingName::SuffixThenTag, [1]).unwrap();
+            assert_ne!(acl(&plain).unwrap(), acl(&target).unwrap(), "a plain staging file takes the folder's list, not the target's");
+            drop(_handle);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// Where the guarantee cannot be set up the save is refused before a byte is written, and nothing is left.
+        #[test]
+        fn a_save_that_cannot_keep_its_staging_private_is_refused_before_writing() {
+            let dir = test_dir("refuse-private");
+            let target = dir.join("secret.pdf");
+            std::fs::write(&target, b"OLD").unwrap();
+            let written = Cell::new(false);
+            let no_link = |_: &Path, _: &Path| Err(io::Error::other("no hard links here"));
+            let no_write = |_: &mut File, _: &[u8]| {
+                written.set(true);
+                Ok(())
+            };
+            // No hard links on a volume that keeps access lists, and a volume that cannot even say: both refuse.
+            for has_acls in [&(|_: &Path| Ok(true)) as &dyn Fn(&Path) -> io::Result<bool>, &|_: &Path| Err(io::Error::other("unknown volume"))] {
+                let steps = Steps { link: &no_link, has_acls, write: &no_write, ..Steps::real() };
+                let e = save_with(&target, b"SECRET", &steps).unwrap_err();
+                assert_eq!(e.stage, Stage::Stage);
+                assert!(e.to_string().contains("nothing was written"), "{e}");
+                assert!(!written.get(), "no byte was written");
+                assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+                assert_eq!(entries(&dir), ["secret.pdf"]);
+            }
+            // Handing over the access list fails part way: refused the same way, and every name made is removed.
+            let steps = Steps { adopt_acl: &|_| Err(io::Error::other("injected")), write: &no_write, ..Steps::real() };
+            let e = save_with(&target, b"SECRET", &steps).unwrap_err();
+            assert_eq!(e.stage, Stage::Stage);
+            assert!(!written.get());
+            assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+            assert_eq!(entries(&dir), ["secret.pdf"]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// FAT and exFAT keep no access lists and cannot make hard links: there is nothing to keep private, so a save
+        /// there goes ahead (a refusal would stop saving to a USB stick).
+        #[test]
+        fn a_volume_without_access_lists_still_saves() {
+            let dir = test_dir("no-acls");
+            let target = dir.join("stick.pdf");
+            std::fs::write(&target, b"OLD").unwrap();
+            let steps = Steps { link: &|_, _| Err(io::Error::other("no hard links")), has_acls: &|_| Ok(false), ..Steps::real() };
+            save_with(&target, b"NEW", &steps).unwrap();
+            assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+            assert_eq!(entries(&dir), ["stick.pdf"]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn the_real_volume_check_reports_access_lists_on_the_test_volume() {
+            let dir = test_dir("volume");
+            assert!(volume_has_acls(&dir).unwrap(), "the temp folder is on an NTFS or ReFS volume");
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -589,9 +840,10 @@ mod tests {
             perm.set_readonly(true);
             std::fs::set_permissions(&target, perm).unwrap();
             let e = save(&target, b"NEW").unwrap_err();
-            assert_eq!(e.stage, Stage::Replace);
+            // `ReplaceFile` refuses a read-only file at the first step that uses it, before any byte is written.
+            assert_eq!(e.stage, Stage::Stage, "{e}");
             assert_eq!(std::fs::read(&target).unwrap(), b"ORIGINAL");
-            assert_eq!(entries(&dir), ["ro.pdf"], "no staging or backup file is left");
+            assert_eq!(entries(&dir), ["ro.pdf"], "no staging, link or backup file is left");
             let mut perm = std::fs::metadata(&target).unwrap().permissions();
             #[allow(clippy::permissions_set_readonly_false)]
             perm.set_readonly(false);
