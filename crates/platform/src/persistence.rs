@@ -295,11 +295,22 @@ fn keep_permissions(_: &Path, _: &Existing, _: &Path) -> io::Result<()> {
 #[cfg(unix)]
 fn default_new_file_mode(dir: &Path) -> io::Result<u32> {
     use std::os::unix::fs::PermissionsExt;
-    let (probe, file) = create_staging(dir, "mode-probe", StagingName::SuffixThenTag, staging_suffixes())?;
-    drop(file);
-    let mode = std::fs::metadata(&probe).map(|m| m.permissions().mode() & 0o7777);
-    let _ = std::fs::remove_file(&probe);
-    mode
+    // An ordinary open, not the staging helper: that one is private (0600), which is the thing being avoided.
+    let mut last = io::Error::new(io::ErrorKind::AlreadyExists, "every probe name tried is taken");
+    for suffix in staging_suffixes().take(crate::staging::STAGING_ATTEMPTS) {
+        let probe = dir.join(format!(".pdfcraft-mode-probe-{suffix:016x}.tmp"));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(file) => {
+                drop(file);
+                let mode = std::fs::metadata(&probe).map(|m| m.permissions().mode() & 0o7777);
+                let _ = std::fs::remove_file(&probe);
+                return mode;
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
 }
 
 /// The name `ReplaceFile` may park the original under: the staging file's own unpredictable name with
@@ -539,10 +550,14 @@ mod tests {
             Some(text.replace(&prefix, "").lines().filter(|l| !l.starts_with("Successfully")).map(str::trim).collect::<Vec<_>>().join("|"))
         }
 
-        /// Remove inheritance and leave only the current user: a restricted document.
+        /// Give the file an access list of its own: inheritance removed, the current user, and read access for the
+        /// built-in Users group as an explicit entry. That entry is the point: a folder's inherited list shows it as
+        /// inherited, so a file that was renamed into place can never have it as an explicit one, whatever the
+        /// folder (a hosted runner's temp folder grants the same accounts as a plain restriction would).
         fn restrict(path: &Path) -> bool {
             let user = format!("{}:(F)", std::env::var("USERNAME").unwrap_or_default());
-            Command::new("icacls").arg(path).args(["/inheritance:r", "/grant:r", &user]).output().map(|o| o.status.success()).unwrap_or(false)
+            let run = |args: &[&str]| Command::new("icacls").arg(path).args(args).output().map(|o| o.status.success()).unwrap_or(false);
+            run(&["/inheritance:r", "/grant:r", &user]) && run(&["/grant", "*S-1-5-32-545:(R)"])
         }
 
         /// BUILD-004: a rename gives the saved file the folder's inherited access list; the replacement must

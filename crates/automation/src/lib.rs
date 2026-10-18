@@ -2779,6 +2779,8 @@ mod tests {
         };
         let user = format!("{}:(F)", std::env::var("USERNAME").unwrap_or_default());
         assert!(std::process::Command::new("icacls").arg(&target).args(["/inheritance:r", "/grant:r", &user]).output().unwrap().status.success());
+        // An explicit entry that no folder's inherited list can contain, so the comparison below is never vacuous.
+        assert!(std::process::Command::new("icacls").arg(&target).args(["/grant", "*S-1-5-32-545:(R)"]).output().unwrap().status.success());
         let before = acl(&target);
         write_atomic(&target, b"NEW").unwrap();
         assert_eq!(read(&target), "NEW");
