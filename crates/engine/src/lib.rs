@@ -2607,6 +2607,16 @@ fn plural(one: &'static str, many: &'static str, n: usize) -> Label {
     Label::of(if n == 1 { one } else { many })
 }
 
+/// What [`Session::mark_saved_at`] did with a save that reached the disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Saved {
+    /// Editing now continues from the saved file and the document is clean.
+    Rebased,
+    /// The document was edited after the saved bytes were taken: those edits are kept and the document
+    /// is still unsaved.
+    EditedSince,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum EditError {
     #[error("no such document")]
@@ -3742,22 +3752,41 @@ impl Session {
     }
 
     /// Record a successful save of `bytes` (to `path`, if any): rebase editing on the saved file
-    /// so the next save appends only newer edits. Undo history is kept.
+    /// so the next save appends only newer edits. Undo history is kept. This is for a save made with
+    /// no chance of an edit in between; a save that can overlap edits uses [`Self::mark_saved_at`].
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
+        let generation = self.get(id).ok_or(EditError::NoDocument)?.edit_generation();
+        self.mark_saved_at(id, bytes, path, generation).map(|_| ())
+    }
+
+    /// Record that `bytes` were written to `path` (if any), having been taken when the document's
+    /// [`Document::edit_generation`] was `generation`.
+    ///
+    /// The file on disk is what it is, so the document always takes the new `path` and name, even if
+    /// the rest fails. If the document changed since the bytes were taken, nothing else is touched: the
+    /// newer edits stay, the document stays unsaved, and [`Saved::EditedSince`] says so (rebasing on the
+    /// older bytes would discard them). Otherwise editing is rebased on the saved file and the document
+    /// is clean. If the saved bytes can't be reopened, that is an [`EditError::Reopen`] with the
+    /// document still unsaved and still holding its own state, which is not lost.
+    pub fn mark_saved_at(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>, generation: u64) -> Result<Saved, EditError> {
         let doc = self.doc_mut(id)?;
+        if let Some(p) = path {
+            doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+            doc.path = Some(p);
+        }
+        if doc.generation != generation {
+            return Ok(Saved::EditedSince);
+        }
         if let Some(editor) = doc.editor.as_mut() {
             // An encrypted file needs the password it is protected with now (the owner
             // password when known, so saving never downgrades this session's rights).
             editor.cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref())
                 .map_err(|e| EditError::Reopen(e.to_string()))?;
         }
-        if let Some(p) = path {
-            doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
-            doc.path = Some(p);
-        }
         doc.dirty = false;
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
+        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))?;
+        Ok(Saved::Rebased)
     }
 
     /// Enter the permissions (owner) password of a document opened with its user password,

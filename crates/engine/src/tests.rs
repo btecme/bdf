@@ -466,6 +466,49 @@ fn save_is_incremental_stamps_mod_date_and_rebases() {
     assert_eq!(reopened.revisions().len(), 3);
 }
 
+// ---- BUILD-004: a save that reached the disk is recorded accurately ----
+
+/// A later edit arriving between taking the bytes and recording the save must not be discarded: rebasing on
+/// the older bytes would drop it, and clearing the dirty flag would let the window close over it.
+#[test]
+fn an_edit_made_while_a_save_was_in_flight_is_kept_and_stays_unsaved() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "First".into() }).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let saved = s.save_bytes(id).unwrap();
+    // The user edits again before the write is recorded.
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Second".into() }).unwrap();
+    let outcome = s.mark_saved_at(id, saved, Some("/tmp/out/first.pdf".into()), generation).unwrap();
+    assert_eq!(outcome, Saved::EditedSince);
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty, "the newer edit is not on disk");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("Second"), "the newer edit is kept");
+    assert_eq!(doc.name, "first.pdf", "the file on disk is where this document now lives");
+    // The next save writes the newer state, and with no edit in between it rebases and is clean.
+    let generation = s.get(id).unwrap().edit_generation();
+    let second = s.save_bytes(id).unwrap();
+    assert_eq!(s.mark_saved_at(id, second, None, generation).unwrap(), Saved::Rebased);
+    assert!(!s.get(id).unwrap().dirty);
+    assert_eq!(s.get(id).unwrap().info_value("Title").as_deref(), Some("Second"));
+}
+
+/// The file is on disk but cannot be reopened: the document takes the new path (a later Save must not go to
+/// the old file), stays unsaved, and keeps its own state.
+#[test]
+fn a_saved_file_that_cannot_be_reopened_moves_the_document_but_keeps_it_unsaved() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Kept".into() }).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let outcome = s.mark_saved_at(id, Arc::new(b"not a pdf at all".to_vec()), Some("/tmp/out/moved.pdf".into()), generation);
+    assert!(matches!(outcome, Err(EditError::Reopen(_))), "{outcome:?}");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.path.as_deref(), Some("/tmp/out/moved.pdf"));
+    assert_eq!(doc.name, "moved.pdf");
+    assert!(doc.dirty, "the saved file can't be vouched for, so the document is still unsaved");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("Kept"), "the document's own state is intact");
+    assert_eq!(doc.info.pages.len(), 2);
+}
+
 #[test]
 fn undo_still_works_after_save() {
     let (mut s, id) = session_with(2);
