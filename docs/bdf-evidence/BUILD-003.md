@@ -1,6 +1,6 @@
 # BUILD-003 evidence: release infrastructure and the core capability inventory
 
-Status: **in progress. Slices 1 and 2 (workflow pinning and owning the four reusable workflows) pass on hosted runners on head `e5c56e18` (draft PR #2); deliverables 2 to 5 are not started and Codex has not reviewed this work.** Work item BUILD-003 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`. Branch `chore/build-003-release-pinning`, from the merged `main` (`f698f3a8`), pushed to the fork. Dated 2026-10-16. Local commands ran on Windows 11 x64 with Rust 1.99.0, `--offline --locked`, two jobs; raw logs are under the git-ignored `target/bdf-evidence/BUILD-003/`.
+Status: **in progress (updated 2026-10-18). Slices 1 to 3 and the R1 to R3 corrections (including the R2 alias-key follow-up) passed Codex's retest and are merged into `main` (PRs #2 and #3). Deliverables 2, 4 and 5 are written (section 5) on draft PR #4 and pass on a hosted runner, but have not been reviewed. Nothing is enforced at run time.** Work item BUILD-003 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`. Branch `chore/build-003-release-pinning`, from the merged `main` (`f698f3a8`), pushed to the fork. Dated 2026-10-16. Local commands ran on Windows 11 x64 with Rust 1.99.0, `--offline --locked`, two jobs; raw logs are under the git-ignored `target/bdf-evidence/BUILD-003/`.
 
 ## 1. Slice 1: pin every workflow reference (deliverable 1, finding F07)
 
@@ -113,13 +113,34 @@ Branch `chore/build-003-capability-inventory`, stacked on the PR #2 branch. The 
 * **Hosted result (draft PR #3):** on head `e79ad0d6` (the R3 correction with PR #2's R1 and R2 merged in) [CI passes](https://github.com/btecme/bdf/actions/runs/38956326692), fuzz skipped by its event condition. Only the main CI workflow runs for this change; the packaging, FreeBSD and ARM64 workflows are filtered by path and are not runs on this head. Observed through GitHub's API.
 * **Still open, as disclosed:** nothing calls the profile at run time; command dispatch checks ids but not `params`, so `command_run(file.save, params.flatten_fill_sign=true)` is allowed while the equivalent direct tool call is denied (closure belongs to the enforcement work, BUILD-007 and BUILD-008); route completeness is hand-maintained.
 
-## 5. Open and not started
+## 5. Slice 4: job contracts, identity record and network defaults (deliverables 2, 4 and 5)
+
+Branch `chore/build-003-ci-identity-network`, stacked on the capability-inventory branch with PR #2's R2 follow-up merged in. Written 2026-10-17.
+
+**Deliverable 2: hosted parity and BDF job contracts.** [bdf-ci-contracts.md](../bdf-ci-contracts.md) lists every hosted job by its exact GitHub check name with what a pass proves and does not prove, lists the qualification gates that do not exist yet with the prerequisite each is missing, and gives the repository protection to apply, separately from what was observed.
+
+* `ci.yml` gains two jobs that run real checks: `parity` (`cargo xtask parity`, which validates `parity/acrobat-features.toml` against the registry, tools and cited tests; the review's F11 noted CI never ran it) and `BDF gates (pins, network, core inventory)`: `cargo xtask pins`, `cargo xtask network`, and the 14 `capability::` tests with their count checked, because a `cargo test` filter that matches nothing exits 0. The guard was run locally against the real log (`passed=[14]`).
+* The gate steps of the `test` job now run under `!cancelled()`, so one run reports every failing gate instead of stopping at the first (F11).
+* No placeholder: the corpus, oracle, worker, real-UI, performance, signing and web gates are listed as **not implemented** with their prerequisites. The MuPDF oracle is a hand-verified third-party download that no workflow fetches.
+* `cargo xtask pins` now fails when it finds no `uses` reference at all (a moved `.github` directory would otherwise read as "0 unpinned"); a unit test covers it.
+* **Protection is documented, not applied.** Observed through the unauthenticated API on 2026-10-17: `GET /repos/btecme/bdf/branches/main` reports `"protected": false`; the protection endpoint needs admin access, so rulesets could not be read. Changing repository settings is the owner's action.
+* **Hosted result (draft PR #4, head `b7fc1a12`):** [CI passes](https://github.com/btecme/bdf/actions/runs/39032096908) and [Packaging lint passes](https://github.com/btecme/bdf/actions/runs/39032096747). In the CI run, `parity` and `BDF gates (pins, network, core inventory)` ran every step (pins, network, inventory tests with the count guard) and succeeded; `test` on both systems, `wasm32 check` and the dependency job succeed; fuzz is skipped by its event condition. Observed through GitHub's API at step level; I did not read the log text, so the guard's printed count on the runner is inferred from the step passing, not seen.
+
+**Deliverable 4: identity migration record.** [bdf-identity-migration.md](../bdf-identity-migration.md) records each surface as it is (display name, executables, settings and recovery folders, other local data, environment variables, portable markers, the Windows installer's UpgradeCode and ids, Linux and macOS ids, icons, support links, update source, credits, signing) with the migration rule and the decision that is the owner's. It renames nothing, invents no name, GUID or address, and keeps Rust package names. The existing PrintCraft to PdfCraft folder move is the precedent. The decision that matters most: the MSI's UpgradeCode is the upstream's, so a BDF installer either coexists with an upstream install (new ids) or replaces it (same code); that is not decided here.
+
+**Deliverable 5: network and MCP off by default.** [bdf-network-and-activation.md](../bdf-network-and-activation.md) verifies each path from source and tests: the update check runs only when the user asks (pinned by the existing test `nothing_is_asked_until_the_user_checks`), cloud AI has no client, MCP is stdio and launched explicitly with nothing that registers it with an agent host, the control channel is `--control` only and loopback with a per-run token, the single-instance socket is a local per-user socket, no credentials are read from the environment, and no support address was invented. New: `cargo xtask network` fails when a workspace crate other than `pdfcraft` depends on an HTTP or WebSocket library or when the allowlist is stale; 36 crates, 0 problems on the tree, and with the allowlist emptied the live run fails on `pdfcraft` to `ureq`. Two unit tests.
+
+* **Verified how:** reading the code, the existing test, a grep of environment reads and agent-host configuration names, and the gate. **Not verified:** the running app's traffic was not captured.
+* **Open, stated on the page:** the update check and Help links still point at the upstream project; an agent can still reach them through `command_run` and the control channel until the profile is enforced; MCP exposes the CLI's full tool table, not the desktop-core profile (BUILD-007).
+* **Checks:** xtask fmt, clippy `-D warnings` and all 107 xtask tests pass; `cargo xtask network` and the pins tests run on the merged tree.
+
+## 6. Open and not started
 
 * Review of the four rewritten workflows (none has been reviewed by anyone but their author), and a look at the passing jobs' step logs.
 * Downloads inside our own workflows and scripts: the WiX package and the actionlint tarball are hash-checked; the `rustup` bootstrap script on FreeBSD (`https://sh.rustup.rs`) is fetched at run time and is not hash-pinned (it is a script that changes with rustup releases; pinning it needs a decision on how much to trust the first fetch). The OCR models fetched by `cargo xtask models` are verified by SHA-256 against `ATTRIBUTION.toml`.
 * `cargo-deny-action` is a Docker action; its image is built from its own repository at the pinned commit, with the tool version it chooses. A digest or `cargo install --locked` of a pinned version would be tighter.
-* Deliverables 2, 4 and 5 (hosted parity and BDF qualification job contracts; the BDF identity migration record; confirming network and MCP stay off by default) are not started. Deliverable 3 (the inventory) is section 4 and is not enforced at run time. Required-job and repository-protection documentation must separate settings from observed run results; branch protection is a GitHub setting only the owner can change.
-* The MSI still carries the upstream publisher name ("Learning Machines LLC") and the `ai.storyteller.pdfcraft` ids; that is the identity migration (deliverable 4), not done here.
+* Deliverables 2, 4 and 5 are section 5: written and passing on a hosted runner, not yet reviewed. Deliverable 3 (the inventory) is section 4 and is not enforced at run time. Branch protection is a GitHub setting only the owner can change; it is specified, not applied.
+* The MSI still carries the upstream publisher name ("Learning Machines LLC"), UpgradeCode and the `ai.storyteller.pdfcraft` ids; the identity migration record (section 5) specifies the migration and the owner decisions it waits on, and changes none of them.
 
 ## Revision history
 
@@ -133,3 +154,4 @@ Branch `chore/build-003-capability-inventory`, stacked on the PR #2 branch. The 
 | 2026-10-16 | The hosted run showed R1's first post-install check depended on the .NET SDK version; replaced by a file-by-file comparison with the verified package. |
 | 2026-10-16 | Correction R3 after the Codex review: an omitted or null mode is judged as its default; `comments_forms` default `document-and-markups` is core by decision; defaults shared with the tools. |
 | 2026-10-17 | R2 follow-up after the Codex retest: an alias used as the `uses` key is resolved; red-then-green test and one mutation. |
+| 2026-10-17 | Slice 4: CI job contracts (`parity` and `BDF gates` jobs, independent gate steps), identity migration record, network and activation record, `cargo xtask network`, empty-scan guard for `cargo xtask pins`. |

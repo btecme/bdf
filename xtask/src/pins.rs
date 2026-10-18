@@ -177,9 +177,19 @@ pub fn repository_uses(root: &Path) -> Result<Vec<Use>> {
     Ok(out)
 }
 
+/// A scan that found nothing proves nothing: a moved `.github` directory or a failing walk would otherwise
+/// read as "0 unpinned" and pass.
+fn require_references(uses: &[Use]) -> Result<()> {
+    if uses.is_empty() {
+        bail!("no `uses` reference was found under .github/, so nothing was checked; the repository's workflows are expected to use actions");
+    }
+    Ok(())
+}
+
 pub fn run(_: &[String]) -> Result<()> {
     let root = crate::gates::root();
     let uses = repository_uses(&root)?;
+    require_references(&uses)?;
     let bad = violations(&uses);
     println!("workflow pins: {} reference(s) checked, {} unpinned or unreadable", uses.iter().filter(|u| u.unreadable.is_none()).count(), bad.len());
     for b in &bad {
@@ -226,6 +236,20 @@ mod tests {
         );
         assert!(bad(&ok).is_empty(), "{:?}", bad(&ok));
         assert_eq!(scan("w.yml", &ok).len(), 4, "only real uses: lines are read");
+    }
+
+    #[test]
+    fn a_scan_that_found_no_reference_is_not_a_pass() {
+        assert!(require_references(&[]).is_err());
+        assert!(
+            require_references(&scan(
+                "w.yml",
+                "steps:
+  - uses: ./local
+"
+            ))
+            .is_ok()
+        );
     }
 
     #[test]
