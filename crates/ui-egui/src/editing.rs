@@ -681,7 +681,19 @@ impl PdfCraftApp {
             self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
             return false;
         }
-        // The file is written from here on. Our own write is not a change on disk to reload (#431).
+        self.record_committed_save(id, dest, bytes, generation)
+    }
+
+    /// The bytes of a save have replaced the file at `dest` (they were taken when the document's edit generation was
+    /// `generation`): record that in the document and tell the user what state it is in. Returns `true` only when
+    /// the document is now saved and clean, which is when a pending "then close" may go ahead.
+    ///
+    /// The file on disk and the document are two outcomes here, kept apart: once the write has replaced the file the
+    /// save has happened, whatever the refresh does next. A refresh that fails, or an edit made since the bytes were
+    /// taken, leaves the document unsaved with its edits and its recovery copy (`forget_recovery` is only reached
+    /// when the document really is clean), pointing at the file that was written.
+    pub fn record_committed_save(&mut self, id: pdfcraft_engine::DocId, dest: &str, bytes: std::sync::Arc<Vec<u8>>, generation: u64) -> bool {
+        // Our own write is not a change on disk to reload (#431).
         self.watch.known_now(id, dest);
         match self.session.mark_saved_at(id, bytes, Some(dest.to_string()), generation) {
             Ok(pdfcraft_engine::Saved::EditedSince) => {
@@ -703,6 +715,8 @@ impl PdfCraftApp {
                 true
             }
             Err(e) => {
+                // The file is saved but the document could not be continued from it; the engine has left the
+                // document unsaved and untouched, so recovery stays.
                 self.notify_fmt("Saved, but reopening failed: {e}", &[("e", &e.to_string())]);
                 false
             }

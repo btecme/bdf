@@ -492,6 +492,54 @@ fn an_edit_made_while_a_save_was_in_flight_is_kept_and_stays_unsaved() {
     assert_eq!(s.get(id).unwrap().info_value("Title").as_deref(), Some("Second"));
 }
 
+/// A file that is valid PDF structure but has no page the viewer can show: the page tree's only child points at an
+/// object that does not exist (same length as the real reference, so the cross-reference table still matches).
+fn unshowable(pages: usize) -> Arc<Vec<u8>> {
+    let good = fixture(pages);
+    let text = String::from_utf8(good).expect("the fixture is ASCII");
+    Arc::new(text.replacen("/Kids [4 0 R", "/Kids [9 0 R", 1).into_bytes())
+}
+
+/// R2 (Codex review): bytes that read as a PDF but cannot be shown must not replace the working state, which holds
+/// the user's edit. The old code assigned the new document, cleared the flag and only then failed.
+#[test]
+fn a_saved_file_that_reads_but_cannot_be_shown_leaves_the_working_edit_alone() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "KEEP WORKING EDIT".into() }).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let bad = unshowable(1);
+    assert!(pdfcraft_cos::Document::open(bad.clone()).is_ok(), "the probe is structurally valid, so only the refresh can reject it");
+    let outcome = s.mark_saved_at(id, bad, Some("/tmp/out/probe.pdf".into()), generation);
+    assert!(matches!(outcome, Err(EditError::Reopen(_))), "{outcome:?}");
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty, "the document is unsaved");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("KEEP WORKING EDIT"), "the working edit is still in the document");
+    assert_eq!(doc.info.pages.len(), 1);
+    assert_eq!(doc.path.as_deref(), Some("/tmp/out/probe.pdf"), "the committed destination is kept");
+    assert!(doc.can_undo().is_some(), "the undo history is intact");
+    // And it is still saveable: the next save writes the edit.
+    let saved = s.save_bytes(id).unwrap();
+    assert!(String::from_utf8_lossy(&saved).contains("KEEP WORKING EDIT"));
+}
+
+/// R2: a Save As of a document with no edits, where the written file cannot be taken up: the document must read as
+/// unsaved, or closing it would not ask and recovery would not keep it.
+#[test]
+fn a_clean_document_whose_saved_copy_cannot_be_reopened_becomes_unsaved() {
+    for (what, bytes) in [("not a PDF", Arc::new(b"not a pdf at all".to_vec())), ("unshowable", unshowable(2))] {
+        let (mut s, id) = session_with(2);
+        assert!(!s.get(id).unwrap().dirty);
+        let generation = s.get(id).unwrap().edit_generation();
+        let outcome = s.mark_saved_at(id, bytes, Some("/tmp/out/save-as.pdf".into()), generation);
+        assert!(matches!(outcome, Err(EditError::Reopen(_))), "{what}: {outcome:?}");
+        let doc = s.get(id).unwrap();
+        assert!(doc.dirty, "{what}: the document must be marked unsaved");
+        assert_eq!(doc.path.as_deref(), Some("/tmp/out/save-as.pdf"), "{what}");
+        assert_eq!(doc.info.pages.len(), 2, "{what}: still showing its own pages");
+        assert!(s.get(id).unwrap().edit_generation() > generation, "{what}: autosave sees the change");
+    }
+}
+
 /// The file is on disk but cannot be reopened: the document takes the new path (a later Save must not go to
 /// the old file), stays unsaved, and keeps its own state.
 #[test]

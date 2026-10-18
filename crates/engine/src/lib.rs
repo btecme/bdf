@@ -3766,8 +3766,9 @@ impl Session {
     /// the rest fails. If the document changed since the bytes were taken, nothing else is touched: the
     /// newer edits stay, the document stays unsaved, and [`Saved::EditedSince`] says so (rebasing on the
     /// older bytes would discard them). Otherwise editing is rebased on the saved file and the document
-    /// is clean. If the saved bytes can't be reopened, that is an [`EditError::Reopen`] with the
-    /// document still unsaved and still holding its own state, which is not lost.
+    /// is clean. If the saved bytes can't be reopened, or reopen but can't be shown, that is an
+    /// [`EditError::Reopen`]: the document keeps its working state (edits, undo history, view) untouched
+    /// and is marked unsaved even if it was clean, so close and recovery still see it.
     pub fn mark_saved_at(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>, generation: u64) -> Result<Saved, EditError> {
         let doc = self.doc_mut(id)?;
         if let Some(p) = path {
@@ -3777,16 +3778,46 @@ impl Session {
         if doc.generation != generation {
             return Ok(Saved::EditedSince);
         }
-        if let Some(editor) = doc.editor.as_mut() {
-            // An encrypted file needs the password it is protected with now (the owner
-            // password when known, so saving never downgrades this session's rights).
-            editor.cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref())
-                .map_err(|e| EditError::Reopen(e.to_string()))?;
-        }
+        let before = doc.generation;
+        // The rebase is prepared and checked beside the working state, and only published when all of it
+        // worked: until then the document's edits, undo history and view are exactly what they were.
+        let candidate = match doc.editor.as_ref() {
+            // An encrypted file needs the password it is protected with now (the owner password when
+            // known, so saving never downgrades this session's rights).
+            Some(editor) => match pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()) {
+                Ok(cos) => Some(cos),
+                Err(e) => return Err(Self::left_unsaved(doc, before, EditError::Reopen(e.to_string()))),
+            },
+            None => None,
+        };
+        let Some(candidate) = candidate else {
+            doc.dirty = false;
+            doc.generation += 1;
+            return Self::refresh(doc).map(|()| Saved::Rebased).map_err(|e| Self::left_unsaved(doc, before + 1, e));
+        };
+        let xfa = doc.xfa.clone();
+        let working = doc.editor.as_mut().map(|editor| std::mem::replace(&mut editor.cos, candidate));
         doc.dirty = false;
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))?;
+        if let Err(e) = Self::refresh(doc) {
+            // The saved file reads as a PDF but the document cannot be shown from it: keep working on what
+            // was there, which still holds every edit.
+            if let (Some(editor), Some(working)) = (doc.editor.as_mut(), working) {
+                editor.cos = working;
+            }
+            doc.xfa = xfa;
+            Self::show_released(doc);
+            return Err(Self::left_unsaved(doc, before + 1, e));
+        }
         Ok(Saved::Rebased)
+    }
+
+    /// The saved file could not be taken as the new base: the document is unsaved from here on, even if it
+    /// was clean (a Save As of a document with no edits), so closing it asks and recovery keeps it.
+    fn left_unsaved(doc: &mut Document, generation: u64, e: EditError) -> EditError {
+        doc.dirty = true;
+        doc.generation = generation + 1;
+        e
     }
 
     /// Enter the permissions (owner) password of a document opened with its user password,

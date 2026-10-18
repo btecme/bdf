@@ -381,3 +381,96 @@ fn control_click_effects_are_visible_when_the_reply_arrives() {
     assert_eq!(files_in(&s), 0, "discarded by the time the click is answered");
     assert_eq!(call(&mut h, "ui.state", serde_json::json!({}))["dialog"], serde_json::Value::Null);
 }
+
+// ---- BUILD-004 (R2): a save that reached the disk but cannot be taken up is not "saved" ----
+
+/// Valid PDF structure with no page the viewer can show: the page tree's only child is an object that does not exist
+/// (the same length as the real reference, so the cross-reference table still matches).
+fn unshowable(pages: usize) -> Vec<u8> {
+    String::from_utf8(fixture(pages)).expect("ASCII").replacen("/Kids [4 0 R", "/Kids [9 0 R", 1).into_bytes()
+}
+
+fn app_with_recovery(s: &RecoveryStore) -> PdfCraftApp {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.enable_recovery(s.clone());
+    app
+}
+
+/// The file is on disk, but the document cannot continue from it. Whatever the document held stays: unsaved, with its
+/// edit, its recovery copy, the destination the write went to, and a close that still asks.
+#[test]
+fn a_committed_save_that_cannot_be_taken_up_keeps_the_edit_the_recovery_copy_and_the_close_prompt() {
+    for (what, bad) in [("unreadable bytes", b"not a pdf at all".to_vec()), ("unshowable page tree", unshowable(2))] {
+        let s = store(&format!("committed-{}", what.len()));
+        let mut app = app_with_recovery(&s);
+        app.open_bytes("work.pdf", Some("/docs/work.pdf".into()), fixture(2)).unwrap();
+        assert!(app.apply_edit(Edit::DeletePages { pages: vec![0] }));
+        app.autosave_now();
+        assert_eq!(s.list().len(), 1, "{what}: the working copy is in recovery");
+        let id = app.views[0].id;
+        let generation = app.session.get(id).unwrap().edit_generation();
+
+        let saved = app.record_committed_save(id, "/docs/saved-as.pdf", std::sync::Arc::new(bad), generation);
+
+        assert!(!saved, "{what}: not saved, so a pending close must not go ahead");
+        let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+        assert!(toast.contains("Saved, but reopening failed"), "{what}: {toast}");
+        let doc = app.session.get(id).unwrap();
+        assert!(doc.dirty, "{what}: the document is unsaved");
+        assert_eq!(doc.info.pages.len(), 1, "{what}: the delete is still in the document");
+        assert_eq!(doc.path.as_deref(), Some("/docs/saved-as.pdf"), "{what}: it points at the file that was written");
+        assert_eq!(s.list().len(), 1, "{what}: the recovery copy is kept");
+        app.request_close_tab(0);
+        assert!(app.close_request.is_some(), "{what}: closing still asks about the unsaved work");
+    }
+}
+
+/// A Save As of a document with no edits, whose written copy cannot be taken up: it must read as unsaved, or closing
+/// would not ask and autosave would never write a recovery copy.
+#[test]
+fn a_clean_document_whose_saved_copy_cannot_be_taken_up_becomes_unsaved_and_recoverable() {
+    for (what, bad) in [("unreadable bytes", b"not a pdf at all".to_vec()), ("unshowable page tree", unshowable(2))] {
+        let s = store(&format!("clean-{}", what.len()));
+        let mut app = app_with_recovery(&s);
+        app.open_bytes("work.pdf", None, fixture(2)).unwrap();
+        let id = app.views[0].id;
+        assert!(!app.session.get(id).unwrap().dirty);
+        let generation = app.session.get(id).unwrap().edit_generation();
+
+        assert!(!app.record_committed_save(id, "/docs/save-as.pdf", std::sync::Arc::new(bad), generation), "{what}");
+
+        assert!(app.session.get(id).unwrap().dirty, "{what}: unsaved");
+        assert_eq!(app.session.get(id).unwrap().path.as_deref(), Some("/docs/save-as.pdf"), "{what}");
+        app.autosave_now();
+        assert_eq!(s.list().len(), 1, "{what}: autosave now writes the recovery copy");
+        app.request_close_tab(0);
+        assert!(app.close_request.is_some(), "{what}: closing asks");
+    }
+}
+
+/// An edit made after the bytes were taken, before the write was recorded: kept, unsaved, recoverable, and said so.
+#[test]
+fn an_edit_made_while_the_save_was_in_flight_is_not_lost_or_called_saved() {
+    let s = store("in-flight");
+    let mut app = app_with_recovery(&s);
+    app.open_bytes("work.pdf", Some("/docs/work.pdf".into()), fixture(3)).unwrap();
+    assert!(app.apply_edit(Edit::DeletePages { pages: vec![0] }));
+    let id = app.views[0].id;
+    let generation = app.session.get(id).unwrap().edit_generation();
+    let taken = app.session.save_bytes(id).unwrap();
+    app.autosave_now();
+    // The user edits again before the write is recorded.
+    assert!(app.apply_edit(Edit::DeletePages { pages: vec![0] }));
+
+    assert!(!app.record_committed_save(id, "/docs/work.pdf", taken, generation));
+
+    let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+    assert!(toast.contains("changes made while saving are not saved yet"), "{toast}");
+    let doc = app.session.get(id).unwrap();
+    assert!(doc.dirty);
+    assert_eq!(doc.info.pages.len(), 1, "the later edit is still there");
+    assert_eq!(s.list().len(), 1, "the recovery copy is kept");
+    app.request_close_tab(0);
+    assert!(app.close_request.is_some());
+}
