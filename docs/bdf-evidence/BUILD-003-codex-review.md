@@ -1,10 +1,6 @@
 # BUILD-003 — independent Codex review
 
-Status: **changes requested on the submitted slices; BUILD-003 remains incomplete.**
-
-Latest: [the correction retest](BUILD-003-codex-retest.md) closes R1 and R3; the owner approved
-annotation-inclusive core printing on 2026-10-16. R2 remains open because aliases used as mapping keys bypass the new scanner. The initial
-findings below are retained as the original review record.
+Status: **R1–R3 corrections pass independent retest for slices 1–3; BUILD-003 remains incomplete.**
 
 Reviewed 2026-10-16: [PR #2](https://github.com/btecme/bdf/pull/2) at
 `e2063c687aa357eaafc61ddd3c067e4184993af6` (workflow ownership/pinning), and stacked
@@ -16,6 +12,8 @@ that dependency merges. Neither BUILD-003 PR was merged or pushed by this review
 The earlier PR #1 is already merged as `f698f3a8`; independently checked GitHub results show
 all four configured workflows succeeded on its final head `7e85027d`, with fuzz skipped by
 the existing event condition. The owner's BUILD-001/002 acceptance is preserved.
+
+Latest: [the final correction retest](BUILD-003-codex-retest.md#final-correction-retest-and-merge-preparation--2026-10-17) closes R1–R3. PR #2 is merged; #3 is retargeted to `main` and undergoing merge preparation. Initial findings below are historical.
 
 ## Findings
 
