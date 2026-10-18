@@ -41,7 +41,7 @@ impl Automation {
         let doc = self.doc(a)?;
         let (id, count) = (doc.id, doc.info.pages.len());
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let subset = match a.opt_str("subset")?.unwrap_or("all") {
+        let subset = match a.opt_str("subset")?.unwrap_or(crate::defaults::PRINT_SUBSET) {
             "all" => Subset::All,
             "odd" => Subset::Odd,
             "even" => Subset::Even,
@@ -49,7 +49,7 @@ impl Automation {
         };
         let pages = print::select_pages(count, a.opt_str("pages")?, &labels, subset, a.opt_bool("reverse")?.unwrap_or(false))
             .map_err(|e| bad(e.to_string()))?;
-        let layout = match a.opt_str("layout")?.unwrap_or("fit") {
+        let layout = match a.opt_str("layout")?.unwrap_or(crate::defaults::PRINT_LAYOUT) {
             "fit" => Layout::Size(SizeMode::Fit),
             "actual" => Layout::Size(SizeMode::Actual),
             "shrink" => Layout::Size(SizeMode::Shrink),
@@ -92,19 +92,21 @@ impl Automation {
             },
             l => return Err(bad(format!("unknown layout {l:?}"))),
         };
-        if matches!(layout, Layout::Multiple { order: PageOrder::CutStack, .. }) && a.opt_str("duplex")?.unwrap_or("off") != "off" {
+        if matches!(layout, Layout::Multiple { order: PageOrder::CutStack, .. })
+            && a.opt_str("duplex")?.unwrap_or(crate::defaults::PRINT_DUPLEX) != "off"
+        {
             return Err(bad("cut-and-stack printing needs duplex off (single-sided sheets)"));
         }
         if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {
             return Err(bad("cut-stack order needs layout multiple"));
         }
-        let orientation = match a.opt_str("orientation")?.unwrap_or("auto") {
+        let orientation = match a.opt_str("orientation")?.unwrap_or(crate::defaults::PRINT_ORIENTATION) {
             "auto" => Orientation::Auto,
             "portrait" => Orientation::Portrait,
             "landscape" => Orientation::Landscape,
             o => return Err(bad(format!("unknown orientation {o:?}"))),
         };
-        let content = match a.opt_str("comments_forms")?.unwrap_or("document-and-markups") {
+        let content = match a.opt_str("comments_forms")?.unwrap_or(crate::defaults::PRINT_COMMENTS_FORMS) {
             "document" => Content::Document,
             "document-and-markups" => Content::DocumentAndMarkups,
             "document-and-stamps" => Content::DocumentAndStamps,
@@ -142,7 +144,7 @@ impl Automation {
                     printer: if printer == "default" { None } else { Some(printer.to_string()) },
                     copies: a.opt_int("copies")?.unwrap_or(1).clamp(1, 999) as u32,
                     collate: a.opt_bool("collate")?.unwrap_or(true),
-                    duplex: Some(match a.opt_str("duplex")?.unwrap_or("off") {
+                    duplex: Some(match a.opt_str("duplex")?.unwrap_or(crate::defaults::PRINT_DUPLEX) {
                         "off" => spool::Duplex::Off,
                         "long-edge" => spool::Duplex::LongEdge,
                         "short-edge" => spool::Duplex::ShortEdge,
