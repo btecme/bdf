@@ -1,6 +1,8 @@
 # BUILD-004 — independent Codex review
 
-Status: **changes requested: two P1 save-safety findings remain. No merge recommended.**
+Status: **historical initial review: two P1 findings at the heads below.**
+
+Latest disposition: [2026-10-18 correction retest](BUILD-004-codex-retest.md) at `c1d7b67e`: R1 closes; R2 remains open because failed refresh contaminates the next recovery snapshot. No merge recommended yet.
 
 Reviewed 2026-10-18: [PR #5](https://github.com/btecme/bdf/pull/5), initial head
 `0d1a64f20af456d86b78c336dc0a7b41db23028d` and follow-up
