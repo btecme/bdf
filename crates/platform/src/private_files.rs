@@ -24,7 +24,7 @@
 
 use std::fs::File;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::staging::{StagingName, create_staging, staging_suffixes};
 
@@ -105,6 +105,7 @@ mod imp {
 #[cfg(windows)]
 mod imp {
     use super::*;
+    use std::path::PathBuf;
 
     pub fn verify_private(path: &Path) -> io::Result<()> {
         let me = current_user_sid()?;
@@ -180,9 +181,10 @@ mod imp {
 #[cfg_attr(not(windows), allow(dead_code))]
 mod sddl {
     /// Principals whose access is expected on a private file besides its owner: the local system, the built-in
-    /// administrators (who can take any file) and the creator-owner placeholders. SDDL writes the well-known ones
-    /// as two-letter aliases.
-    const TRUSTED: &[&str] = &["SY", "BA", "CO", "OW", "S-1-5-18", "S-1-5-32-544", "S-1-3-0", "S-1-3-4"];
+    /// administrators group and the built-in Administrator account (`LA`, always an administrator; on a machine
+    /// where the user *is* that account, SDDL prints the user's own SID as `LA`), who can take any file anyway, and
+    /// the creator-owner placeholders. SDDL writes the well-known ones as two-letter aliases.
+    const TRUSTED: &[&str] = &["SY", "BA", "LA", "CO", "OW", "S-1-5-18", "S-1-5-32-544", "S-1-3-0", "S-1-3-4"];
 
     /// Why the access list in `saved` (the text `icacls /save` wrote: the file's name, then its SDDL) is not private
     /// to `me`, a SID string; `Ok` when every entry that grants access belongs to a trusted principal.
@@ -256,6 +258,8 @@ mod sddl {
             assert!(check_dacl(&saved(&format!("PAI(A;;FA;;;{ME})")), ME).is_ok());
             assert!(check_dacl(&saved(&format!("PAI(A;;FA;;;{ME})(A;;FA;;;SY)(A;;FA;;;BA)")), ME).is_ok());
             assert!(check_dacl(&saved("AI(A;;FA;;;S-1-5-18)(A;;FA;;;S-1-5-32-544)(A;ID;FA;;;CO)"), ME).is_ok());
+            // A user who is the machine's built-in Administrator appears as `LA` (seen on a hosted Windows runner).
+            assert!(check_dacl(&saved("AI(A;;FA;;;LA)(A;;FA;;;SY)(A;;FA;;;BA)"), ME).is_ok());
             assert!(check_dacl(&saved("P"), ME).is_ok(), "an empty protected list grants nothing");
         }
 
@@ -298,6 +302,7 @@ mod sddl {
 mod tests {
     use super::*;
     use std::cell::Cell;
+    use std::path::PathBuf;
 
     fn test_dir(test: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("pdfcraft-private-{}-{test}", std::process::id()));

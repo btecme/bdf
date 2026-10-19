@@ -712,6 +712,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pdfcraft-app-control-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        // The token is only published into a private folder, which a temp folder is not on every machine.
+        private_folder(&dir);
         let path = |name: &str| dir.join(name).to_str().unwrap().to_owned();
 
         // A folder in the way stands in for a file another user created first: the write fails.
