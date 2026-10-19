@@ -452,50 +452,19 @@ fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::
 
 /// Write the control endpoint so that only the current user can read the token.
 ///
-/// The JSON goes to a new file next to `path`, created fresh (owner-only on Unix), which then
-/// replaces `path`. Opening `path` itself would follow a link planted there and truncate whatever
-/// it points at; a rename replaces the link and leaves its target alone. A reader polling for the
-/// file also never sees it half-written.
+/// This is `pdfcraft_platform::private_files`: the JSON goes to a new, private file next to `path`, which is
+/// checked to be private to this user *before* the token is written (owner-only mode on Unix; on Windows an
+/// access list with no entry for anyone but this user, the system and the administrators, so a folder that hands
+/// its files to ordinary users refuses the write), and which then replaces `path`. Opening `path` itself would
+/// follow a link planted there and truncate whatever it points at; a rename replaces the link and leaves its
+/// target alone. A reader polling for the file also never sees it half-written.
 fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()> {
-    use std::io::{ErrorKind, Write};
     let json = serde_json::json!({ "port": port, "token": token, "pid": std::process::id() }).to_string();
-    let path = std::path::Path::new(path);
-    let name = path.file_name().ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "not a file name"))?;
-    // Unpredictable suffixes, so the name can't be planted in advance. `RandomState` is keyed from
-    // the operating system's random source.
-    let random = std::hash::RandomState::new();
-    for i in 0..16u32 {
-        let mut staged = std::ffi::OsString::from(".");
-        staged.push(name);
-        staged.push(format!(".{:016x}.tmp", std::hash::BuildHasher::hash_one(&random, i)));
-        let staged = path.with_file_name(staged);
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let file = match opts.open(&staged) {
-            Ok(f) => f,
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
-            // Windows refuses `create_new` on a folder with "access denied"; the name is taken all
-            // the same. A folder we can't write to, with nothing at the name, still fails here.
-            Err(e) if e.kind() == ErrorKind::PermissionDenied && staged.symlink_metadata().is_ok() => continue,
-            Err(e) => return Err(e),
-        };
-        // The block closes the file before it is renamed.
-        let written = {
-            let mut file = file;
-            file.write_all(json.as_bytes())
-        };
-        let done = written.and_then(|()| std::fs::rename(&staged, path));
-        if done.is_err() {
-            let _ = std::fs::remove_file(&staged);
-        }
-        return done;
-    }
-    Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free name for the control file's temporary copy"))
+    pdfcraft_platform::private_files::write_private_file(
+        std::path::Path::new(path),
+        json.as_bytes(),
+        pdfcraft_platform::staging::StagingName::TagThenSuffix,
+    )
 }
 
 /// How wgpu finds a GPU. Each choice yields to its wgpu environment variable.
@@ -1243,7 +1212,27 @@ mod tests {
         let d = std::env::temp_dir().join(format!("pdfcraft-control-file-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
+        private_folder(&d);
         d
+    }
+
+    /// Make `dir` private to the current user, as a control file's folder has to be. A temp folder inherits whatever
+    /// its parent grants, which on a shared or permissively configured machine includes other accounts, and the
+    /// write is (rightly) refused there; the tests of the file's other properties need a folder that is private.
+    fn private_folder(dir: &std::path::Path) {
+        #[cfg(windows)]
+        {
+            let user = format!("{}:(OI)(CI)F", std::env::var("USERNAME").unwrap_or_default());
+            let ok = std::process::Command::new("icacls")
+                .arg(dir)
+                .args(["/inheritance:r", "/grant:r", &user])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            assert!(ok, "icacls must be available to run these tests");
+        }
+        #[cfg(not(windows))]
+        let _ = dir;
     }
 
     /// The control file's port and token, and every name in its folder.
@@ -1305,6 +1294,30 @@ mod tests {
             let mode = std::fs::metadata(dir.join("ctl.json")).unwrap().permissions().mode();
             assert_eq!(mode & 0o077, 0, "only the owner can read the token: {mode:o}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// F01: a folder that hands its files to other accounts must not receive the token. The write is refused with
+    /// a message that names the folder and why, no file is left, and the token is nowhere in the error.
+    #[cfg(windows)]
+    #[test]
+    fn a_control_file_folder_that_other_accounts_can_read_is_refused_before_the_token_is_written() {
+        let dir = scratch();
+        let user_can_only = dir.clone();
+        // The folder grants ordinary users read access, which new files inherit.
+        let granted = std::process::Command::new("icacls").arg(&dir).args(["/grant", "*S-1-5-32-545:(OI)(CI)R"]).output().unwrap().status.success();
+        assert!(granted);
+        let e = super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "SECRET-t0ken").unwrap_err();
+        assert!(e.to_string().contains("nothing was written") && !e.to_string().contains("SECRET-t0ken"), "{e}");
+        assert!(std::fs::read_dir(&user_can_only).unwrap().next().is_none(), "no control file and no temporary file");
+        // And the startup message the user sees says what to do, without the token.
+        let message = super::open_control_channel(
+            &dir.join("ctl.json").to_string_lossy(),
+            Ok(pdfcraft_ui_egui::control::Endpoint { port: 4242, token: "SECRET-t0ken".into() }),
+        )
+        .unwrap_err();
+        assert!(message.contains("folder only you can write") && !message.contains("SECRET-t0ken"), "{message}");
+        let _ = std::process::Command::new("icacls").arg(&dir).arg("/reset").output();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

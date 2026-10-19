@@ -5,4 +5,5 @@
 
 pub mod desktop_theme;
 pub mod persistence;
+pub mod private_files;
 pub mod staging;
