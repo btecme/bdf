@@ -41,8 +41,11 @@
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, TrySendError, channel, sync_channel};
 use std::sync::{Arc, Mutex};
+
+#[cfg(not(target_arch = "wasm32"))]
+use pdfcraft_platform::framing::{LineRead, read_line_limited, skip_line};
 
 use egui::accesskit::{self, Action, NodeId};
 use serde_json::{Value, json};
@@ -83,17 +86,27 @@ pub struct ControlRequest {
 /// Sends requests to the app (from the transport thread or a test).
 #[derive(Clone)]
 pub struct ControlClient {
-    tx: Sender<ControlRequest>,
+    tx: SyncSender<ControlRequest>,
     ctx: egui::Context,
 }
+
+/// Requests that may wait for the app at once. The app answers a few per frame, so a queue longer than this means
+/// it is stuck or being flooded, and the right answer is an explicit "busy", not unbounded memory (F04).
+const QUEUE_LIMIT: usize = 64;
 
 impl ControlClient {
     /// Queue a request; the reply arrives on the returned receiver once the app has handled it.
     pub fn send(&self, method: &str, params: Value) -> Receiver<Reply> {
         let (reply, rx) = channel();
         let req = ControlRequest { method: method.into(), params, reply };
-        if let Err(e) = self.tx.send(req) {
-            let _ = e.0.reply.send(Err("the app has closed".into()));
+        match self.tx.try_send(req) {
+            Ok(()) => {}
+            Err(TrySendError::Full(req)) => {
+                let _ = req.reply.send(Err(format!("the app is busy: {QUEUE_LIMIT} requests are already waiting; try again shortly")));
+            }
+            Err(TrySendError::Disconnected(req)) => {
+                let _ = req.reply.send(Err("the app has closed".into()));
+            }
         }
         self.ctx.request_repaint();
         rx
@@ -173,7 +186,7 @@ pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
     let shared = Arc::new(Mutex::new(Shared::default()));
     ctx.add_plugin(ControlPlugin { shared: shared.clone() });
     ctx.enable_accesskit();
-    let (tx, rx) = channel();
+    let (tx, rx) = sync_channel(QUEUE_LIMIT);
     (Control { rx, shared, pending: Vec::new(), next_tag: 1 }, ControlClient { tx, ctx: ctx.clone() })
 }
 
@@ -780,120 +793,187 @@ pub struct Endpoint {
     pub token: String,
 }
 
+/// Resource limits of the control transport (F04). The channel is opt-in and loopback-only, but a local process can
+/// still open connections, so every resource a client can make the app hold has a bound and a clear refusal.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Limits {
+    /// Connections served at once; the next is refused with an error, not queued.
+    pub max_connections: usize,
+    /// How long a new connection has to authenticate, from the moment it connects.
+    pub auth_deadline: std::time::Duration,
+    /// How long an authenticated connection may stay silent before it is closed.
+    pub idle_timeout: std::time::Duration,
+    /// How long a reply may take to be written.
+    pub write_timeout: std::time::Duration,
+    /// Longest request line after authentication. A longer one is refused and skipped; later requests still work.
+    pub max_request_line: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            max_connections: 8,
+            auth_deadline: std::time::Duration::from_secs(5),
+            idle_timeout: std::time::Duration::from_secs(300),
+            write_timeout: std::time::Duration::from_secs(10),
+            max_request_line: 1 << 20,
+        }
+    }
+}
+
+/// The most that is read and thrown away to get past an over-long line before the connection is closed instead.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_DISCARD: u64 = 16 << 20;
+
+/// How often a blocked read wakes to check its deadline.
+#[cfg(not(target_arch = "wasm32"))]
+const READ_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Listen on `127.0.0.1` (random port) and forward authenticated requests to `client`.
 ///
 /// Protocol: newline-delimited JSON-RPC 2.0. The first request on a connection must be
 /// `{"method": "auth", "params": {"token": …}}`; anything else closes the connection, and so does
-/// a line longer than [`MAX_AUTH_LINE`] before that.
+/// a line longer than [`MAX_AUTH_LINE`] before that, or not authenticating within the deadline.
+///
+/// Bounds ([`Limits`]): at most `max_connections` at once (the next gets error -32003 and is closed), an
+/// authentication deadline and an idle timeout, request lines capped (error -32600, the rest of the line skipped,
+/// the connection kept), and a bounded queue to the app (error -32000 "busy").
 #[cfg(not(target_arch = "wasm32"))]
 pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
-    use std::io::{BufReader, Write};
+    serve_with(client, Limits::default())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     let token = random_token()?;
     let expected = token.clone();
+    let active = Arc::new(AtomicUsize::new(0));
     std::thread::Builder::new().name("pdfcraft-control".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
-            let client = client.clone();
-            let expected = expected.clone();
-            let _ = std::thread::Builder::new().name("pdfcraft-control-conn".into()).spawn(move || {
-                let Ok(read) = stream.try_clone() else { return };
-                let mut write = stream;
-                let mut authed = false;
-                let mut reader = BufReader::new(read);
-                let mut buf = Vec::new();
-                loop {
-                    // Until `auth` succeeds, lines are capped at MAX_AUTH_LINE; afterwards they
-                    // are read whole, as before.
-                    let max = if authed { usize::MAX } else { MAX_AUTH_LINE };
-                    match read_line_limited(&mut reader, &mut buf, max) {
-                        Ok(LineRead::Line) => {}
-                        // End of stream or a failed read ends the connection, as before.
-                        Ok(LineRead::End) | Err(_) => break,
-                        Ok(LineRead::TooLong) => {
-                            let e = rpc_error(Value::Null, -32600, &format!("request line longer than {max} bytes before auth"));
-                            let _ = writeln!(write, "{e}").and_then(|_| write.flush());
-                            break;
-                        }
-                    }
-                    // Bytes that aren't UTF-8 end the connection, as `BufRead::lines` did.
-                    let Ok(line) = std::str::from_utf8(&buf) else { break };
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    let (reply, close) = match serde_json::from_str::<Value>(line) {
-                        // Before `auth`, like any other first request, this closes the connection.
-                        Err(e) => (rpc_error(Value::Null, -32700, &format!("parse error: {e}")), !authed),
-                        Ok(msg) => {
-                            let id = msg.get("id").cloned().unwrap_or(Value::Null);
-                            let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
-                            let params = msg.get("params").cloned().unwrap_or(Value::Null);
-                            if !authed {
-                                let ok =
-                                    method == "auth" && params.get("token").and_then(Value::as_str).is_some_and(|t| constant_time_eq(t, &expected));
-                                authed = ok;
-                                if ok {
-                                    (json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } }), false)
-                                } else {
-                                    (rpc_error(id, -32001, "authenticate first: auth {token}"), true)
-                                }
-                            } else {
-                                let rx = client.send(method, params);
-                                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
-                                    Ok(Ok(v)) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
-                                    Ok(Err(e)) => (rpc_error(id, -32000, &e), false),
-                                    Err(_) => (rpc_error(id, -32002, "the app did not answer within 30 s"), false),
-                                }
-                            }
-                        }
-                    };
-                    if writeln!(write, "{reply}").and_then(|_| write.flush()).is_err() || close {
-                        break;
-                    }
-                }
+            // Take a slot or refuse, in the accept loop itself, so a flood of connections cannot make threads.
+            if active.fetch_add(1, Ordering::AcqRel) >= limits.max_connections {
+                active.fetch_sub(1, Ordering::AcqRel);
+                refuse_connection(stream, limits);
+                continue;
+            }
+            let (client, expected, slot) = (client.clone(), expected.clone(), Slot(active.clone()));
+            let spawned = std::thread::Builder::new().name("pdfcraft-control-conn".into()).spawn(move || {
+                let _slot = slot;
+                serve_connection(stream, client, &expected, limits);
             });
+            // A thread that could not be made gives its slot back (the closure, and the slot in it, is dropped).
+            drop(spawned);
         }
     })?;
     Ok(Endpoint { port, token })
+}
+
+/// A connection's place among the `max_connections`, given back when it ends.
+#[cfg(not(target_arch = "wasm32"))]
+struct Slot(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Tell a connection there is no room, and close it. Never blocks the accept loop for long.
+#[cfg(not(target_arch = "wasm32"))]
+fn refuse_connection(mut stream: std::net::TcpStream, limits: Limits) {
+    use std::io::Write;
+    let _ = stream.set_write_timeout(Some(limits.write_timeout.min(std::time::Duration::from_secs(1))));
+    let e = rpc_error(Value::Null, -32003, &format!("too many control connections (limit {}); close one and retry", limits.max_connections));
+    let _ = writeln!(stream, "{e}").and_then(|_| stream.flush());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn serve_connection(stream: std::net::TcpStream, client: ControlClient, expected: &str, limits: Limits) {
+    use std::io::{BufReader, ErrorKind, Write};
+    use std::time::Instant;
+    let Ok(read) = stream.try_clone() else { return };
+    let mut write = stream;
+    let _ = write.set_write_timeout(Some(limits.write_timeout));
+    let _ = read.set_read_timeout(Some(READ_TICK));
+    let mut authed = false;
+    let mut reader = BufReader::new(read);
+    let mut buf = Vec::new();
+    let connected = Instant::now();
+    let send = |write: &mut std::net::TcpStream, value: &Value| writeln!(write, "{value}").and_then(|_| write.flush());
+    loop {
+        // Until `auth` succeeds the connection has a fixed time to do it and lines are capped at MAX_AUTH_LINE;
+        // afterwards it may be idle for `idle_timeout` and lines are capped at `max_request_line`.
+        let (max, deadline) =
+            if authed { (limits.max_request_line, Instant::now() + limits.idle_timeout) } else { (MAX_AUTH_LINE, connected + limits.auth_deadline) };
+        match read_line_limited(&mut reader, &mut buf, max, Some(deadline)) {
+            Ok(LineRead::Line) => {}
+            // End of stream or a failed read ends the connection, as before.
+            Ok(LineRead::End) => break,
+            Err(e) if e.kind() == ErrorKind::TimedOut => {
+                if !authed {
+                    let e = rpc_error(Value::Null, -32001, &format!("authentication timed out after {} s", limits.auth_deadline.as_secs_f32()));
+                    let _ = send(&mut write, &e);
+                }
+                break;
+            }
+            Err(_) => break,
+            Ok(LineRead::TooLong) => {
+                let e = rpc_error(Value::Null, -32600, &format!("request line longer than {max} bytes{}", if authed { "" } else { " before auth" }));
+                let _ = send(&mut write, &e);
+                // Before auth the connection is closed. After it, the rest of the line is skipped without being
+                // kept, so the next request is read from the right place.
+                if !authed || !skip_line(&mut reader, MAX_DISCARD, deadline) {
+                    break;
+                }
+                continue;
+            }
+        }
+        // Bytes that aren't UTF-8 end the connection, as `BufRead::lines` did.
+        let Ok(line) = std::str::from_utf8(&buf) else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (reply, close) = match serde_json::from_str::<Value>(line) {
+            // Before `auth`, like any other first request, this closes the connection.
+            Err(e) => (rpc_error(Value::Null, -32700, &format!("parse error: {e}")), !authed),
+            Ok(msg) => {
+                let id = msg.get("id").cloned().unwrap_or(Value::Null);
+                let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+                let params = msg.get("params").cloned().unwrap_or(Value::Null);
+                if !authed {
+                    let ok = method == "auth" && params.get("token").and_then(Value::as_str).is_some_and(|t| constant_time_eq(t, expected));
+                    authed = ok;
+                    if ok {
+                        (json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } }), false)
+                    } else {
+                        (rpc_error(id, -32001, "authenticate first: auth {token}"), true)
+                    }
+                } else {
+                    let rx = client.send(method, params);
+                    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+                        Ok(Ok(v)) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
+                        Ok(Err(e)) => (rpc_error(id, -32000, &e), false),
+                        Err(_) => (rpc_error(id, -32002, "the app did not answer within 30 s"), false),
+                    }
+                }
+            }
+        };
+        if send(&mut write, &reply).is_err() || close {
+            break;
+        }
+    }
 }
 
 /// Longest line read before a connection has authenticated. The only acceptable request then is
 /// `auth`, about a hundred bytes; a longer line is refused without buffering the rest of it.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_AUTH_LINE: usize = 4 * 1024;
-
-/// What [`read_line_limited`] found.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, PartialEq, Eq)]
-enum LineRead {
-    /// A line, now in the buffer (newline and a trailing `\r` stripped).
-    Line,
-    /// End of stream.
-    End,
-    /// The line is longer than the limit; at most limit + 1 bytes of it were read.
-    TooLong,
-}
-
-/// Read one `\n`-terminated line of at most `max` bytes into `buf`.
-#[cfg(not(target_arch = "wasm32"))]
-fn read_line_limited(reader: &mut impl std::io::BufRead, buf: &mut Vec<u8>, max: usize) -> std::io::Result<LineRead> {
-    use std::io::{BufRead, Read};
-    buf.clear();
-    // `take` bounds what is buffered for one line: never more than `max` + 1 bytes.
-    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
-    if reader.take(limit).read_until(b'\n', buf)? == 0 {
-        return Ok(LineRead::End);
-    }
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
-        if buf.last() == Some(&b'\r') {
-            buf.pop();
-        }
-        return Ok(LineRead::Line);
-    }
-    // No newline: either the limit was passed, or this is a last line before end of stream.
-    Ok(if buf.len() > max { LineRead::TooLong } else { LineRead::Line })
-}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
@@ -938,25 +1018,6 @@ mod transport_tests {
             Err(e) => matches!(e.kind(), ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted),
         };
         assert!(closed, "the connection stayed open: {next:?}");
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn lines_are_read_up_to_the_limit() {
-        use super::{LineRead, read_line_limited};
-        let mut buf = Vec::new();
-        let mut input: &[u8] = b"aaaaaaaaaa\nbb\r\ncc";
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"aaaaaaaaaa", "a line exactly at the limit is accepted");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"bb", "CRLF is stripped");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"cc", "a last line without a newline is still read");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::End, "then end of stream");
-        let long = [b'x'; 100];
-        let mut input: &[u8] = &long;
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::TooLong);
-        assert_eq!(input.len(), 100 - 11, "at most limit + 1 bytes are read; the rest is left");
     }
 
     /// Before authenticating, a line longer than [`super::MAX_AUTH_LINE`] is refused as soon as
@@ -1009,5 +1070,215 @@ mod transport_tests {
         assert_eq!(reply(&mut r)["error"]["code"], -32700, "a long line after auth is parsed, not refused");
         writeln!(w, "y").unwrap();
         assert_eq!(reply(&mut r)["error"]["code"], -32700, "and the connection is still open");
+    }
+
+    // ---- BUILD-005 (F04): every resource a client can make the app hold is bounded ----
+
+    #[cfg(not(target_arch = "wasm32"))]
+    mod bounds {
+        use super::super::{Limits, QUEUE_LIMIT, attach, serve_with};
+        use serde_json::{Value, json};
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpStream;
+        use std::time::{Duration, Instant};
+
+        fn small() -> Limits {
+            Limits {
+                max_connections: 3,
+                auth_deadline: Duration::from_millis(400),
+                idle_timeout: Duration::from_millis(400),
+                write_timeout: Duration::from_secs(2),
+                max_request_line: 256,
+            }
+        }
+
+        /// The app side: answers every request with its method name, so authenticated requests complete.
+        fn app_answering() -> (super::super::ControlClient, std::thread::JoinHandle<()>) {
+            let (control, client) = attach(&egui::Context::default());
+            let handle = std::thread::spawn(move || {
+                while let Ok(req) = control.rx.recv() {
+                    let _ = req.reply.send(Ok(json!({ "echo": req.method })));
+                }
+            });
+            (client, handle)
+        }
+
+        struct Conn {
+            w: TcpStream,
+            r: BufReader<TcpStream>,
+        }
+
+        impl Conn {
+            fn open(port: u16) -> Conn {
+                let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                Conn { w: s.try_clone().unwrap(), r: BufReader::new(s) }
+            }
+
+            fn send_line(&mut self, line: &str) {
+                writeln!(self.w, "{line}").unwrap();
+            }
+
+            fn reply(&mut self) -> Option<Value> {
+                let mut line = String::new();
+                match self.r.read_line(&mut line) {
+                    Ok(0) | Err(_) => None,
+                    Ok(_) => serde_json::from_str(&line).ok(),
+                }
+            }
+
+            fn auth(&mut self, token: &str) {
+                self.send_line(&json!({ "jsonrpc": "2.0", "id": 1, "method": "auth", "params": { "token": token } }).to_string());
+                assert_eq!(self.reply().unwrap()["result"]["ok"], true);
+            }
+
+            /// The server closed the connection: end of stream or a reset. A read that merely timed out is not a close.
+            fn is_closed(&mut self) -> bool {
+                let mut line = String::new();
+                match self.r.read_line(&mut line) {
+                    Ok(n) => n == 0,
+                    Err(e) => matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted),
+                }
+            }
+        }
+
+        /// A valid request exactly `len` bytes long (without its newline).
+        fn request_of(len: usize) -> String {
+            let base = json!({ "jsonrpc": "2.0", "id": 7, "method": "ui.state", "params": { "pad": "" } }).to_string();
+            let pad = "x".repeat(len - base.len());
+            let line = base.replace("\"pad\":\"\"", &format!("\"pad\":\"{pad}\""));
+            assert_eq!(line.len(), len);
+            line
+        }
+
+        /// Idle clients that never authenticate are closed at the deadline, with a reason, and give their place back.
+        #[test]
+        fn an_idle_unauthenticated_connection_is_closed_at_the_deadline() {
+            let (client, _app) = app_answering();
+            let ep = serve_with(client, small()).unwrap();
+            let started = Instant::now();
+            let mut idle = Conn::open(ep.port);
+            let first = idle.reply().expect("a reason before the close");
+            assert_eq!(first["error"]["code"], -32001, "{first}");
+            assert!(first["error"]["message"].as_str().unwrap().contains("timed out"));
+            assert!(idle.is_closed());
+            assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        }
+
+        /// A client that sends one byte at a time cannot keep the authentication open past the deadline.
+        #[test]
+        fn a_client_that_dribbles_bytes_before_auth_is_still_cut_off() {
+            let (client, _app) = app_answering();
+            let ep = serve_with(client, small()).unwrap();
+            let mut c = Conn::open(ep.port);
+            let mut w = c.w.try_clone().unwrap();
+            let started = Instant::now();
+            let dribble = std::thread::spawn(move || {
+                for _ in 0..40 {
+                    if w.write_all(b"x").is_err() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(60));
+                }
+            });
+            let reason = c.reply().expect("a reason before the close");
+            assert_eq!(reason["error"]["code"], -32001, "{reason}");
+            assert!(started.elapsed() < Duration::from_millis(2500), "closed at the deadline, not after the dribble: {:?}", started.elapsed());
+            let _ = dribble.join();
+        }
+
+        /// The connection limit is enforced in the accept loop: extra clients are refused with an error at once,
+        /// and a place that frees up is usable again.
+        #[test]
+        fn connections_beyond_the_limit_are_refused_and_places_are_given_back() {
+            let (client, _app) = app_answering();
+            let mut limits = small();
+            limits.auth_deadline = Duration::from_secs(30);
+            limits.idle_timeout = Duration::from_secs(30);
+            let ep = serve_with(client, limits).unwrap();
+            let mut held: Vec<Conn> = (0..3).map(|_| Conn::open(ep.port)).collect();
+            for c in &mut held {
+                c.auth(&ep.token);
+            }
+            let mut extra = Conn::open(ep.port);
+            let refusal = extra.reply().expect("an explicit refusal");
+            assert_eq!(refusal["error"]["code"], -32003, "{refusal}");
+            assert!(refusal["error"]["message"].as_str().unwrap().contains("limit 3"));
+            assert!(extra.is_closed());
+            // A flood of 100 more is refused the same way, quickly, without hanging.
+            let started = Instant::now();
+            let refused = (0..100).filter(|_| Conn::open(ep.port).reply().is_some_and(|r| r["error"]["code"] == -32003)).count();
+            assert_eq!(refused, 100);
+            assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+            // The held connections still work, and one that ends frees its place.
+            held[0].send_line(&json!({ "jsonrpc": "2.0", "id": 2, "method": "ui.state" }).to_string());
+            assert_eq!(held[0].reply().unwrap()["result"]["echo"], "ui.state");
+            drop(held.remove(1));
+            let mut again = None;
+            for _ in 0..50 {
+                let mut c = Conn::open(ep.port);
+                c.send_line(&json!({ "jsonrpc": "2.0", "id": 1, "method": "auth", "params": { "token": ep.token } }).to_string());
+                if c.reply().is_some_and(|r| r["result"]["ok"] == true) {
+                    again = Some(c);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(again.is_some(), "the freed place is usable again");
+        }
+
+        #[test]
+        fn an_authenticated_connection_that_goes_silent_is_closed() {
+            let (client, _app) = app_answering();
+            let ep = serve_with(client, small()).unwrap();
+            let mut c = Conn::open(ep.port);
+            c.auth(&ep.token);
+            assert!(c.is_closed(), "idle past the timeout");
+        }
+
+        /// A request exactly at the limit works; over it fails with a clear error, without being kept, and the next
+        /// valid request on the same connection is served (the framing recovers).
+        #[test]
+        fn requests_at_the_limit_work_and_longer_ones_are_refused_then_skipped() {
+            let (client, _app) = app_answering();
+            let mut limits = small();
+            limits.idle_timeout = Duration::from_secs(30);
+            limits.auth_deadline = Duration::from_secs(30);
+            let max = limits.max_request_line;
+            let ep = serve_with(client, limits).unwrap();
+            let mut c = Conn::open(ep.port);
+            c.auth(&ep.token);
+            c.send_line(&request_of(max));
+            assert_eq!(c.reply().unwrap()["result"]["echo"], "ui.state", "a valid request exactly at the limit works");
+            for (what, over) in [("one byte over", max + 1), ("ten times over", max * 10), ("two megabytes", 2 << 20)] {
+                c.send_line(&request_of(over));
+                let e = c.reply().unwrap_or_else(|| panic!("{what}: no reply"));
+                assert_eq!(e["error"]["code"], -32600, "{what}: {e}");
+                assert!(e["error"]["message"].as_str().unwrap().contains(&format!("longer than {max} bytes")), "{what}");
+                // The rest of that line was skipped: the next request is read from the right place.
+                c.send_line(&request_of(max - 10));
+                assert_eq!(c.reply().unwrap()["result"]["echo"], "ui.state", "{what}: the next valid request is served");
+            }
+            // Malformed framing (not JSON) does not stop later valid requests either.
+            c.send_line("this is not json");
+            assert_eq!(c.reply().unwrap()["error"]["code"], -32700);
+            c.send_line(&request_of(max - 10));
+            assert_eq!(c.reply().unwrap()["result"]["echo"], "ui.state");
+        }
+
+        /// The queue to the app is bounded: with the app not answering, requests beyond the limit are refused with
+        /// "busy" immediately instead of piling up.
+        #[test]
+        fn the_queue_to_the_app_is_bounded_and_says_busy() {
+            let (_control, client) = attach(&egui::Context::default());
+            let waiting: Vec<_> = (0..QUEUE_LIMIT).map(|_| client.send("ui.state", Value::Null)).collect();
+            let started = Instant::now();
+            let overflow = client.send("ui.state", Value::Null);
+            let reply = overflow.recv_timeout(Duration::from_secs(2)).expect("an immediate answer, not a wait");
+            let err = reply.unwrap_err();
+            assert!(err.contains("busy") && err.contains(&QUEUE_LIMIT.to_string()), "{err}");
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert_eq!(waiting.len(), QUEUE_LIMIT);
+        }
     }
 }
