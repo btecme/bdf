@@ -3795,7 +3795,10 @@ impl Session {
             doc.generation += 1;
             return Self::refresh(doc).map(|()| Saved::Rebased).map_err(|e| Self::left_unsaved(doc, before + 1, e));
         };
-        let xfa = doc.xfa.clone();
+        // Everything the refresh may overwrite before it can fail. `refresh` begins by releasing the working copy
+        // into `bytes` and `display` from the editor's *current* document, which during this check is the candidate:
+        // those two buffers feed the renderer and the next autosave, so they must go back with the model.
+        let (xfa, bytes_before, display_before) = (doc.xfa.clone(), doc.bytes.clone(), doc.display.clone());
         let working = doc.editor.as_mut().map(|editor| std::mem::replace(&mut editor.cos, candidate));
         doc.dirty = false;
         doc.generation += 1;
@@ -3806,6 +3809,9 @@ impl Session {
                 editor.cos = working;
             }
             doc.xfa = xfa;
+            doc.bytes = bytes_before;
+            doc.display = display_before;
+            // The renderer is rebuilt from the restored display, not from the rejected file.
             Self::show_released(doc);
             return Err(Self::left_unsaved(doc, before + 1, e));
         }

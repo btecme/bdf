@@ -421,6 +421,16 @@ fn a_committed_save_that_cannot_be_taken_up_keeps_the_edit_the_recovery_copy_and
         assert_eq!(doc.info.pages.len(), 1, "{what}: the delete is still in the document");
         assert_eq!(doc.path.as_deref(), Some("/docs/saved-as.pdf"), "{what}: it points at the file that was written");
         assert_eq!(s.list().len(), 1, "{what}: the recovery copy is kept");
+        // The next autosave overwrites that recovery entry. What it writes must reopen, with the delete, or a crash
+        // after it loses the only copy of the working edit.
+        app.autosave_now();
+        assert_eq!(s.list().len(), 1, "{what}: still one entry");
+        let stored = s.read(&s.list()[0].key).unwrap();
+        let mut fresh = pdfcraft_engine::Session::new();
+        let reopened = fresh
+            .open("recovered.pdf", None, std::sync::Arc::new(stored), None)
+            .unwrap_or_else(|e| panic!("{what}: the recovery copy no longer reopens: {e:?}"));
+        assert_eq!(fresh.get(reopened).unwrap().info.pages.len(), 1, "{what}: the stored recovery copy has the delete in it");
         app.request_close_tab(0);
         assert!(app.close_request.is_some(), "{what}: closing still asks about the unsaved work");
     }
@@ -444,6 +454,12 @@ fn a_clean_document_whose_saved_copy_cannot_be_taken_up_becomes_unsaved_and_reco
         assert_eq!(app.session.get(id).unwrap().path.as_deref(), Some("/docs/save-as.pdf"), "{what}");
         app.autosave_now();
         assert_eq!(s.list().len(), 1, "{what}: autosave now writes the recovery copy");
+        let stored = s.read(&s.list()[0].key).unwrap();
+        let mut fresh = pdfcraft_engine::Session::new();
+        let reopened = fresh
+            .open("recovered.pdf", None, std::sync::Arc::new(stored), None)
+            .unwrap_or_else(|e| panic!("{what}: the recovery copy does not reopen: {e:?}"));
+        assert_eq!(fresh.get(reopened).unwrap().info.pages.len(), 2, "{what}: it is the document's own content");
         app.request_close_tab(0);
         assert!(app.close_request.is_some(), "{what}: closing asks");
     }
