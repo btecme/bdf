@@ -1,5 +1,6 @@
-//! Staging files for atomic saves: a new, unpredictably named file beside the target, written and
-//! then renamed over it. Writing, closing, renaming and cleaning up stay with the caller.
+//! Staging files for atomic saves: a new, unpredictably named, private file beside the target, written
+//! and then put in place of it. [`crate::persistence`] does the writing, flushing and replacing; this
+//! module only creates the file.
 
 use std::path::{Path, PathBuf};
 
@@ -42,7 +43,7 @@ pub fn create_staging(
             StagingName::SuffixThenTag => format!(".{stem}.{suffix:016x}.pdfcraft-tmp"),
             StagingName::TagThenSuffix => format!(".{stem}.pdfcraft-{suffix:016x}.tmp"),
         });
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        match private_options().open(&tmp) {
             Ok(file) => return Ok((tmp, file)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             // Windows reports a folder at the name as "access denied"; it is taken all the same.
@@ -51,6 +52,27 @@ pub fn create_staging(
         }
     }
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every temporary file name tried is taken"))
+}
+
+/// How a staging file is opened: new, write-only, and private while it holds the document. On Unix it is
+/// created `0600`, so what is written is never readable by others even in a shared folder; on Windows
+/// it is opened with no sharing, so no other process can read it while this handle is open. (Its
+/// permissions are then the folder's inherited ones until it replaces the target; see
+/// [`crate::persistence`] for what that means for a restricted target.)
+fn private_options() -> std::fs::OpenOptions {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0);
+    }
+    options
 }
 
 /// Unpredictable staging-name suffixes, so a name can't be planted in advance. Each is the

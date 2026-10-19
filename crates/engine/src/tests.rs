@@ -466,6 +466,171 @@ fn save_is_incremental_stamps_mod_date_and_rebases() {
     assert_eq!(reopened.revisions().len(), 3);
 }
 
+// ---- BUILD-004: a save that reached the disk is recorded accurately ----
+
+/// A later edit arriving between taking the bytes and recording the save must not be discarded: rebasing on
+/// the older bytes would drop it, and clearing the dirty flag would let the window close over it.
+#[test]
+fn an_edit_made_while_a_save_was_in_flight_is_kept_and_stays_unsaved() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "First".into() }).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let saved = s.save_bytes(id).unwrap();
+    // The user edits again before the write is recorded.
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Second".into() }).unwrap();
+    let outcome = s.mark_saved_at(id, saved, Some("/tmp/out/first.pdf".into()), generation).unwrap();
+    assert_eq!(outcome, Saved::EditedSince);
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty, "the newer edit is not on disk");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("Second"), "the newer edit is kept");
+    assert_eq!(doc.name, "first.pdf", "the file on disk is where this document now lives");
+    // The next save writes the newer state, and with no edit in between it rebases and is clean.
+    let generation = s.get(id).unwrap().edit_generation();
+    let second = s.save_bytes(id).unwrap();
+    assert_eq!(s.mark_saved_at(id, second, None, generation).unwrap(), Saved::Rebased);
+    assert!(!s.get(id).unwrap().dirty);
+    assert_eq!(s.get(id).unwrap().info_value("Title").as_deref(), Some("Second"));
+}
+
+/// A file that is valid PDF structure but has no page the viewer can show: the page tree's only child points at an
+/// object that does not exist (same length as the real reference, so the cross-reference table still matches).
+fn unshowable(pages: usize) -> Arc<Vec<u8>> {
+    let good = fixture(pages);
+    let text = String::from_utf8(good).expect("the fixture is ASCII");
+    Arc::new(text.replacen("/Kids [4 0 R", "/Kids [9 0 R", 1).into_bytes())
+}
+
+/// R2 (Codex review): bytes that read as a PDF but cannot be shown must not replace the working state, which holds
+/// the user's edit. The old code assigned the new document, cleared the flag and only then failed.
+#[test]
+fn a_saved_file_that_reads_but_cannot_be_shown_leaves_the_working_edit_alone() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "KEEP WORKING EDIT".into() }).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let bad = unshowable(1);
+    assert!(pdfcraft_cos::Document::open(bad.clone()).is_ok(), "the probe is structurally valid, so only the refresh can reject it");
+    let outcome = s.mark_saved_at(id, bad, Some("/tmp/out/probe.pdf".into()), generation);
+    assert!(matches!(outcome, Err(EditError::Reopen(_))), "{outcome:?}");
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty, "the document is unsaved");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("KEEP WORKING EDIT"), "the working edit is still in the document");
+    assert_eq!(doc.info.pages.len(), 1);
+    assert_eq!(doc.path.as_deref(), Some("/tmp/out/probe.pdf"), "the committed destination is kept");
+    assert!(doc.can_undo().is_some(), "the undo history is intact");
+    // And it is still saveable: the next save writes the edit.
+    let saved = s.save_bytes(id).unwrap();
+    assert!(String::from_utf8_lossy(&saved).contains("KEEP WORKING EDIT"));
+}
+
+/// R2 (Codex retest): after a rebase is rejected, the buffers the renderer and autosave read must be the working
+/// ones too. `refresh` releases the editor's current document into `bytes` and `display` before it can fail, and
+/// during the check that document is the rejected candidate, so restoring only the model left autosave writing the
+/// rejected file over the last good recovery copy.
+#[test]
+fn a_rejected_rebase_leaves_the_working_buffers_the_page_and_the_next_recovery_copy_intact() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "KEEP WORKING EDIT".into() }).unwrap();
+    let render = |s: &Session| {
+        let doc = s.get(id).unwrap();
+        doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest {
+            page: 0,
+            kind: pdfcraft_render::RequestKind::Pixels,
+            scale: 1.0,
+            ..Default::default()
+        }]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(page) = doc.renderer.try_recv() {
+                return page;
+            }
+            assert!(std::time::Instant::now() < deadline, "page render did not finish");
+            std::thread::yield_now();
+        }
+    };
+    let recovered_title = |bytes: Arc<Vec<u8>>| {
+        let mut fresh = Session::new();
+        let opened = fresh.open("recovered.pdf", None, bytes, None).expect("a recovery copy must reopen");
+        fresh.get(opened).unwrap().info_value("Title")
+    };
+    let before = render(&s);
+    assert!(before.error.is_none() && before.width > 0, "{:?}", before.error);
+    let (bytes_before, display_before) = (s.get(id).unwrap().bytes.clone(), s.get(id).unwrap().display.clone());
+    let first = s.autosave_snapshots();
+    assert_eq!(first.len(), 1);
+    assert_eq!(recovered_title(first[0].bytes.clone()).as_deref(), Some("KEEP WORKING EDIT"), "the snapshot before the failure is good");
+
+    let generation = s.get(id).unwrap().edit_generation();
+    let outcome = s.mark_saved_at(id, unshowable(1), Some("/tmp/out/probe.pdf".into()), generation);
+    assert!(matches!(outcome, Err(EditError::Reopen(_))), "{outcome:?}");
+
+    let doc = s.get(id).unwrap();
+    assert_eq!(*doc.bytes, *bytes_before, "the working bytes are the working bytes, not the rejected file's");
+    assert_eq!(*doc.display, *display_before, "so is what the renderer draws from");
+    let after = render(&s);
+    assert!(after.error.is_none(), "the page still renders: {:?}", after.error);
+    assert_eq!((after.width, after.height), (before.width, before.height));
+    // The next autosave is what a crash would be recovered from: it must reopen, with the edit.
+    let second = s.autosave_snapshots();
+    assert_eq!(second.len(), 1, "the failed save moved the generation, so autosave writes again");
+    assert_eq!(recovered_title(second[0].bytes.clone()).as_deref(), Some("KEEP WORKING EDIT"));
+    assert_eq!(*second[0].bytes, *bytes_before);
+}
+
+/// The same for a document with no edits (a Save As whose copy cannot be taken up): its recovery copy is its own
+/// content, not the rejected file.
+#[test]
+fn a_rejected_rebase_of_a_clean_document_keeps_its_own_recovery_copy() {
+    for (what, bad) in [("unshowable", unshowable(2)), ("not a PDF", Arc::new(b"not a pdf at all".to_vec()))] {
+        let (mut s, id) = session_with(2);
+        let bytes_before = s.get(id).unwrap().bytes.clone();
+        let generation = s.get(id).unwrap().edit_generation();
+        assert!(s.mark_saved_at(id, bad, Some("/tmp/out/save-as.pdf".into()), generation).is_err(), "{what}");
+        assert_eq!(*s.get(id).unwrap().bytes, *bytes_before, "{what}");
+        let snaps = s.autosave_snapshots();
+        assert_eq!(snaps.len(), 1, "{what}");
+        let mut fresh = Session::new();
+        let opened = fresh
+            .open("recovered.pdf", None, snaps[0].bytes.clone(), None)
+            .unwrap_or_else(|e| panic!("{what}: the recovery copy must reopen: {e:?}"));
+        assert_eq!(fresh.get(opened).unwrap().info.pages.len(), 2, "{what}");
+    }
+}
+
+/// R2: a Save As of a document with no edits, where the written file cannot be taken up: the document must read as
+/// unsaved, or closing it would not ask and recovery would not keep it.
+#[test]
+fn a_clean_document_whose_saved_copy_cannot_be_reopened_becomes_unsaved() {
+    for (what, bytes) in [("not a PDF", Arc::new(b"not a pdf at all".to_vec())), ("unshowable", unshowable(2))] {
+        let (mut s, id) = session_with(2);
+        assert!(!s.get(id).unwrap().dirty);
+        let generation = s.get(id).unwrap().edit_generation();
+        let outcome = s.mark_saved_at(id, bytes, Some("/tmp/out/save-as.pdf".into()), generation);
+        assert!(matches!(outcome, Err(EditError::Reopen(_))), "{what}: {outcome:?}");
+        let doc = s.get(id).unwrap();
+        assert!(doc.dirty, "{what}: the document must be marked unsaved");
+        assert_eq!(doc.path.as_deref(), Some("/tmp/out/save-as.pdf"), "{what}");
+        assert_eq!(doc.info.pages.len(), 2, "{what}: still showing its own pages");
+        assert!(s.get(id).unwrap().edit_generation() > generation, "{what}: autosave sees the change");
+    }
+}
+
+/// The file is on disk but cannot be reopened: the document takes the new path (a later Save must not go to
+/// the old file), stays unsaved, and keeps its own state.
+#[test]
+fn a_saved_file_that_cannot_be_reopened_moves_the_document_but_keeps_it_unsaved() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Kept".into() }).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let outcome = s.mark_saved_at(id, Arc::new(b"not a pdf at all".to_vec()), Some("/tmp/out/moved.pdf".into()), generation);
+    assert!(matches!(outcome, Err(EditError::Reopen(_))), "{outcome:?}");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.path.as_deref(), Some("/tmp/out/moved.pdf"));
+    assert_eq!(doc.name, "moved.pdf");
+    assert!(doc.dirty, "the saved file can't be vouched for, so the document is still unsaved");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("Kept"), "the document's own state is intact");
+    assert_eq!(doc.info.pages.len(), 2);
+}
+
 #[test]
 fn undo_still_works_after_save() {
     let (mut s, id) = session_with(2);

@@ -2,7 +2,8 @@
 //! "save changes?" prompt when closing a tab or quitting with unsaved edits.
 
 use pdfcraft_engine::Edit;
-use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
+use pdfcraft_platform::persistence::{PersistError, Steps, write_replace_with};
+use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 
 use crate::PdfCraftApp;
 
@@ -664,6 +665,9 @@ impl PdfCraftApp {
             self.notify_tr("The document was closed before it could be saved.");
             return false;
         };
+        // The generation the bytes are taken at: an edit made before the write is recorded must not be
+        // mistaken for part of what was saved.
+        let generation = self.session.get(id).map(|d| d.edit_generation()).unwrap_or_default();
         let bytes = match self.session.save_bytes(id) {
             Ok(b) => b,
             Err(e) => {
@@ -671,14 +675,35 @@ impl PdfCraftApp {
                 return false;
             }
         };
+        // Until the write has replaced the file nothing changes: a failure here leaves the document unsaved,
+        // its recovery copy in place and the original file as it was (`pdfcraft_platform::persistence`).
         if let Err(e) = write_atomically(dest, &bytes) {
             self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
             return false;
         }
+        self.record_committed_save(id, dest, bytes, generation)
+    }
+
+    /// The bytes of a save have replaced the file at `dest` (they were taken when the document's edit generation was
+    /// `generation`): record that in the document and tell the user what state it is in. Returns `true` only when
+    /// the document is now saved and clean, which is when a pending "then close" may go ahead.
+    ///
+    /// The file on disk and the document are two outcomes here, kept apart: once the write has replaced the file the
+    /// save has happened, whatever the refresh does next. A refresh that fails, or an edit made since the bytes were
+    /// taken, leaves the document unsaved with its edits and its recovery copy (`forget_recovery` is only reached
+    /// when the document really is clean), pointing at the file that was written.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn record_committed_save(&mut self, id: pdfcraft_engine::DocId, dest: &str, bytes: std::sync::Arc<Vec<u8>>, generation: u64) -> bool {
         // Our own write is not a change on disk to reload (#431).
         self.watch.known_now(id, dest);
-        match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
-            Ok(()) => {
+        match self.session.mark_saved_at(id, bytes, Some(dest.to_string()), generation) {
+            Ok(pdfcraft_engine::Saved::EditedSince) => {
+                // Written, but the document changed while it was being saved: those edits are not in the file,
+                // so it stays unsaved and keeps its recovery copy.
+                self.notify_fmt("Saved {name}, but changes made while saving are not saved yet", &[("name", &short_name(dest))]);
+                false
+            }
+            Ok(pdfcraft_engine::Saved::Rebased) => {
                 self.forget_recovery(id);
                 if let Some(doc) = self.session.get(id)
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
@@ -691,6 +716,8 @@ impl PdfCraftApp {
                 true
             }
             Err(e) => {
+                // The file is saved but the document could not be continued from it; the engine has left the
+                // document unsaved and untouched, so recovery stays.
                 self.notify_fmt("Saved, but reopening failed: {e}", &[("e", &e.to_string())]);
                 false
             }
@@ -915,60 +942,39 @@ pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
         || p.contains("/microsoft.outlookforwindows")
 }
 
-/// Write via a temporary file in the same directory and rename over the target, so a crash or
-/// full disk never leaves a half-written PDF where the original was.
+/// Write via a temporary file in the same directory that then replaces the target, so a crash or a full
+/// disk never leaves a half-written PDF where the original was. This is the shared persistence service
+/// (`pdfcraft_platform::persistence`): the bytes are flushed to the disk first, an existing file keeps
+/// its permissions, and any failure leaves the original as it was.
 pub fn write_atomically(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     write_atomically_with(path, bytes, staging_suffixes())
 }
 
 /// [`write_atomically`], trying the staging names that `suffixes` give.
 fn write_atomically_with(path: &str, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>) -> std::io::Result<()> {
-    write_atomically_syncing(path, bytes, suffixes, std::fs::File::sync_all)
+    write_replace_with(std::path::Path::new(path), bytes, StagingName::TagThenSuffix, suffixes, &Steps::real())
+        .map(|_| ())
+        .map_err(PersistError::into_io)
 }
 
-/// [`write_atomically_with`], flushing the staging file with `sync_all` (the standard library's
-/// in the app, a failing one in tests).
+/// [`write_atomically_with`], flushing the staging file with `sync_all` (the standard library's in the
+/// app, a failing one in tests).
+#[cfg(test)]
 fn write_atomically_syncing(
     path: &str,
     bytes: &[u8],
     suffixes: impl IntoIterator<Item = u64>,
     sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    use std::io::Write;
-    let target = std::path::Path::new(path);
-    let dir = target.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
-    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("save");
-    let (tmp, f) = create_staging(dir, name, StagingName::TagThenSuffix, suffixes)?;
-    let result = (|| {
-        // Closed at the end of the block, before the rename.
-        {
-            let mut f = f;
-            f.write_all(bytes)?;
-            sync_staged(&f, sync_all)?;
-        }
-        std::fs::rename(&tmp, target)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
-
-/// Flush the staging file to the disk before it replaces the original. On macOS `sync_all` asks
-/// for a full flush (`F_FULLFSYNC`), which SMB and FUSE volumes, such as a mounted Cryptomator
-/// vault, refuse as unsupported: there a plain `fsync` is the strongest flush the volume offers.
-/// Any other failure still fails the save.
-fn sync_staged(f: &std::fs::File, sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        use rustix::io::Errno;
-        match sync_all(f) {
-            Err(e) if matches!(Errno::from_io_error(&e), Some(Errno::NOTSUP | Errno::NOTTY)) => Ok(rustix::fs::fsync(f)?),
-            other => other,
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    sync_all(f)
+    let sync_all = std::cell::Cell::new(Some(sync_all));
+    let steps = Steps {
+        flush: &|f| match sync_all.take() {
+            Some(sync_all) => pdfcraft_platform::persistence::flush_with(f, sync_all),
+            None => Ok(()),
+        },
+        ..Steps::real()
+    };
+    write_replace_with(std::path::Path::new(path), bytes, StagingName::TagThenSuffix, suffixes, &steps).map(|_| ()).map_err(PersistError::into_io)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

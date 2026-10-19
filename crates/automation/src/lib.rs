@@ -35,7 +35,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pdfcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
-use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
+use pdfcraft_platform::persistence::{Steps, write_replace_with};
+use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
@@ -149,13 +150,13 @@ impl Automation {
     /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
     /// saving a rendered page. With a root, it is confined like a tool's own output (a relative
     /// path resolves inside it) and written atomically. Without one, the path is written as
-    /// given, so `/dev/stdout` and the like still work. Returns where the file went.
+    /// given, so `/dev/stdout` and the like still work (a regular file still goes through the same service). Returns where the file went.
     pub fn write_output(&self, path: &str, bytes: &[u8]) -> Result<PathBuf> {
         let target = self.resolve(path, true)?;
         if self.root.is_some() {
             write_atomic(&target, bytes)?;
         } else {
-            std::fs::write(&target, bytes).map_err(|e| failed(format!("{path}: {e}")))?;
+            pdfcraft_platform::persistence::write_output(&target, bytes, StagingName::SuffixThenTag).map_err(|e| failed(format!("{path}: {e}")))?;
         }
         Ok(target)
     }
@@ -2303,37 +2304,30 @@ fn unused(dir: &Path, stem: &str) -> PathBuf {
     (2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).pdf"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
-/// Write via a temporary file in the same directory, then rename over the target.
+/// Write via a temporary file in the same directory that then replaces the target. This is the shared
+/// persistence service (`pdfcraft_platform::persistence`), the same one the desktop app saves with: the
+/// bytes are flushed to the disk first, an existing file keeps its permissions, and any failure leaves
+/// the original as it was.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     write_atomic_with(path, bytes, staging_suffixes())
 }
 
 /// [`write_atomic`], trying the staging names that `suffixes` give.
 fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>) -> Result<()> {
-    use std::io::Write;
+    write_atomic_steps(path, bytes, suffixes, &Steps::real())
+}
+
+/// [`write_atomic_with`], performing the operations `steps` give (a test makes one of them fail).
+fn write_atomic_steps(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>, steps: &Steps) -> Result<()> {
     // A folder can't be replaced, and staging beside it could land outside the root: "." names
     // the root itself, whose parent isn't ours to write in.
     if path.is_dir() {
         return Err(failed(format!("{}: is a folder, not a file", path.display())));
     }
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let name = path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
+    path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-    let (tmp, file) =
-        create_staging(dir, &name.to_string_lossy(), StagingName::SuffixThenTag, suffixes).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-    // Closed at the end of the block, before the rename.
-    let written = {
-        let mut file = file;
-        file.write_all(bytes)
-    };
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(failed(format!("{}: {e}", tmp.display())));
-    }
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        failed(format!("{}: {e}", path.display()))
-    })
+    write_replace_with(path, bytes, StagingName::SuffixThenTag, suffixes, steps).map(|_| ()).map_err(|e| failed(format!("{}: {e}", path.display())))
 }
 
 #[cfg(test)]
@@ -2734,6 +2728,63 @@ mod tests {
         #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         std::fs::set_permissions(&target, perms).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    // ---- BUILD-004 (F02): the headless save is the same persistence service as the desktop save ----
+
+    /// F02: the headless save used to write and rename without flushing; a flush that fails now fails the save
+    /// and leaves the original.
+    #[test]
+    fn a_failed_flush_fails_a_headless_save_and_keeps_the_original() {
+        let dir = staging_dir("flushfails");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        let steps = Steps { flush: &|_| Err(std::io::Error::other("disk gone")), ..Steps::real() };
+        let e = write_atomic_steps(&target, b"NEW", [7], &steps).unwrap_err();
+        assert!(e.to_string().contains("disk gone") && e.to_string().contains("flushing"), "{e}");
+        assert_eq!(read(&target), "OLD");
+        assert_eq!(listing(&dir), ["out.pdf"], "the staging file was removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_short_write_or_a_failed_replacement_keeps_the_original() {
+        let dir = staging_dir("midway");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        let short = Steps {
+            write: &|f, bytes| {
+                std::io::Write::write_all(f, &bytes[..1])?;
+                Err(std::io::Error::other("disk full"))
+            },
+            ..Steps::real()
+        };
+        assert!(write_atomic_steps(&target, b"NEW", [7], &short).unwrap_err().to_string().contains("disk full"));
+        let locked = Steps { replace: &|_| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "locked")), ..Steps::real() };
+        assert!(write_atomic_steps(&target, b"NEW", [7], &locked).unwrap_err().to_string().contains("locked"));
+        assert_eq!(read(&target), "OLD");
+        assert_eq!(listing(&dir), ["out.pdf"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The tools write through the service: the same restricted-file behaviour as the desktop save.
+    #[cfg(windows)]
+    #[test]
+    fn a_headless_save_keeps_a_restricted_files_access_list() {
+        let dir = staging_dir("acl");
+        let target = dir.join("secret.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        let acl = |p: &Path| {
+            String::from_utf8_lossy(&std::process::Command::new("icacls").arg(p).output().unwrap().stdout).replace(&p.display().to_string(), "")
+        };
+        let user = format!("{}:(F)", std::env::var("USERNAME").unwrap_or_default());
+        assert!(std::process::Command::new("icacls").arg(&target).args(["/inheritance:r", "/grant:r", &user]).output().unwrap().status.success());
+        // An explicit entry that no folder's inherited list can contain, so the comparison below is never vacuous.
+        assert!(std::process::Command::new("icacls").arg(&target).args(["/grant", "*S-1-5-32-545:(R)"]).output().unwrap().status.success());
+        let before = acl(&target);
+        write_atomic(&target, b"NEW").unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(acl(&target), before);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

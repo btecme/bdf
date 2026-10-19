@@ -467,6 +467,34 @@ fn save_writes_an_incremental_update_and_clears_dirty() {
     let _ = std::fs::remove_file(out);
 }
 
+/// BUILD-004: a save that cannot replace the file leaves the document unsaved with its edits, leaves
+/// whatever is at the target as it was (no temporary file either), and says so.
+#[test]
+fn a_save_that_cannot_replace_the_file_keeps_the_edits_and_the_file() {
+    let blocker = temp_path("a-folder-where-the-file-should-go.pdf");
+    let _ = std::fs::remove_dir_all(&blocker);
+    std::fs::create_dir_all(&blocker).unwrap();
+    std::fs::write(blocker.join("inside.txt"), "KEEP").unwrap();
+    let mut h = organize(3);
+    let (id, path_before) = (h.state().views[0].id, h.state().session.get(h.state().views[0].id).unwrap().path.clone());
+    h.state_mut().save_override = Some(blocker.to_string_lossy().into_owned());
+    h.get_by_label("Page 3").click();
+    h.run_steps(1);
+    h.get_by_label("Rotate counterclockwise").click();
+    h.run_steps(3);
+    assert!(dirty(&h));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    h.get_by_label_contains("Couldn't save");
+    assert!(dirty(&h), "the edits are still unsaved");
+    assert_eq!(h.state().session.get(id).unwrap().path, path_before, "the document does not move to a file that was not written");
+    assert_eq!(std::fs::read_to_string(blocker.join("inside.txt")).unwrap(), "KEEP");
+    let beside: Vec<_> =
+        std::fs::read_dir(blocker.parent().unwrap()).unwrap().filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(!beside.iter().any(|n| n.contains("pdfcraft-") && n.ends_with(".tmp")), "no temporary file is left: {beside:?}");
+    let _ = std::fs::remove_dir_all(&blocker);
+}
+
 #[test]
 fn closing_a_dirty_tab_asks_and_cancel_keeps_it() {
     let mut h = organize(2);

@@ -10,6 +10,15 @@ workspace = true
 
 [dependencies]
 
+[target.'cfg(windows)'.dependencies]
+# `ReplaceFile`, which keeps the replaced file's permissions (a rename gives the new file the folder's
+# inherited ones); safe bindings, already in the tree through pdfcraft-ui-egui and pdfcraft.
+winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# A plain fsync where a volume refuses the full flush `sync_all` asks for (SMB, FUSE); already in the tree.
+rustix = { version = "1", features = ["fs"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Already in the dependency graph through the accessibility integration. The portal watcher
 # uses the async API so dropping it can cancel an idle subscription without polling.

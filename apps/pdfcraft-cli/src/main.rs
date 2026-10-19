@@ -469,7 +469,13 @@ fn edit(args: &[String]) -> Result<(), CliError> {
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
     let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    write_file(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+}
+
+/// Write a file the command line was asked to produce (`--out`): through the shared persistence service, so
+/// a failure part way leaves an existing file as it was instead of truncated, and the bytes are flushed.
+fn write_file(out: &str, bytes: &[u8]) -> std::io::Result<()> {
+    pdfcraft_platform::persistence::write_output(Path::new(out), bytes, pdfcraft_platform::staging::StagingName::SuffixThenTag)
 }
 
 fn file_stem(path: &str) -> String {
@@ -485,7 +491,7 @@ fn combine(args: &[String]) -> Result<(), CliError> {
     }
     let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
     let bytes = pdfcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    write_file(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
 }
 
 fn extract(args: &[String]) -> Result<(), CliError> {
@@ -496,7 +502,7 @@ fn extract(args: &[String]) -> Result<(), CliError> {
     let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let bytes = session.extract(id, &pages).map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    write_file(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
 }
 
 fn split(args: &[String]) -> Result<(), CliError> {
@@ -518,7 +524,7 @@ fn split(args: &[String]) -> Result<(), CliError> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("split: --out-dir {}: {e}", dir.display()))?;
     for (a, b, bytes) in parts {
         let name = dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") });
-        std::fs::write(&name, bytes.as_slice()).map_err(|e| format!("{}: {e}", name.display()))?;
+        write_file(&name.to_string_lossy(), bytes.as_slice()).map_err(|e| format!("{}: {e}", name.display()))?;
         stdout_line(format_args!("{}", name.display()))?;
     }
     Ok(())
@@ -556,7 +562,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
             pam
         }
     };
-    std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
+    write_file(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     let _ = writeln!(std::io::stderr().lock(), "rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
     for warning in &p.warnings {
         match warning {
@@ -690,7 +696,7 @@ fn check(args: &[String]) -> Result<(), CliError> {
     }
     eprintln!("\nchecked {} files: {:?}", files.len(), counts);
     if let Some(out) = flag(args, "--json") {
-        std::fs::write(out, serde_json::to_string_pretty(&results).unwrap_or_default()).map_err(|e| e.to_string())?;
+        write_file(out, serde_json::to_string_pretty(&results).unwrap_or_default().as_bytes()).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -847,7 +853,7 @@ fn ui(args: &[String]) -> Result<(), CliError> {
     if let (Some(out), Some(data)) = (flag(args, "--out"), result.get("png_base64").and_then(|d| d.as_str())) {
         use base64::Engine as _;
         let png = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
-        std::fs::write(out, png).map_err(|e| format!("{out}: {e}"))?;
+        write_file(out, &png).map_err(|e| format!("{out}: {e}"))?;
         result["png_base64"] = serde_json::json!(format!("written to {out}"));
     }
     stdout_line(format_args!("{}", serde_json::to_string_pretty(&result).unwrap_or_default()))?;
