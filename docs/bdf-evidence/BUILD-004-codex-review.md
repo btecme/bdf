@@ -2,7 +2,7 @@
 
 Status: **historical initial review: two P1 findings at the heads below.**
 
-Latest disposition: [2026-10-18 correction retest](BUILD-004-codex-retest.md) at `c1d7b67e`: R1 closes; R2 remains open because failed refresh contaminates the next recovery snapshot. No merge recommended yet.
+Latest disposition: [2026-10-19 final correction retest](BUILD-004-codex-final-retest.md) at `26a0797a` closes R1/R2. Earlier findings and their original evidence remain below.
 
 Reviewed 2026-10-18: [PR #5](https://github.com/btecme/bdf/pull/5), initial head
 `0d1a64f20af456d86b78c336dc0a7b41db23028d` and follow-up
