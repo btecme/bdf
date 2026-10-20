@@ -1,6 +1,8 @@
 # BUILD-004 — independent Codex retest
 
-Status: **changes requested: R1 closes; R2 remains open with one P1 recovery defect.**
+Status: **historical first correction retest: R1 closed; R2 remained open at the head below.**
+
+Latest disposition: [2026-10-19 final correction retest](BUILD-004-codex-final-retest.md) at `26a0797a` closes R2; R1/R2 now pass independent retest.
 
 Reviewed 2026-10-18: [PR #5](https://github.com/btecme/bdf/pull/5), head
 `c1d7b67e9f4c6db7923d7536c298ca57f52a80d2`, base `main` at
