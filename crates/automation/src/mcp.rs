@@ -14,6 +14,7 @@
 use std::io::{BufRead, Write};
 
 use base64::Engine as _;
+use pdfcraft_platform::framing::{LineRead, read_line_limited, skip_line};
 use serde_json::{Value, json};
 
 use crate::{Automation, Content, ToolError};
@@ -60,14 +61,24 @@ pub const COMPACT_CORE_TOOLS: &[&str] = &[
 const TOOL_SEARCH: &str = "tool_search";
 const TOOL_CALL: &str = "tool_call";
 
+/// The longest message line the server reads, in bytes. A longer one is refused before it is buffered (F05): the
+/// line is read in pieces and at most this many bytes plus one are ever held, so a hostile or broken client cannot
+/// exhaust memory ahead of tool validation. Every message kind shares the bound (`tools/call`, the compact
+/// `tool_search`/`tool_call` meta tools, `resources/read`, ...), because it applies before the message is parsed.
+pub const DEFAULT_MAX_MESSAGE: usize = 16 << 20;
+
+/// The most that is read and thrown away to get past an over-long line before the server gives up on the stream.
+const MAX_DISCARD: u64 = 1 << 30;
+
 pub struct McpServer {
     automation: Automation,
     compact: bool,
+    max_message: usize,
 }
 
 impl McpServer {
     pub fn new(automation: Automation) -> Self {
-        Self { automation, compact: false }
+        Self { automation, compact: false, max_message: DEFAULT_MAX_MESSAGE }
     }
 
     /// In compact mode `tools/list` returns only [`COMPACT_CORE_TOOLS`] plus `tool_search` and
@@ -78,23 +89,49 @@ impl McpServer {
         self
     }
 
+    /// The longest message line read, in bytes ([`DEFAULT_MAX_MESSAGE`] unless set here).
+    pub fn with_max_message(mut self, bytes: usize) -> Self {
+        self.max_message = bytes;
+        self
+    }
+
     pub fn automation(&self) -> &Automation {
         &self.automation
     }
 
     /// Serve until `input` reaches end of file.
-    pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        for line in input.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
+    ///
+    /// Lines are read with a bound ([`DEFAULT_MAX_MESSAGE`]): one that is longer gets a JSON-RPC error (-32600, id
+    /// null, since it was never parsed), the rest of it is skipped without being kept, and the next message is read
+    /// as usual. A line that is not valid UTF-8 gets a parse error and the server carries on.
+    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+        let mut buf = Vec::new();
+        loop {
+            match read_line_limited(&mut input, &mut buf, self.max_message, None)? {
+                LineRead::End => return Ok(()),
+                LineRead::TooLong => {
+                    let reply = error(Value::Null, INVALID_REQUEST, &format!("message longer than {} bytes; it was not read", self.max_message));
+                    writeln!(output, "{reply}")?;
+                    output.flush()?;
+                    // Skip to the end of that line without keeping it; a stream that never ends it is given up on.
+                    let far = std::time::Instant::now() + std::time::Duration::from_secs(60 * 60 * 24 * 365);
+                    if !skip_line(&mut input, MAX_DISCARD, far) {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                LineRead::Line => {}
             }
-            if let Some(reply) = self.handle_line(&line) {
+            let reply = match std::str::from_utf8(&buf) {
+                Ok(line) if line.trim().is_empty() => continue,
+                Ok(line) => self.handle_line(line),
+                Err(_) => Some(error(Value::Null, PARSE_ERROR, "parse error: the message is not valid UTF-8").to_string()),
+            };
+            if let Some(reply) = reply {
                 writeln!(output, "{reply}")?;
                 output.flush()?;
             }
         }
-        Ok(())
     }
 
     /// Handle one JSON-RPC message; returns the serialized reply, if one is due.

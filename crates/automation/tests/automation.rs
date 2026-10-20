@@ -1015,6 +1015,133 @@ fn mcp_resources_expose_open_documents() {
     assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "pdfcraft://doc/1/page/9/image" }))["error"]["code"], -32602);
 }
 
+// ---- BUILD-005 (F05): bounded MCP framing ----------------------------------------------------
+
+/// A valid JSON-RPC line exactly `len` bytes long: `method` and `params` as given, padded by an extra string member.
+#[cfg(feature = "mcp")]
+fn request_of(len: usize, id: u64, method: &str, mut params: Value) -> String {
+    params["padding"] = json!("");
+    let base = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
+    let line = base.replacen("\"padding\":\"\"", &format!("\"padding\":\"{}\"", "x".repeat(len - base.len())), 1);
+    assert_eq!(line.len(), len, "the request can't be made that short");
+    line
+}
+
+/// Run `lines` through the real `serve` loop and return the replies.
+#[cfg(feature = "mcp")]
+fn serve_lines(server: &mut McpServer, lines: &[String]) -> Vec<Value> {
+    let input = lines.join("\n");
+    let mut out = Vec::new();
+    server.serve(input.as_bytes(), &mut out).unwrap();
+    String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+/// The bound is the same for every kind of message because it is applied before any of them is parsed: an ordinary
+/// tool call, the compact `tool_search` and `tool_call` meta tools, and a resource read. At the limit each is served;
+/// over it each gets one error naming the limit, and the next request on the same stream is served.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_messages_at_the_limit_are_served_and_longer_ones_refused_then_skipped() {
+    const MAX: usize = 4096;
+    let dir = workdir("mcp-framing");
+    let kinds: Vec<(&str, &str, Value)> = vec![
+        ("ordinary tools/call", "tools/call", json!({ "name": "doc_open", "arguments": { "path": "a.pdf" } })),
+        ("compact tool_search", "tools/call", json!({ "name": "tool_search", "arguments": { "query": "rotate" } })),
+        ("compact tool_call", "tools/call", json!({ "name": "tool_call", "arguments": { "name": "doc_info", "arguments": { "doc": 1 } } })),
+        ("resources/read", "resources/read", json!({ "uri": "pdfcraft://doc/1/info" })),
+        ("tools/list", "tools/list", json!({})),
+    ];
+    for (what, method, params) in kinds {
+        let mut s = McpServer::new(auto(&dir)).with_compact(true).with_max_message(MAX);
+        // Open a document first so the resource and doc_info requests have something to read.
+        let opened = serve_lines(&mut s, &[request_of(300, 1, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "a.pdf" } }))]);
+        assert_eq!(opened[0]["result"]["isError"], false, "{what}: {}", opened[0]);
+        let replies = serve_lines(
+            &mut s,
+            &[
+                request_of(MAX, 2, method, params.clone()),
+                request_of(MAX + 1, 3, method, params.clone()),
+                request_of(MAX * 100, 4, method, params.clone()),
+                request_of(MAX - 50, 5, method, params.clone()),
+            ],
+        );
+        assert_eq!(replies.len(), 4, "{what}: one reply per line");
+        assert!(replies[0].get("result").is_some(), "{what}: a request exactly at the limit is served: {}", replies[0]);
+        for over in [&replies[1], &replies[2]] {
+            assert_eq!(over["error"]["code"], -32600, "{what}: {over}");
+            assert!(over["error"]["message"].as_str().unwrap().contains(&format!("longer than {MAX} bytes")), "{what}");
+        }
+        assert!(replies[3].get("result").is_some(), "{what}: the request after the long ones is served: {}", replies[3]);
+        assert_eq!(replies[3]["id"], 5, "{what}: and it is answered under its own id");
+    }
+}
+
+/// A line of 64 MiB is refused without ever being held: it is produced lazily, so a server that tried to buffer it
+/// would need all of it, and the test would need the memory. The server reads a few pieces, refuses, skips the rest
+/// as it is generated and serves the request that follows.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_refuses_a_huge_line_without_buffering_it() {
+    use std::io::{BufRead, Read};
+    const CHUNK: usize = 8192;
+    static X: [u8; CHUNK] = [b'x'; CHUNK];
+    struct Endless {
+        left: u64,
+        tail: std::io::Cursor<Vec<u8>>,
+        generated: u64,
+    }
+    impl Read for Endless {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let chunk = self.fill_buf()?;
+            let n = chunk.len().min(out.len());
+            out[..n].copy_from_slice(&chunk[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+    impl BufRead for Endless {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            if self.left > 0 {
+                let n = self.left.min(CHUNK as u64) as usize;
+                return Ok(&X[..n]);
+            }
+            self.tail.fill_buf()
+        }
+        fn consume(&mut self, n: usize) {
+            if self.left > 0 {
+                self.left -= n as u64;
+                self.generated += n as u64;
+            } else {
+                self.tail.consume(n);
+            }
+        }
+    }
+    let tail = format!("\n{}\n", json!({ "jsonrpc": "2.0", "id": 9, "method": "ping" }));
+    let mut input = Endless { left: 64 << 20, tail: std::io::Cursor::new(tail.into_bytes()), generated: 0 };
+    let mut out = Vec::new();
+    McpServer::new(Automation::new()).serve(&mut input, &mut out).unwrap();
+    assert!(input.generated >= 64 << 20, "the whole line was consumed (skipped), not left in the pipe");
+    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_eq!(replies[0]["error"]["code"], -32600);
+    assert_eq!(replies[1]["id"], 9, "the next request is served");
+    assert_eq!(replies[1]["result"], json!({}));
+}
+
+/// A line that is not UTF-8 gets a parse error and the server carries on (it used to end the session).
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_survives_a_line_that_is_not_utf8() {
+    let mut input = b"\xff\xfe not text\n".to_vec();
+    input.extend_from_slice(json!({ "jsonrpc": "2.0", "id": 3, "method": "ping" }).to_string().as_bytes());
+    input.push(b'\n');
+    let mut out = Vec::new();
+    McpServer::new(Automation::new()).serve(input.as_slice(), &mut out).unwrap();
+    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies[0]["error"]["code"], -32700);
+    assert_eq!(replies[1]["id"], 3);
+}
+
 /// A server in compact mode with `dir` as its root.
 #[cfg(feature = "mcp")]
 fn compact_server(dir: &Path) -> McpServer {
