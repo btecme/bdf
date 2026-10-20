@@ -1078,6 +1078,96 @@ fn a_save_through_command_run_refuses_a_conflict_too() {
     assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), external);
 }
 
+// ---- BUILD-006 (F06): root confinement while the tree changes --------------------------------
+
+/// A directory link `at` -> `to`: a symbolic link on Unix, a junction on Windows (which needs no privilege).
+fn junction_to(to: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(to, at).unwrap();
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(at).arg(to).output().unwrap().status.success();
+        assert!(made, "mklink /J must be available to run this test");
+    }
+}
+
+/// A root with `inside/doc.pdf`, and a sibling folder outside it holding a sentinel with the same name.
+fn confined_tree(test: &str) -> (PathBuf, PathBuf) {
+    let base = workdir(test);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(root.join("inside")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::copy(base.join("a.pdf"), root.join("inside").join("doc.pdf")).unwrap();
+    // Byte-identical to the document inside the root, so a save through a link would pass the version check and only the
+    // confinement can stop it.
+    std::fs::copy(base.join("a.pdf"), outside.join("doc.pdf")).unwrap();
+    (root, outside)
+}
+
+/// What an attacker with write access to the tree does after the document was opened: the folder is moved away and a
+/// link to somewhere outside the root takes its name.
+fn swap_for_link(root: &Path, outside: &Path) {
+    std::fs::rename(root.join("inside"), root.join("inside-real")).unwrap();
+    junction_to(&outside.canonicalize().unwrap(), &root.join("inside"));
+}
+
+fn outside_untouched(outside: &Path) {
+    assert_eq!(
+        std::fs::read(outside.join("doc.pdf")).unwrap(),
+        std::fs::read(outside.parent().unwrap().join("a.pdf")).unwrap(),
+        "the file outside the root changed"
+    );
+    let mut names: Vec<_> = std::fs::read_dir(outside).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, ["doc.pdf"], "nothing was created outside the root: {names:?}");
+}
+
+/// F06: a document opened from inside the root, then the folder is replaced by a link out of it. The implicit save (the
+/// stored path, which used to be reused without a second look), an explicit save, a save into a new subfolder and a
+/// multi-output tool are all refused, and nothing outside the root changes.
+#[test]
+fn a_folder_replaced_by_a_link_after_open_never_receives_a_save() {
+    let (root, outside) = confined_tree("confine-swap");
+    let mut a = Automation::new().with_root(&root).unwrap().with_clock(|| 1_700_000_000);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside/doc.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "MINE" }));
+    swap_for_link(&root, &outside);
+
+    for (what, args) in [
+        ("implicit stored path", json!({ "doc": doc })),
+        ("explicit path", json!({ "doc": doc, "path": "inside/doc.pdf" })),
+        ("a new subfolder through the link", json!({ "doc": doc, "path": "inside/new/doc2.pdf" })),
+        ("a new file through the link", json!({ "doc": doc, "path": "inside/other.pdf" })),
+    ] {
+        let refused = a.call("doc_save", &args).unwrap_err();
+        assert!(matches!(refused, ToolError::Failed(_)), "{what}: {refused}");
+        outside_untouched(&outside);
+    }
+    // A multi-output tool is confined the same way.
+    let split = a.call("doc_split", &json!({ "doc": doc, "every": 1, "out_dir": "inside" }));
+    assert!(split.is_err(), "doc_split wrote through the link");
+    outside_untouched(&outside);
+    // And a document cannot be opened through it.
+    assert!(a.call("doc_open", &json!({ "path": "inside/doc.pdf" })).is_err());
+    outside_untouched(&outside);
+    // The session still holds the edit, and the real folder (moved aside) is intact.
+    assert!(root.join("inside-real").join("doc.pdf").exists());
+}
+
+/// The same tree without the swap works, including new subfolders: the checks do not refuse ordinary use.
+#[test]
+fn saves_inside_the_root_still_work_including_new_subfolders() {
+    let (root, outside) = confined_tree("confine-ok");
+    let mut a = Automation::new().with_root(&root).unwrap().with_clock(|| 1_700_000_000);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside/doc.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "MINE" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "deep/er/copy.pdf" }));
+    assert!(root.join("deep").join("er").join("copy.pdf").exists());
+    outside_untouched(&outside);
+}
+
 // ---- MCP ---------------------------------------------------------------------------------------
 
 #[cfg(feature = "mcp")]

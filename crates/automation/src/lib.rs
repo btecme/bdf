@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pdfcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
+use pdfcraft_platform::confinement::{pin_existing, write_confined_with};
 use pdfcraft_platform::file_identity::{Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_with_version, write_guarded};
 use pdfcraft_platform::persistence::{Steps, write_replace_with};
 use pdfcraft_platform::staging::{StagingName, staging_suffixes};
@@ -78,6 +79,32 @@ type Result<T> = std::result::Result<T, ToolError>;
 
 fn failed(e: impl std::fmt::Display) -> ToolError {
     ToolError::Failed(e.to_string())
+}
+
+thread_local! {
+    /// The root the tool call running on this thread is confined to, so that every write it makes, however deeply a tool
+    /// nests, pins its destination folder and revalidates it at the commit (`pdfcraft_platform::confinement`).
+    static CONFINE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes `root` the confinement root of this thread until dropped; the previous one is restored after.
+struct ConfineScope(Option<PathBuf>);
+
+impl ConfineScope {
+    fn enter(root: Option<PathBuf>) -> Self {
+        Self(CONFINE.with(|c| c.replace(root)))
+    }
+}
+
+impl Drop for ConfineScope {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        CONFINE.with(|c| *c.borrow_mut() = previous);
+    }
+}
+
+fn confinement_root() -> Option<PathBuf> {
+    CONFINE.with(|c| c.borrow().clone())
 }
 
 /// A refused or failed document save as the error an agent reads. A conflict says what is on disk and how to
@@ -178,6 +205,7 @@ impl Automation {
     /// path resolves inside it) and written atomically. Without one, the path is written as
     /// given, so `/dev/stdout` and the like still work (a regular file still goes through the same service). Returns where the file went.
     pub fn write_output(&self, path: &str, bytes: &[u8]) -> Result<PathBuf> {
+        let _confined = ConfineScope::enter(self.root.clone());
         let target = self.resolve(path, true)?;
         if self.root.is_some() {
             write_atomic(&target, bytes)?;
@@ -196,6 +224,7 @@ impl Automation {
         }
         let def = tools::find(name).ok_or_else(|| ToolError::UnknownTool(name.into()))?;
         tools::check_args(def, args)?;
+        let _confined = ConfineScope::enter(self.root.clone());
         let a = Args(args);
         let out = match name {
             "doc_open" => self.doc_open(&a)?,
@@ -866,6 +895,12 @@ impl Automation {
 
     fn doc_open(&mut self, a: &Args) -> Result<Value> {
         let path = self.resolve(a.str("path")?, false)?;
+        // With a root, the folder is held (and checked link-free) while the file is read, so it cannot be swapped for a
+        // link to somewhere else between the check above and the open.
+        let _pin = match (&self.root, path.parent()) {
+            (Some(root), Some(dir)) => Some(pin_existing(root, dir).map_err(|e| failed(format!("{}: {e}", path.display())))?),
+            _ => None,
+        };
         // The version is taken from the same open handle as the bytes, so it describes exactly what was opened.
         let (bytes, version) = read_with_version(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -894,7 +929,15 @@ impl Automation {
         let id = doc.id;
         let target = match a.opt_str("path")? {
             Some(p) => self.resolve(p, true)?,
-            None => PathBuf::from(doc.path.clone().ok_or_else(|| failed("the document has never been saved: pass a path"))?),
+            None => {
+                let stored = doc.path.clone().ok_or_else(|| failed("the document has never been saved: pass a path"))?;
+                // The path stored when the document was opened or last saved is checked against the root again: the
+                // folders on the way may have been replaced by links since (BUILD-006).
+                match &self.root {
+                    Some(_) => self.resolve(&stored, true)?,
+                    None => PathBuf::from(stored),
+                }
+            }
         };
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
@@ -918,6 +961,10 @@ impl Automation {
     /// a version the caller inspected and named in `overwrite_version`, or nothing at all (the file must not exist).
     /// Never "whatever is there". On success the tracked version becomes the one just written.
     fn commit_document_file(&mut self, id: DocId, target: &Path, bytes: &[u8], same_file: bool, a: &Args) -> Result<()> {
+        // A folder can't be replaced, and "." names the root itself, whose parent isn't ours to write in.
+        if target.is_dir() {
+            return Err(failed(format!("{}: is a folder, not a file", target.display())));
+        }
         let confirmed = match a.opt_str("overwrite_version")? {
             None => None,
             Some("absent") => Some(None),
@@ -932,10 +979,16 @@ impl Automation {
             (Some(None), _) | (None, None) => Authority::CreateNew,
             (None, Some(version)) => Authority::ReplaceTracked(version),
         };
-        if let Some(dir) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        if let Some(root) = confinement_root() {
+            // Confined: the folder is pinned and revalidated at the commit, with the authority checked there too.
+            write_confined_with(&root, target, bytes, StagingName::SuffixThenTag, Some(authority), staging_suffixes(), &Steps::real())
+                .map_err(|e| save_error(target, e))?;
+        } else {
+            if let Some(dir) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+            }
+            write_guarded(target, bytes, StagingName::SuffixThenTag, authority).map_err(|e| save_error(target, e))?;
         }
-        write_guarded(target, bytes, StagingName::SuffixThenTag, authority).map_err(|e| save_error(target, e))?;
         self.versions.insert(id, FileVersion::of_bytes(bytes, None));
         Ok(())
     }
@@ -2382,6 +2435,13 @@ fn write_atomic_steps(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Ite
     }
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
+    // With a root, the folder is created link-free, held while the file is written and checked again at the commit
+    // (`pdfcraft_platform::confinement`); without one, it is created as it always was.
+    if let Some(root) = confinement_root() {
+        return write_confined_with(&root, path, bytes, StagingName::SuffixThenTag, None, suffixes, steps)
+            .map(|_| ())
+            .map_err(|e| failed(format!("{}: {e}", path.display())));
+    }
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
     write_replace_with(path, bytes, StagingName::SuffixThenTag, suffixes, steps).map(|_| ()).map_err(|e| failed(format!("{}: {e}", path.display())))
 }

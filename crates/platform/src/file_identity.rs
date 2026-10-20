@@ -228,16 +228,8 @@ mod tests {
         assert_eq!(text.len(), 64);
         assert_eq!(parse_fingerprint(&text), Some(v.sha256));
         assert_eq!(parse_fingerprint(&text.to_uppercase()), Some(v.sha256));
-        for bad in [
-            "",
-            "zz",
-            &text[..63],
-            &format!("{text}0"),
-            &text.replace('a', "g").replace('b', "g").replace('c', "g").replace('d', "g").replace('e', "g").replace('f', "g"),
-        ] {
-            if bad == text {
-                continue;
-            }
+        let not_hex = "g".repeat(64);
+        for bad in ["", "zz", &text[..63], &format!("{text}0"), &not_hex] {
             assert_eq!(parse_fingerprint(bad), None, "{bad:?}");
         }
         assert_eq!(parse_fingerprint("é".repeat(32).as_str()), None, "non-ASCII input is refused without slicing it");
