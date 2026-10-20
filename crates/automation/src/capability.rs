@@ -181,7 +181,7 @@ pub static TOOLS: &[ToolCap] = &[
     ToolCap { name: "doc_remove_hidden", verdict: Verdict::Deferred, requirement: "", why: "Permanent redaction and sanitization are deferred from v1 (never an opaque rectangle).", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_remove_marks", verdict: Verdict::Deferred, requirement: "", why: "Page assembly beyond the v1 operations, and page marks, are deferred.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_revisions", verdict: Verdict::Deferred, requirement: "", why: "Revision access arrives with the shared service and revision contracts (BUILD-007).", params: &[], denied_params: &[], enums: &[] },
-    ToolCap { name: "doc_save", verdict: Verdict::Core, requirement: "CORE-06", why: "Save safely.", params: &["doc", "full", "path"], denied_params: &["flatten_fill_sign"], enums: &[] },
+    ToolCap { name: "doc_save", verdict: Verdict::Core, requirement: "CORE-06", why: "Save safely.", params: &["doc", "full", "overwrite_version", "path"], denied_params: &["flatten_fill_sign"], enums: &[] },
     ToolCap { name: "doc_set_info", verdict: Verdict::Deferred, requirement: "", why: "Metadata editing, document creation and view settings are outside the v1 list.", params: &[], denied_params: &[], enums: &[] },
     ToolCap { name: "doc_split", verdict: Verdict::Core, requirement: "CORE-05", why: "Organize pages (the v1 operations only).", params: &["before", "doc", "every", "out_dir"], denied_params: &["bookmarks", "max_mb"], enums: &[] },
     ToolCap { name: "doc_unprotect", verdict: Verdict::Deferred, requirement: "", why: "Adding encryption or removing protection is a separate qualified feature.", params: &[], denied_params: &[], enums: &[] },

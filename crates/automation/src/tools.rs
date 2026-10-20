@@ -143,7 +143,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_save",
             "Save a document",
-            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
+            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic and checked when it commits: it replaces only the version of the file this session last read or wrote, and creates a new path only if nothing is there. If the file changed on disk (another program, another session) or already exists, nothing is overwritten and the error gives the version found (disk_version); pass it back as overwrite_version to replace it knowingly. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
         )
         .destructive()
         .cmd("file.save")
@@ -152,7 +152,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "doc": doc(),
                 "path": { "type": "string", "description": "Save as this file. Omit to save in place." },
                 "full": { "type": "boolean", "description": "Force a full rewrite (or, with false, an incremental update)." },
-                "flatten_fill_sign": { "type": "boolean", "description": "Bake Fill & Sign marks into the page before writing. Default false." }
+                "flatten_fill_sign": { "type": "boolean", "description": "Bake Fill & Sign marks into the page before writing. Default false." },
+                "overwrite_version": { "type": "string", "description": "Replace the file that is there, if it is exactly this version: the disk_version a refused save reported (64 hex digits), or \"absent\" to create a file that was deleted. Without it a save replaces only the version this session last read or wrote, and creates only a file that does not exist." }
             }),
             &["doc"],
         )),
@@ -712,6 +713,7 @@ pub fn tools() -> Vec<ToolDef> {
                         "maxProperties": 1,
                     },
                     "out": { "type": "string", "description": "Where to save the signed document." },
+                    "overwrite_version": { "type": "string", "description": "As for doc_save: replace the file at out if it is exactly this version (the disk_version a refused save reported), or \"absent\"." },
                 }),
                 &["doc", "id", "out"],
             )),

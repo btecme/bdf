@@ -50,6 +50,8 @@ pub enum Stage {
     Write,
     /// Flushing it to the disk.
     Flush,
+    /// The caller's check that the target is still what the save may replace (see [`crate::file_identity`]).
+    Guard,
     /// Replacing the target with it.
     Replace,
 }
@@ -61,6 +63,7 @@ impl Stage {
             Stage::Stage => "creating a temporary file",
             Stage::Write => "writing",
             Stage::Flush => "flushing to disk",
+            Stage::Guard => "checking the file is still the one being replaced",
             Stage::Replace => "replacing the file",
         }
     }
@@ -137,6 +140,7 @@ pub struct Replacement<'a> {
 
 /// The operations a save performs, so a test can make any one of them fail. [`Steps::real`] is the only
 /// set the product uses.
+#[derive(Clone, Copy)]
 pub struct Steps<'a> {
     pub write: &'a dyn Fn(&mut File, &[u8]) -> io::Result<()>,
     pub flush: &'a dyn Fn(&File) -> io::Result<()>,
@@ -147,6 +151,10 @@ pub struct Steps<'a> {
     pub adopt_acl: &'a dyn Fn(&Replacement) -> io::Result<()>,
     /// Windows: whether the target's volume keeps access lists at all.
     pub has_acls: &'a dyn Fn(&Path) -> io::Result<bool>,
+    /// Called with the target's path after the new bytes are staged, flushed and closed, immediately before they
+    /// replace it. An error refuses the save: the staging file is removed and the target is untouched. This is where
+    /// [`crate::file_identity`] checks that the file is still the version the save may replace.
+    pub guard: &'a dyn Fn(&Path) -> io::Result<()>,
 }
 
 impl Steps<'static> {
@@ -158,6 +166,7 @@ impl Steps<'static> {
             link: &real_link,
             adopt_acl: &real_replace,
             has_acls: &volume_has_acls,
+            guard: &|_| Ok(()),
         }
     }
 }
@@ -211,7 +220,8 @@ pub fn flush_with(file: &File, sync_all: impl FnOnce(&File) -> io::Result<()>) -
 fn real_replace(r: &Replacement) -> io::Result<()> {
     match r.existing {
         // Nothing to keep the permissions of, and nothing to lose: a rename.
-        Existing::Absent | Existing::Link => std::fs::rename(r.staging, r.target),
+        Existing::Link => std::fs::rename(r.staging, r.target),
+        Existing::Absent => create_without_replacing(r),
         Existing::File(_) => {
             let (Some(target), Some(staging), Some(backup)) = (r.target.to_str(), r.staging.to_str(), r.backup.to_str()) else {
                 // The Windows API takes text; a name that isn't valid Unicode can't be passed on, and a rename
@@ -229,7 +239,26 @@ fn real_replace(r: &Replacement) -> io::Result<()> {
 
 #[cfg(not(windows))]
 fn real_replace(r: &Replacement) -> io::Result<()> {
-    std::fs::rename(r.staging, r.target)
+    match r.existing {
+        Existing::Absent => create_without_replacing(r),
+        _ => std::fs::rename(r.staging, r.target),
+    }
+}
+
+/// Put the staged file at a name nothing had when the save began, without replacing anything that has appeared
+/// there since: a hard link fails if the name is taken (a rename would silently replace it), and the staging name is
+/// dropped afterwards. A filesystem without hard links (FAT, exFAT) falls back to the rename, whose window is the
+/// instant between the check and the call.
+fn create_without_replacing(r: &Replacement) -> io::Result<()> {
+    match std::fs::hard_link(r.staging, r.target) {
+        Ok(()) => {
+            // The file is in place under its final name; dropping the staging name is housekeeping.
+            let _ = std::fs::remove_file(r.staging);
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+        Err(_) => std::fs::rename(r.staging, r.target),
+    }
 }
 
 /// Save `bytes` over `path` (or create it), with the real operations. `form` is the staging-name shape
@@ -264,6 +293,7 @@ pub fn write_replace_with(
     })();
     staged.map_err(cleanup)?;
     keep_permissions(&staging, &existing, dir).map_err(|e| cleanup(PersistError::at(Stage::Replace, e)))?;
+    (steps.guard)(path).map_err(|e| cleanup(PersistError::at(Stage::Guard, e)))?;
     let backup = backup_path(&staging);
     let replacement = Replacement { staging: &staging, target: path, existing: &existing, backup: &backup };
     match (steps.replace)(&replacement) {
