@@ -2353,3 +2353,7 @@ animation effects	Off	Aus
 	This document is trying to open a local file:	Dieses Dokument versucht, eine lokale Datei zu öffnen:
 	Move tag earlier	Tag früher verschieben
 	Move tag later	Tag später verschieben
+	File conflict	Dateikonflikt
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	„{name}“ wurde außerhalb von PdfCraft geändert, seit Sie die Datei geöffnet oder zuletzt gespeichert haben. Wenn Sie jetzt speichern, wird diese neuere Version ersetzt. Es wurde nichts geschrieben.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	An dieser Stelle existiert bereits eine Datei namens „{name}“, die PdfCraft nicht angelegt hat. Es wurde nichts geschrieben.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	„{name}“ wurde gelöscht, seit Sie die Datei geöffnet oder zuletzt gespeichert haben. Es wurde nichts geschrieben.

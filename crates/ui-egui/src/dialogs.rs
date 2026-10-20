@@ -786,31 +786,26 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     close = true;
                     return;
                 };
-                let (title, body) = match conflict.kind {
-                    crate::editing::ConflictKind::Changed => (
-                        tl!("File changed on disk"),
-                        tl!(
-                            "“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written."
-                        ),
+                let body = match conflict.kind {
+                    crate::editing::ConflictKind::Changed => tl!(
+                        "“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written."
                     ),
-                    crate::editing::ConflictKind::Exists => (
-                        tl!("A file is already there"),
-                        tl!("A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written."),
-                    ),
-                    crate::editing::ConflictKind::Gone => {
-                        (tl!("File was deleted"), tl!("“{name}” was deleted since you opened or last saved it. Nothing has been written."))
+                    crate::editing::ConflictKind::Exists => {
+                        tl!("A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.")
                     }
+                    crate::editing::ConflictKind::Gone => tl!("“{name}” was deleted since you opened or last saved it. Nothing has been written."),
                 };
-                ui.label(egui::RichText::new(title).font(theme::semibold(18.0)));
+                ui.label(egui::RichText::new(tl!("File conflict")).font(theme::semibold(18.0)));
                 ui.add_space(8.0);
                 ui.label(crate::i18n::fmt(body, &[("name", &conflict.name)]));
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::pill_button(ui, tl!("Overwrite"), false).clicked() {
+                    // "Replace" and "Save as…" are the catalogue's existing words for these two actions.
+                    if widgets::pill_button(ui, tl!("Replace"), false).clicked() {
                         overwrite_now = true;
                         close = true;
                     }
-                    if widgets::pill_button(ui, tl!("Save a Copy…"), true).clicked() {
+                    if widgets::pill_button(ui, tl!("Save as…"), true).clicked() {
                         copy_now = true;
                         close = true;
                     }

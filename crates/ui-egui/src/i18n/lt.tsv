@@ -2596,3 +2596,7 @@ key	Space	Tarpas
 	This document is trying to open a local file:	Šis dokumentas bando atverti vietinį failą:
 	Move tag earlier	Perkelti žymą anksčiau
 	Move tag later	Perkelti žymą vėliau
+	File conflict	Failo konfliktas
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	„{name}“ buvo pakeistas ne programoje PdfCraft, nuo to laiko, kai jį atvėrėte arba paskutinį kartą įrašėte. Įrašius dabar, ši naujesnė versija būtų pakeista. Nieko neįrašyta.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	Toje vietoje jau yra failas „{name}“, kurio PdfCraft nesukūrė. Nieko neįrašyta.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	„{name}“ buvo ištrintas nuo to laiko, kai jį atvėrėte arba paskutinį kartą įrašėte. Nieko neįrašyta.

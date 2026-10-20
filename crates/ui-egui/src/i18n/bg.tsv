@@ -2315,3 +2315,7 @@ animation effects	Off	Изключени
 	This document is trying to open a local file:	Този документ се опитва да отвори локален файл:
 	Move tag earlier	Преместване на етикета по-рано
 	Move tag later	Преместване на етикета по-късно
+	File conflict	Конфликт с файла
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	„{name}“ е променен извън PdfCraft, откакто сте го отворили или записали за последно. Ако запишете сега, тази по-нова версия ще бъде заменена. Нищо не е записано.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	На това място вече има файл с име „{name}“, който не е създаден от PdfCraft. Нищо не е записано.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	„{name}“ е изтрит, откакто сте го отворили или записали за последно. Нищо не е записано.

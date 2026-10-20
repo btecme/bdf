@@ -2426,3 +2426,7 @@ animation effects	Off	Vypnuto
 	This document is trying to open a local file:	Tento dokument se pokouší otevřít místní soubor:
 	Move tag earlier	Přesunout značku dříve
 	Move tag later	Přesunout značku později
+	File conflict	Konflikt souboru
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	Soubor „{name}“ byl změněn mimo PdfCraft od doby, kdy jste jej otevřeli nebo naposledy uložili. Uložením by se tato novější verze nahradila. Nic nebylo zapsáno.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	Na tomto místě již existuje soubor s názvem „{name}“, který PdfCraft nevytvořil. Nic nebylo zapsáno.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	Soubor „{name}“ byl odstraněn od doby, kdy jste jej otevřeli nebo naposledy uložili. Nic nebylo zapsáno.

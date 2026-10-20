@@ -533,7 +533,7 @@ fn saving_over_a_file_changed_on_disk_asks_and_keeps_both_versions() {
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
-    h.get_by_label("File changed on disk");
+    h.get_by_label("File conflict");
     assert_eq!(std::fs::read(&path).unwrap(), external, "the other program's version is untouched");
     assert!(dirty(&h), "the document still holds its edit");
     assert!(h.state().save_conflict.is_some());
@@ -546,7 +546,7 @@ fn saving_over_a_file_changed_on_disk_asks_and_keeps_both_versions() {
     // Again, and this time replace it, knowingly.
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
-    h.get_by_label("Overwrite").click();
+    h.get_by_label("Replace").click();
     h.run_steps(4);
     assert_ne!(std::fs::read(&path).unwrap(), external, "replaced, because that version was confirmed");
     assert!(!dirty(&h), "and saved");
@@ -563,14 +563,14 @@ fn overwrite_is_bound_to_the_version_that_was_found() {
     std::fs::write(&path, fixture(2)).unwrap();
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
-    h.get_by_label("File changed on disk");
+    h.get_by_label("File conflict");
     // While the dialog is open the file changes again.
     let newest = fixture(5);
     std::fs::write(&path, &newest).unwrap();
-    h.get_by_label("Overwrite").click();
+    h.get_by_label("Replace").click();
     h.run_steps(4);
     assert_eq!(std::fs::read(&path).unwrap(), newest, "the newest version was not overwritten");
-    h.get_by_label("File changed on disk");
+    h.get_by_label("File conflict");
     assert!(dirty(&h));
     let _ = std::fs::remove_file(path);
 }
@@ -590,7 +590,7 @@ fn a_change_that_keeps_the_size_and_timestamp_is_still_a_conflict() {
     std::fs::File::options().write(true).open(&path).unwrap().set_modified(mtime).unwrap();
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
-    h.get_by_label("File changed on disk");
+    h.get_by_label("File conflict");
     assert_eq!(std::fs::read(&path).unwrap(), tampered);
     let _ = std::fs::remove_file(path);
 }
@@ -607,10 +607,10 @@ fn save_a_copy_keeps_the_other_version_and_writes_the_edit_elsewhere() {
     std::fs::write(&path, &external).unwrap();
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
-    h.get_by_label("File changed on disk");
+    h.get_by_label("File conflict");
     // The system's save dialog is answered by the override, as in the other save tests.
     h.state_mut().save_override = Some(copy.to_string_lossy().into_owned());
-    h.get_by_label("Save a Copy…").click();
+    h.get_by_label("Save as…").click();
     h.run_steps(4);
     assert_eq!(std::fs::read(&path).unwrap(), external, "the other version is where it was");
     let written = std::fs::read(&copy).expect("the copy was written");

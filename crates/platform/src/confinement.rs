@@ -25,6 +25,7 @@
 //! Handle-relative I/O (`openat`-style, so no path is ever resolved twice) would close the Unix gap too. No safe
 //! wrapper for it is in the approved dependency set; see `docs/bdf-evidence/BUILD-006.md`.
 
+#[cfg(windows)]
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};

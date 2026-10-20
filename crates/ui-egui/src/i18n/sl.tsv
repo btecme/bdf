@@ -2357,3 +2357,7 @@ animation effects	Off	Izklopljeni
 	This document is trying to open a local file:	Ta dokument poskuša odpreti lokalno datoteko:
 	Move tag earlier	Premakni oznako prej
 	Move tag later	Premakni oznako pozneje
+	File conflict	Navzkrižje datotek
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	Datoteka „{name}“ je bila spremenjena zunaj programa PdfCraft, odkar ste jo odprli ali nazadnje shranili. Če zdaj shranite, bo ta novejša različica zamenjana. Nič ni bilo zapisano.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	Na tem mestu že obstaja datoteka z imenom „{name}“, ki je PdfCraft ni ustvaril. Nič ni bilo zapisano.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	Datoteka „{name}“ je bila izbrisana, odkar ste jo odprli ali nazadnje shranili. Nič ni bilo zapisano.

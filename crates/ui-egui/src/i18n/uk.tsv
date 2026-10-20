@@ -2374,3 +2374,7 @@ animation effects	Off	Вимкнено
 	This document is trying to open a local file:	Цей документ намагається відкрити локальний файл:
 	Move tag earlier	Перемістити тег раніше
 	Move tag later	Перемістити тег пізніше
+	File conflict	Конфлікт файлів
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	Файл «{name}» було змінено поза PdfCraft відтоді, як ви його відкрили або востаннє зберегли. Якщо зберегти зараз, цю новішу версію буде замінено. Нічого не записано.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	У цьому місці вже є файл «{name}», який не створював PdfCraft. Нічого не записано.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	Файл «{name}» було видалено відтоді, як ви його відкрили або востаннє зберегли. Нічого не записано.

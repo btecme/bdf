@@ -2350,3 +2350,7 @@ animation effects	Off	Өшірулі
 	This document is trying to open a local file:	Бұл құжат жергілікті файлды ашуға әрекеттеніп жатыр:
 	Move tag earlier	Тегті ертерек жылжыту
 	Move tag later	Тегті кейінірек жылжыту
+	File conflict	Файл қақтығысы
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	«{name}» файлын сіз ашқаннан немесе соңғы рет сақтағаннан кейін PdfCraft-тан тыс өзгертті. Қазір сақтасаңыз, осы жаңарақ нұсқа ауыстырылады. Ештеңе жазылған жоқ.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	Бұл орында «{name}» атты файл бұрыннан бар және оны PdfCraft жасаған жоқ. Ештеңе жазылған жоқ.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	«{name}» файлын сіз ашқаннан немесе соңғы рет сақтағаннан кейін жойды. Ештеңе жазылған жоқ.

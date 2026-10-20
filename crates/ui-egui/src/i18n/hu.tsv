@@ -2351,3 +2351,7 @@ animation effects	Off	Ki
 	This document is trying to open a local file:	Ez a dokumentum egy helyi fájlt próbál megnyitni:
 	Move tag earlier	Címke korábbra helyezése
 	Move tag later	Címke későbbre helyezése
+	File conflict	Fájlütközés
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	A(z) „{name}” fájlt más program módosította, mióta megnyitottad vagy utoljára mentetted. Ha most mentesz, felülírod ezt az újabb változatot. Semmi sem íródott ki.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	Ezen a helyen már van „{name}” nevű fájl, amelyet nem a PdfCraft hozott létre. Semmi sem íródott ki.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	A(z) „{name}” fájlt törölték, mióta megnyitottad vagy utoljára mentetted. Semmi sem íródott ki.
