@@ -292,8 +292,11 @@ pub fn write_replace_with(
         (steps.flush)(&file).map_err(|e| PersistError::at(Stage::Flush, e))
     })();
     staged.map_err(cleanup)?;
-    keep_permissions(&staging, &existing, dir).map_err(|e| cleanup(PersistError::at(Stage::Replace, e)))?;
+    // The guard comes first: it is where a confined save notices that its folder was swapped for a link (after which the
+    // staging path may lead somewhere else), and where the version being replaced is checked, as late as the work
+    // before the replacement allows.
     (steps.guard)(path).map_err(|e| cleanup(PersistError::at(Stage::Guard, e)))?;
+    keep_permissions(&staging, &existing, dir).map_err(|e| cleanup(PersistError::at(Stage::Replace, e)))?;
     let backup = backup_path(&staging);
     let replacement = Replacement { staging: &staging, target: path, existing: &existing, backup: &backup };
     match (steps.replace)(&replacement) {
