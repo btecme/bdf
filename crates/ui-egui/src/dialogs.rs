@@ -59,6 +59,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut import_words = false;
     let mut print_go = false;
     let mut revert_now = false;
+    let mut overwrite_now = false;
+    let mut copy_now = false;
+    let mut dismiss_conflict = false;
     let mut summarize_now = false;
     let mut optimize_now = false;
     let mut duplicate_now: Option<Edit> = None;
@@ -778,6 +781,46 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            Dialog::SaveConflict => {
+                let Some(conflict) = app.save_conflict.clone() else {
+                    close = true;
+                    return;
+                };
+                let (title, body) = match conflict.kind {
+                    crate::editing::ConflictKind::Changed => (
+                        tl!("File changed on disk"),
+                        tl!(
+                            "“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written."
+                        ),
+                    ),
+                    crate::editing::ConflictKind::Exists => (
+                        tl!("A file is already there"),
+                        tl!("A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written."),
+                    ),
+                    crate::editing::ConflictKind::Gone => {
+                        (tl!("File was deleted"), tl!("“{name}” was deleted since you opened or last saved it. Nothing has been written."))
+                    }
+                };
+                ui.label(egui::RichText::new(title).font(theme::semibold(18.0)));
+                ui.add_space(8.0);
+                ui.label(crate::i18n::fmt(body, &[("name", &conflict.name)]));
+                ui.add_space(12.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::pill_button(ui, tl!("Overwrite"), false).clicked() {
+                        overwrite_now = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Save a Copy…"), true).clicked() {
+                        copy_now = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        dismiss_conflict = true;
+                        close = true;
+                    }
+                });
+                return;
+            }
             Dialog::Print => {
                 let Some((i, id)) = app.active_ids() else {
                     close = true;
@@ -1188,6 +1231,19 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if revert_now {
         app.revert_active();
+    }
+    if overwrite_now {
+        app.overwrite_after_conflict();
+        // A save that is refused again (the file changed once more) asks again instead of closing.
+        if app.save_conflict.is_some() {
+            close = false;
+        }
+    }
+    if copy_now {
+        app.copy_after_conflict();
+    }
+    if dismiss_conflict {
+        app.save_conflict = None;
     }
     if summarize_now {
         app.summarize_comments();

@@ -2,6 +2,7 @@
 //! "save changes?" prompt when closing a tab or quitting with unsaved edits.
 
 use pdfcraft_engine::Edit;
+use pdfcraft_platform::file_identity::{Authority, Conflict, FileVersion, conflict_of, current, write_guarded};
 use pdfcraft_platform::persistence::{PersistError, Steps, write_replace_with};
 use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 
@@ -656,6 +657,12 @@ impl PdfCraftApp {
     /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str) -> bool {
+        self.save_doc_to_with(id, dest, None)
+    }
+
+    /// [`Self::save_doc_to`], with the authority the user gave in the conflict dialog instead of the usual one.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_doc_to_with(&mut self, id: pdfcraft_engine::DocId, dest: &str, authority_override: Option<OwnedAuthority>) -> bool {
         // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
         // if another tab is active by then.
         if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
@@ -675,12 +682,26 @@ impl PdfCraftApp {
                 return false;
             }
         };
+        // What this save may replace (BUILD-006): the version this session last read or wrote (an in-place save), the
+        // file the user just chose to replace in the system's save dialog (Save As), or nothing. It is checked at the
+        // commit, after the new bytes are staged, so a file changed in between is seen.
+        let authority = authority_override.unwrap_or_else(|| self.save_authority(id, dest));
         // Until the write has replaced the file nothing changes: a failure here leaves the document unsaved,
         // its recovery copy in place and the original file as it was (`pdfcraft_platform::persistence`).
-        if let Err(e) = write_atomically(dest, &bytes) {
-            self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
-            return false;
+        match write_document(dest, &bytes, authority.as_authority()) {
+            Ok(()) => {}
+            Err(WriteFailure::Conflict(conflict)) => {
+                // Nothing was written. The document is as it was (unsaved, with its recovery copy); the user chooses.
+                self.save_conflict = Some(SaveConflict::new(id, dest, &name, &conflict));
+                self.dialog = Some(crate::Dialog::SaveConflict);
+                return false;
+            }
+            Err(WriteFailure::Io(e)) => {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
+                return false;
+            }
         }
+        self.disk_versions.insert(id, FileVersion::of_bytes(&bytes, None));
         self.record_committed_save(id, dest, bytes, generation)
     }
 
@@ -940,6 +961,121 @@ pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
     p.contains("/inetcache/content.outlook/")
         || p.contains("/temporary internet files/content.outlook/")
         || p.contains("/microsoft.outlookforwindows")
+}
+
+/// Why a document save was refused, and what the user is asked (the Save conflict dialog).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConflictKind {
+    /// The file on disk is not the version this session last read or wrote.
+    Changed,
+    /// The save would create a file, and one is already there.
+    Exists,
+    /// The file this session read or wrote has been deleted.
+    Gone,
+}
+
+/// A save that was refused because the file is not the version it may replace: nothing was written.
+#[derive(Clone, Debug)]
+pub struct SaveConflict {
+    pub doc: pdfcraft_engine::DocId,
+    pub dest: String,
+    pub name: String,
+    pub kind: ConflictKind,
+    /// The fingerprint of the version found on disk. "Overwrite" is bound to this version: if the file changes again
+    /// before the second commit, that save is refused as well.
+    pub disk_version: Option<[u8; 32]>,
+}
+
+impl SaveConflict {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new(doc: pdfcraft_engine::DocId, dest: &str, name: &str, conflict: &Conflict) -> Self {
+        let (kind, disk_version) = match conflict {
+            Conflict::Changed { actual, .. } => (ConflictKind::Changed, Some(actual.sha256)),
+            Conflict::Exists { actual } => (ConflictKind::Exists, Some(actual.sha256)),
+            Conflict::Gone { .. } => (ConflictKind::Gone, None),
+        };
+        Self { doc, dest: dest.to_string(), name: name.to_string(), kind, disk_version }
+    }
+}
+
+/// [`Authority`] that owns what it refers to, so it can be built now and used for a later save.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub(crate) enum OwnedAuthority {
+    CreateNew,
+    ReplaceTracked(FileVersion),
+    ReplaceConfirmed([u8; 32]),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl OwnedAuthority {
+    fn as_authority(&self) -> Authority<'_> {
+        match self {
+            OwnedAuthority::CreateNew => Authority::CreateNew,
+            OwnedAuthority::ReplaceTracked(v) => Authority::ReplaceTracked(v),
+            OwnedAuthority::ReplaceConfirmed(h) => Authority::ReplaceConfirmed(h),
+        }
+    }
+}
+
+/// How a document write failed: because of the file's version, or for any other reason.
+#[cfg(not(target_arch = "wasm32"))]
+enum WriteFailure {
+    Conflict(Conflict),
+    Io(std::io::Error),
+}
+
+/// The shared persistence service, with the authority of the save checked at the commit.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_document(path: &str, bytes: &[u8], authority: Authority) -> Result<(), WriteFailure> {
+    match write_guarded(std::path::Path::new(path), bytes, StagingName::TagThenSuffix, authority) {
+        Ok(_) => Ok(()),
+        Err(e) => match conflict_of(&e) {
+            Some(conflict) => Err(WriteFailure::Conflict(conflict.clone())),
+            None => Err(WriteFailure::Io(e.into_io())),
+        },
+    }
+}
+
+impl PdfCraftApp {
+    /// What a save of document `id` to `dest` may replace. In place, that is the version this session last read or
+    /// wrote. To another path the user chose in the system's save dialog (which asks before replacing a file), it is
+    /// the file that is there now; if nothing is there, nothing may be replaced.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_authority(&self, id: pdfcraft_engine::DocId, dest: &str) -> OwnedAuthority {
+        let Some(doc) = self.session.get(id) else { return OwnedAuthority::CreateNew };
+        if doc.path.as_deref() == Some(dest) {
+            let version = self.disk_versions.get(&id).cloned().unwrap_or_else(|| FileVersion::of_bytes(&doc.saved_bytes(), None));
+            return OwnedAuthority::ReplaceTracked(version);
+        }
+        match current(std::path::Path::new(dest)) {
+            Ok(Some(there)) => OwnedAuthority::ReplaceConfirmed(there.sha256),
+            _ => OwnedAuthority::CreateNew,
+        }
+    }
+
+    /// The Save conflict dialog's "Overwrite": save again, replacing exactly the version that was found. If the file
+    /// has changed since, that save is refused too and the dialog comes back.
+    pub fn overwrite_after_conflict(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(conflict) = self.save_conflict.take() {
+            let authority = match conflict.disk_version {
+                Some(hash) => OwnedAuthority::ReplaceConfirmed(hash),
+                None => OwnedAuthority::CreateNew,
+            };
+            self.save_doc_to_with(conflict.doc, &conflict.dest, Some(authority));
+        }
+    }
+
+    /// The Save conflict dialog's "Save a Copy": keep the other version where it is and choose another file.
+    pub fn copy_after_conflict(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(conflict) = self.save_conflict.take()
+            && let Some(index) = self.views.iter().position(|v| v.id == conflict.doc)
+        {
+            self.save_view(index, SaveTarget::As);
+        }
+    }
 }
 
 /// Write via a temporary file in the same directory that then replaces the target, so a crash or a full

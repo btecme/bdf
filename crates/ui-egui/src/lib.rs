@@ -297,6 +297,8 @@ pub enum Dialog {
     Print,
     /// File ▸ Revert confirmation.
     Revert,
+    /// A save was refused because the file is not the version it may replace (`PdfCraftApp::save_conflict`).
+    SaveConflict,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.
@@ -607,6 +609,11 @@ pub struct PdfCraftApp {
     pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
+    /// The save the Save conflict dialog is about: what was found on disk, and where the document was going.
+    pub save_conflict: Option<editing::SaveConflict>,
+    /// The version of each document's file that this session last wrote, for the commit-time conflict check
+    /// (opened documents use the bytes they were opened from).
+    pub(crate) disk_versions: std::collections::HashMap<pdfcraft_engine::DocId, pdfcraft_platform::file_identity::FileVersion>,
     /// Save to this path instead of asking (tests and automation).
     pub save_override: Option<String>,
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
@@ -939,6 +946,8 @@ impl PdfCraftApp {
             host_save: None,
             host_dirty: None,
             close_request: None,
+            save_conflict: None,
+            disk_versions: std::collections::HashMap::new(),
             save_override: None,
             props_draft: None,
             view_draft: None,
