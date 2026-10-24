@@ -1,6 +1,6 @@
 # BUILD-007 evidence: the shared application service and revision contracts
 
-Status: **in progress (2026-10-24). Implemented and tested locally on Windows 11 x64; not yet run hosted; not reviewed by Codex.** Work item BUILD-007 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`; it depends on BUILD-006, which is merged (PR #8) but not marked verified by the owner. Branch `feat/build-007-app-service`, from `main` at `c85a1e55`. Finding F08 of the [foundation review](../bdf-foundation-review.md). Local commands ran with Rust 1.99.0, `--offline --locked` (one relock for the new workspace member and its dev-dependency edge, diffed: only the new package and one edge), two jobs.
+Status: **in progress (2026-10-24). Implemented, tested locally on Windows 11 x64 and hosted-green on `b12a1ae4` (PR #9, draft); not reviewed by Codex.** Work item BUILD-007 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`; it depends on BUILD-006, which is merged (PR #8) but not marked verified by the owner. Branch `feat/build-007-app-service`, from `main` at `c85a1e55`. Finding F08 of the [foundation review](../bdf-foundation-review.md). Local commands ran with Rust 1.99.0, `--offline --locked` (one relock for the new workspace member and its dev-dependency edge, diffed: only the new package and one edge), two jobs.
 
 **Scope, stated plainly.** This is the *contract and the first slice*: a new crate, `pdfcraft-app-service` (L7), that owns document sessions privately and offers open, query, rotate, undo, redo, history, save and close as typed operations, plus the revision model the engine needed to make those operations safe. **No adapter uses it yet** (the desktop, CLI and MCP still run on their own sessions); migrating them and deleting the duplicate orchestration is BUILD-009, which is where the acceptance item "no production alternate entry point bypasses the service" is tested. **It authorizes nothing:** identities, grants, release policy and audit are BUILD-008. Until then every caller of the service is the local user who started the process.
 
@@ -60,11 +60,16 @@ The new rule (undoing back to the saved content is clean) broke one existing eng
 * **`render_generation` is the engine's cache generation**, so it also moves for display-only changes; the late-result check uses the content revision, and a save that overlaps a display-only change is conservatively reported `edited_since` and left unsaved (engine `mark_saved_at` compares generations). Not fixed here.
 * **No jobs, cancellation or deadlines** (`canceled`, `worker_failure` and `resource_limit` are declared codes; only the open size limit raises the last). The 512 MiB open cap is a stopgap, not a budget.
 * **`unsupported_schema` is a thirteenth error code** beyond the twelve in the spec's list; recorded as a decision (a client must tell "update me" from "your request is wrong").
-* The service tests have only run on Windows. The confined-link test uses a symlink on Unix and has not run there.
-* No hosted run and no Codex review yet.
+* The confined-link test and the rest of the service tests ran on Windows locally and on Ubuntu and FreeBSD hosted (the Unix path swaps a symlink); there is no macOS run. As in BUILD-006, on Unix the confinement check narrows the window to the instant before the replacement and does not close it.
+* No Codex review yet.
+
+## 6. Hosted run
+
+The first hosted run (`277a67cb`) passed Windows, Ubuntu, FreeBSD, wasm32 and ARM64 and failed only the dependency job: three advisories had been published since `main` last passed (RUSTSEC-2026-0382 in `rustls-webpki`, -0385 in `ctutils`, -0387 in `crypto-bigint`), unrelated to this branch. They were cleared by a lock-only patch bump, kept as its own PR (#10, green on every job) and applied here as the same commit (`b12a1ae4`) so this PR does not wait on it; Git sees the identical change once either lands. The three new crates' checksums match the crates.io records, none is yanked, and the owners are the RustCrypto and rustls maintainers; `pdfcraft-sign` and `pdfcraft-crypt` tests pass with them. **Head `b12a1ae4`: Windows, Ubuntu, FreeBSD 15, wasm32, dependency policy, ARM64 cross-build and native install all pass** (fuzz skipped by event), read at job level through the API.
 
 ## Revision history
 
 | Date | Change |
 |---|---|
+| 2026-10-24 | Hosted run and the advisory bump recorded. |
 | 2026-10-24 | First version: engine content revision and saved-content identity, the app-service crate and its first slice, layering edges, parity test, evidence and limits. |
