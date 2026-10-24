@@ -130,6 +130,30 @@ fn saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents
     let _ = std::fs::remove_file(out);
 }
 
+/// BUILD-007: undoing back to the content that is in the file leaves nothing unsaved, so the copy written for the
+/// edit is withdrawn at the next autosave; a crash then has nothing to offer. Without it the recovery dialog would
+/// offer an edit the user had already undone.
+#[test]
+fn undoing_back_to_the_saved_content_withdraws_the_recovery_copy() {
+    let s = store("undone");
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.enable_recovery(s.clone());
+    app.open_bytes("a.pdf", None, fixture(2)).unwrap();
+    app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    app.autosave_now();
+    assert_eq!(s.list().len(), 1, "the edit is on the recovery list");
+    let id = app.views[0].id;
+    app.session.undo(id).unwrap();
+    assert!(!app.session.get(id).unwrap().dirty, "back at the opened content");
+    app.autosave_now();
+    assert_eq!(files_in(&s), 0, "the stale copy is gone");
+    // The edit again is unsaved work and gets a new copy.
+    app.session.redo(id).unwrap();
+    app.autosave_now();
+    assert_eq!(s.list().len(), 1);
+}
+
 #[test]
 fn quitting_cleanly_leaves_nothing_behind() {
     let s = store("quit");
