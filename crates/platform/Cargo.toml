@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# The content fingerprint of a file version (BUILD-006); already in the tree.
+sha2 = "0.11"
 
 [target.'cfg(windows)'.dependencies]
 # `ReplaceFile`, which keeps the replaced file's permissions (a rename gives the new file the folder's

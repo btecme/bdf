@@ -491,8 +491,133 @@ fn a_save_that_cannot_replace_the_file_keeps_the_edits_and_the_file() {
     assert_eq!(std::fs::read_to_string(blocker.join("inside.txt")).unwrap(), "KEEP");
     let beside: Vec<_> =
         std::fs::read_dir(blocker.parent().unwrap()).unwrap().filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-    assert!(!beside.iter().any(|n| n.contains("pdfcraft-") && n.ends_with(".tmp")), "no temporary file is left: {beside:?}");
+    // Only this test's own staging names count: other tests save in the same folder at the same time.
+    let own = ".a-folder-where-the-file-should-go.pdf.";
+    assert!(!beside.iter().any(|n| n.starts_with(own)), "no temporary file is left: {beside:?}");
     let _ = std::fs::remove_dir_all(&blocker);
+}
+
+// ---- BUILD-006 (F03): a save replaces only the version it may --------------------------------
+
+/// A folder of this test's own: the tests save in parallel, and some list the shared folder.
+fn own_folder(test: &str) -> std::path::PathBuf {
+    let dir = temp_path(test);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// An app with `bytes` opened from the file `path`, one page deleted (so the document is unsaved), ready to save.
+fn editing_a_file(path: &std::path::Path, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let file = path.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("conflict.pdf", Some(file), bytes).expect("opens");
+        assert!(app.apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] }));
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+/// Another program replaces the file after it was opened. Saving must not overwrite it: the dialog asks, nothing is
+/// written, the document keeps its edit. Cancel leaves both; Overwrite replaces exactly the version that was found.
+#[test]
+fn saving_over_a_file_changed_on_disk_asks_and_keeps_both_versions() {
+    let path = own_folder("changed-on-disk").join("doc.pdf");
+    std::fs::write(&path, fixture(3)).unwrap();
+    let mut h = editing_a_file(&path, fixture(3));
+    let external = fixture(2);
+    std::fs::write(&path, &external).unwrap();
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    h.get_by_label("File conflict");
+    assert_eq!(std::fs::read(&path).unwrap(), external, "the other program's version is untouched");
+    assert!(dirty(&h), "the document still holds its edit");
+    assert!(h.state().save_conflict.is_some());
+
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().save_conflict.is_none() && dirty(&h));
+    assert_eq!(std::fs::read(&path).unwrap(), external);
+
+    // Again, and this time replace it, knowingly.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    h.get_by_label("Replace").click();
+    h.run_steps(4);
+    assert_ne!(std::fs::read(&path).unwrap(), external, "replaced, because that version was confirmed");
+    assert!(!dirty(&h), "and saved");
+    let _ = std::fs::remove_file(path);
+}
+
+/// "Overwrite" is bound to the version the dialog showed: if the file changes once more before it commits, that save
+/// is refused as well and the newest version is not lost.
+#[test]
+fn overwrite_is_bound_to_the_version_that_was_found() {
+    let path = own_folder("changed-twice").join("doc.pdf");
+    std::fs::write(&path, fixture(3)).unwrap();
+    let mut h = editing_a_file(&path, fixture(3));
+    std::fs::write(&path, fixture(2)).unwrap();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    h.get_by_label("File conflict");
+    // While the dialog is open the file changes again.
+    let newest = fixture(5);
+    std::fs::write(&path, &newest).unwrap();
+    h.get_by_label("Replace").click();
+    h.run_steps(4);
+    assert_eq!(std::fs::read(&path).unwrap(), newest, "the newest version was not overwritten");
+    h.get_by_label("File conflict");
+    assert!(dirty(&h));
+    let _ = std::fs::remove_file(path);
+}
+
+/// Same length, same modification time, different bytes: still a conflict.
+#[test]
+fn a_change_that_keeps_the_size_and_timestamp_is_still_a_conflict() {
+    let path = own_folder("same-stamp").join("doc.pdf");
+    let original = fixture(3);
+    std::fs::write(&path, &original).unwrap();
+    let mut h = editing_a_file(&path, original.clone());
+    let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let mut tampered = original.clone();
+    let at = tampered.windows(6).position(|w| w == b"Page 1").unwrap() + 5;
+    tampered[at] = b'7';
+    std::fs::write(&path, &tampered).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(mtime).unwrap();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    h.get_by_label("File conflict");
+    assert_eq!(std::fs::read(&path).unwrap(), tampered);
+    let _ = std::fs::remove_file(path);
+}
+
+/// "Save a Copy" keeps the other version where it is and writes the document to the file the user picks.
+#[test]
+fn save_a_copy_keeps_the_other_version_and_writes_the_edit_elsewhere() {
+    let folder = own_folder("keep-both");
+    let (path, copy) = (folder.join("doc.pdf"), folder.join("copy.pdf"));
+    let _ = std::fs::remove_file(&copy);
+    std::fs::write(&path, fixture(3)).unwrap();
+    let mut h = editing_a_file(&path, fixture(3));
+    let external = fixture(2);
+    std::fs::write(&path, &external).unwrap();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    h.get_by_label("File conflict");
+    // The system's save dialog is answered by the override, as in the other save tests.
+    h.state_mut().save_override = Some(copy.to_string_lossy().into_owned());
+    h.get_by_label("Save as…").click();
+    h.run_steps(4);
+    assert_eq!(std::fs::read(&path).unwrap(), external, "the other version is where it was");
+    let written = std::fs::read(&copy).expect("the copy was written");
+    let reopened = pdfcraft_render::inspect(std::sync::Arc::new(written), None).unwrap();
+    assert_eq!(reopened.pages.len(), 2, "the copy has the edit (a page deleted)");
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(copy);
 }
 
 #[test]

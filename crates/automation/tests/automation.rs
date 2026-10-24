@@ -932,6 +932,242 @@ fn command_list_reports_enablement_and_tools() {
     assert_eq!(undo["label"], "Undo Rotate page");
 }
 
+// ---- BUILD-006 (F03): a save replaces only the version it may --------------------------------
+
+/// The conflict facts a refused save reports (the JSON on the last line of the error), or `None` if it was not one.
+fn conflict_facts(error: &ToolError) -> Option<Value> {
+    let ToolError::Failed(message) = error else { return None };
+    if !message.contains("save refused") {
+        return None;
+    }
+    serde_json::from_str(message.lines().last()?).ok()
+}
+
+/// A rotated copy of `a.pdf`'s bytes written by "another program": a different but valid document.
+fn external_edit(dir: &Path, name: &str) -> Vec<u8> {
+    let mut a = auto(dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [1], "degrees": 90 }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": name }));
+    std::fs::read(dir.join(name)).unwrap()
+}
+
+/// Open a file, let another program change it, then save: refused with a structured conflict, the program's version
+/// is left alone and the session keeps the edit, which can then be saved elsewhere or over the version knowingly.
+#[test]
+fn saving_over_a_file_changed_since_it_was_opened_is_refused_and_keeps_both_versions() {
+    let dir = workdir("conflict");
+    let external = external_edit(&dir, "other-program.pdf");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "MY EDIT" }));
+    // Another program replaces the file.
+    std::fs::write(dir.join("a.pdf"), &external).unwrap();
+
+    let refused = a.call("doc_save", &json!({ "doc": doc })).unwrap_err();
+    let facts = conflict_facts(&refused).unwrap_or_else(|| panic!("a structured conflict: {refused}"));
+    assert_eq!(facts["conflict"], "changed");
+    let disk_version = facts["disk_version"].as_str().unwrap().to_string();
+    assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), external, "the other program's version is untouched");
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(
+        (info["document"]["dirty"].as_bool(), info["title"].as_str()),
+        (Some(true), Some("MY EDIT")),
+        "the session still holds the edit: {info}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().starts_with('.')).count(),
+        0,
+        "no staging file is left"
+    );
+
+    // Keep both: save the edit elsewhere (a new path), then the original name still holds the other program's version.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "mine.pdf" }));
+    assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), external);
+    // Or replace it knowingly, naming the version that was inspected. A stale or malformed one is refused.
+    let wrong = "0".repeat(64);
+    assert!(conflict_facts(&a.call("doc_save", &json!({ "doc": doc, "path": "a.pdf", "overwrite_version": wrong })).unwrap_err()).is_some());
+    assert!(matches!(a.call("doc_save", &json!({ "doc": doc, "path": "a.pdf", "overwrite_version": "nonsense" })), Err(ToolError::InvalidArgs(_))));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "a.pdf", "overwrite_version": disk_version }));
+    assert_ne!(std::fs::read(dir.join("a.pdf")).unwrap(), external, "replaced, because that exact version was confirmed");
+}
+
+/// Same length and same modification time, different bytes: the content decides.
+#[test]
+fn a_file_with_the_same_size_and_timestamp_but_different_bytes_is_a_conflict() {
+    let dir = workdir("conflict-stamp");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "MY EDIT" }));
+    let path = dir.join("a.pdf");
+    let (original, mtime) = (std::fs::read(&path).unwrap(), std::fs::metadata(&path).unwrap().modified().unwrap());
+    let mut tampered = original.clone();
+    // Flip one byte inside the content (a page's text), keep the length, and put the modification time back.
+    let at = tampered.windows(6).position(|w| w == b"Page 1").unwrap() + 5;
+    tampered[at] = b'7';
+    std::fs::write(&path, &tampered).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(mtime).unwrap();
+    let meta = std::fs::metadata(&path).unwrap();
+    assert_eq!((meta.len(), meta.modified().unwrap()), (original.len() as u64, mtime), "it looks exactly as it did");
+    let refused = a.call("doc_save", &json!({ "doc": doc })).unwrap_err();
+    assert_eq!(conflict_facts(&refused).expect("detected")["conflict"], "changed");
+    assert_eq!(std::fs::read(&path).unwrap(), tampered);
+}
+
+/// Two sessions on one file: the second to save is refused, whichever way the path is given.
+#[test]
+fn two_sessions_cannot_silently_overwrite_each_other() {
+    let dir = workdir("conflict-two");
+    let (mut first, mut second) = (auto(&dir), auto(&dir));
+    let d1 = ok(&mut first, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let d2 = ok(&mut second, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut first, "doc_set_info", json!({ "doc": d1, "key": "Title", "value": "FIRST" }));
+    ok(&mut second, "doc_set_info", json!({ "doc": d2, "key": "Title", "value": "SECOND" }));
+    ok(&mut first, "doc_save", json!({ "doc": d1 }));
+    let saved_by_first = std::fs::read(dir.join("a.pdf")).unwrap();
+    // The implicit path and the explicit path are the same save, with the same rule.
+    for args in [json!({ "doc": d2 }), json!({ "doc": d2, "path": "a.pdf" })] {
+        let refused = second.call("doc_save", &args).unwrap_err();
+        assert_eq!(conflict_facts(&refused).expect("a conflict")["conflict"], "changed", "{args}");
+        assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), saved_by_first, "{args}: the first session's save is intact");
+    }
+    // The first session may save again: it wrote the version that is there.
+    ok(&mut first, "doc_set_info", json!({ "doc": d1, "key": "Title", "value": "FIRST AGAIN" }));
+    ok(&mut first, "doc_save", json!({ "doc": d1 }));
+}
+
+/// A save to a new path creates it and never replaces what is there; a deleted file is not quietly recreated.
+#[test]
+fn saving_to_an_existing_path_needs_the_version_confirmed_and_a_deleted_file_is_not_recreated() {
+    let dir = workdir("conflict-create");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "copy.pdf" }));
+    let others = std::fs::read(dir.join("b.pdf")).unwrap();
+    let refused = a.call("doc_save", &json!({ "doc": doc, "path": "b.pdf" })).unwrap_err();
+    let facts = conflict_facts(&refused).expect("an existing file is a conflict");
+    assert_eq!(facts["conflict"], "exists");
+    assert_eq!(std::fs::read(dir.join("b.pdf")).unwrap(), others, "someone else's file was not overwritten");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "b.pdf", "overwrite_version": facts["disk_version"] }));
+    assert_ne!(std::fs::read(dir.join("b.pdf")).unwrap(), others);
+    // The document now lives at b.pdf and this session wrote it. Deleted by someone else: saving in place is refused
+    // rather than quietly recreating the file, until that is confirmed.
+    std::fs::remove_file(dir.join("b.pdf")).unwrap();
+    let gone = a.call("doc_save", &json!({ "doc": doc })).unwrap_err();
+    assert_eq!(conflict_facts(&gone).expect("a conflict")["conflict"], "gone", "{gone}");
+    assert!(!dir.join("b.pdf").exists(), "not recreated");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "overwrite_version": "absent" }));
+    assert!(dir.join("b.pdf").exists());
+}
+
+/// A save through the command layer is the same save: `command_run` on `file.save` honours the same rule.
+#[test]
+fn a_save_through_command_run_refuses_a_conflict_too() {
+    let dir = workdir("conflict-command");
+    let external = external_edit(&dir, "other-program.pdf");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "MY EDIT" }));
+    std::fs::write(dir.join("a.pdf"), &external).unwrap();
+    let result = a.call("command_run", &json!({ "id": "file.save", "params": { "doc": doc } }));
+    let text = match result {
+        Err(e) => e.to_string(),
+        Ok(content) => format!("{content:?}"),
+    };
+    assert!(text.contains("save refused") || text.contains("changed"), "the command route saved over the other version: {text}");
+    assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), external);
+}
+
+// ---- BUILD-006 (F06): root confinement while the tree changes --------------------------------
+
+/// A directory link `at` -> `to`: a symbolic link on Unix, a junction on Windows (which needs no privilege).
+fn junction_to(to: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(to, at).unwrap();
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(at).arg(to).output().unwrap().status.success();
+        assert!(made, "mklink /J must be available to run this test");
+    }
+}
+
+/// A root with `inside/doc.pdf`, and a sibling folder outside it holding a sentinel with the same name.
+fn confined_tree(test: &str) -> (PathBuf, PathBuf) {
+    let base = workdir(test);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(root.join("inside")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::copy(base.join("a.pdf"), root.join("inside").join("doc.pdf")).unwrap();
+    // Byte-identical to the document inside the root, so a save through a link would pass the version check and only the
+    // confinement can stop it.
+    std::fs::copy(base.join("a.pdf"), outside.join("doc.pdf")).unwrap();
+    (root, outside)
+}
+
+/// What an attacker with write access to the tree does after the document was opened: the folder is moved away and a
+/// link to somewhere outside the root takes its name.
+fn swap_for_link(root: &Path, outside: &Path) {
+    std::fs::rename(root.join("inside"), root.join("inside-real")).unwrap();
+    junction_to(&outside.canonicalize().unwrap(), &root.join("inside"));
+}
+
+fn outside_untouched(outside: &Path) {
+    assert_eq!(
+        std::fs::read(outside.join("doc.pdf")).unwrap(),
+        std::fs::read(outside.parent().unwrap().join("a.pdf")).unwrap(),
+        "the file outside the root changed"
+    );
+    let mut names: Vec<_> = std::fs::read_dir(outside).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, ["doc.pdf"], "nothing was created outside the root: {names:?}");
+}
+
+/// F06: a document opened from inside the root, then the folder is replaced by a link out of it. The implicit save (the
+/// stored path, which used to be reused without a second look), an explicit save, a save into a new subfolder and a
+/// multi-output tool are all refused, and nothing outside the root changes.
+#[test]
+fn a_folder_replaced_by_a_link_after_open_never_receives_a_save() {
+    let (root, outside) = confined_tree("confine-swap");
+    let mut a = Automation::new().with_root(&root).unwrap().with_clock(|| 1_700_000_000);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside/doc.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "MINE" }));
+    swap_for_link(&root, &outside);
+
+    for (what, args) in [
+        ("implicit stored path", json!({ "doc": doc })),
+        ("explicit path", json!({ "doc": doc, "path": "inside/doc.pdf" })),
+        ("a new subfolder through the link", json!({ "doc": doc, "path": "inside/new/doc2.pdf" })),
+        ("a new file through the link", json!({ "doc": doc, "path": "inside/other.pdf" })),
+    ] {
+        let refused = a.call("doc_save", &args).unwrap_err();
+        assert!(matches!(refused, ToolError::Failed(_)), "{what}: {refused}");
+        outside_untouched(&outside);
+    }
+    // A multi-output tool is confined the same way.
+    let split = a.call("doc_split", &json!({ "doc": doc, "every": 1, "out_dir": "inside" }));
+    assert!(split.is_err(), "doc_split wrote through the link");
+    outside_untouched(&outside);
+    // And a document cannot be opened through it.
+    assert!(a.call("doc_open", &json!({ "path": "inside/doc.pdf" })).is_err());
+    outside_untouched(&outside);
+    // The session still holds the edit, and the real folder (moved aside) is intact.
+    assert!(root.join("inside-real").join("doc.pdf").exists());
+}
+
+/// The same tree without the swap works, including new subfolders: the checks do not refuse ordinary use.
+#[test]
+fn saves_inside_the_root_still_work_including_new_subfolders() {
+    let (root, outside) = confined_tree("confine-ok");
+    let mut a = Automation::new().with_root(&root).unwrap().with_clock(|| 1_700_000_000);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside/doc.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "MINE" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "deep/er/copy.pdf" }));
+    assert!(root.join("deep").join("er").join("copy.pdf").exists());
+    outside_untouched(&outside);
+}
+
 // ---- MCP ---------------------------------------------------------------------------------------
 
 #[cfg(feature = "mcp")]
@@ -2899,8 +3135,10 @@ fn creating_images_with_dpi_through_tools() {
         let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
         assert!((info["pages"][0]["width"].as_f64().unwrap() - width).abs() < 0.02);
         assert!((info["pages"][0]["height"].as_f64().unwrap() - height).abs() < 0.02);
-        ok(&mut a, "doc_save", json!({ "doc": doc, "path": "made.pdf" }));
-        let reopened = ok(&mut a, "doc_open", json!({ "path": "made.pdf" }))["doc"].as_u64().unwrap();
+        // One file per case: a save never replaces a file it did not read or write (BUILD-006).
+        let made = format!("made-{}.pdf", dpi.map_or("default".to_string(), |d| d.to_string()));
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": made }));
+        let reopened = ok(&mut a, "doc_open", json!({ "path": made }))["doc"].as_u64().unwrap();
         let render = a.call("page_render", &json!({ "doc": reopened, "page": 1, "dpi": 72 })).unwrap();
         let Content::Png { width: w, height: h, .. } = &render[0] else { panic!("expected PNG") };
         assert!((*w as f64 - width).abs() <= 1.0 && (*h as f64 - height).abs() <= 1.0);

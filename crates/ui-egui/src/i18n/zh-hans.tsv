@@ -2316,3 +2316,7 @@ animation effects	Off	关
 	This document is trying to open a local file:	此文档正尝试打开本地文件：
 	Move tag earlier	将标签前移
 	Move tag later	将标签后移
+	File conflict	文件冲突
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	自您打开或上次保存以来，“{name}”已在 PdfCraft 之外被更改。现在保存将替换该较新的版本。未写入任何内容。
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	该位置已存在名为“{name}”的文件，且并非由 PdfCraft 创建。未写入任何内容。
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	自您打开或上次保存以来，“{name}”已被删除。未写入任何内容。

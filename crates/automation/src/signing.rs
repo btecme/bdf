@@ -194,7 +194,9 @@ impl Automation {
             pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
             e => failed(e),
         })?;
-        write_atomic(&out, &signed)?;
+        // Signing rewrites the document's file or a new one: a save of this document, under the same rules as doc_save.
+        let same_file = self.doc(a)?.path.as_deref().is_some_and(|p| std::path::Path::new(p) == out);
+        self.commit_document_file(doc_id, &out, &signed, same_file, a)?;
         let path = out.to_string_lossy().into_owned();
         self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
         let doc = self.doc(a)?;

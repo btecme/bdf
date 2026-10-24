@@ -2373,3 +2373,7 @@ animation effects	Off	معطّلة
 	This document is trying to open a local file:	يحاول هذا المستند فتح ملف محلي:
 	Move tag earlier	نقل العلامة للأعلى
 	Move tag later	نقل العلامة للأسفل
+	File conflict	تعارض في الملف
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	تم تغيير «{name}» خارج PdfCraft منذ فتحته أو حفظته آخر مرة. سيؤدي الحفظ الآن إلى استبدال هذه النسخة الأحدث. لم يتم كتابة أي شيء.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	يوجد بالفعل ملف باسم «{name}» في هذا المكان ولم ينشئه PdfCraft. لم يتم كتابة أي شيء.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	تم حذف «{name}» منذ فتحته أو حفظته آخر مرة. لم يتم كتابة أي شيء.

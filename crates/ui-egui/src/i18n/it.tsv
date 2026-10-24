@@ -2361,3 +2361,7 @@ animation effects	Off	Disattivati
 	This document is trying to open a local file:	Questo documento sta tentando di aprire un file locale:
 	Move tag earlier	Sposta tag prima
 	Move tag later	Sposta tag dopo
+	File conflict	Conflitto di file
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	“{name}” è stato modificato al di fuori di PdfCraft da quando lo hai aperto o salvato l’ultima volta. Salvando ora sostituiresti quella versione più recente. Non è stato scritto nulla.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	In quella posizione esiste già un file chiamato “{name}” che PdfCraft non ha creato. Non è stato scritto nulla.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	“{name}” è stato eliminato da quando lo hai aperto o salvato l’ultima volta. Non è stato scritto nulla.

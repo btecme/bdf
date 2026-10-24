@@ -2348,3 +2348,7 @@ animation effects	Off	Kapalı
 	This document is trying to open a local file:	Bu belge yerel bir dosya açmaya çalışıyor:
 	Move tag earlier	Etiketi daha erken taşı
 	Move tag later	Etiketi daha geç taşı
+	File conflict	Dosya çakışması
+	“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written.	“{name}” dosyası, siz açtığınızdan veya en son kaydettiğinizden beri PdfCraft dışında değiştirildi. Şimdi kaydederseniz bu daha yeni sürümün yerine yazılır. Hiçbir şey yazılmadı.
+	A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.	Bu konumda “{name}” adlı bir dosya zaten var ve PdfCraft tarafından oluşturulmadı. Hiçbir şey yazılmadı.
+	“{name}” was deleted since you opened or last saved it. Nothing has been written.	“{name}” dosyası, siz açtığınızdan veya en son kaydettiğinizden beri silindi. Hiçbir şey yazılmadı.
