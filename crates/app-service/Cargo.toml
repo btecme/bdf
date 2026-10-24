@@ -1,0 +1,16 @@
+[package]
+name = "pdfcraft-app-service"
+description = "The application service behind every PdfCraft surface: typed operations over privately owned document sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-engine = { workspace = true }
+pdfcraft-platform = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27"

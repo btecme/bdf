@@ -3621,6 +3621,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-app-service"
+version = "0.7.1"
+dependencies = [
+ "pdfcraft-engine",
+ "pdfcraft-platform",
+ "tempfile",
+]
+
+[[package]]
 name = "pdfcraft-audit"
 version = "0.7.1"
 dependencies = [
@@ -3638,6 +3647,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "image",
+ "pdfcraft-app-service",
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",

@@ -78,6 +78,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(6)),
     // L7 platform + frontends
     ("platform", Class::Layer(7)),
+    ("app-service", Class::Layer(7)),
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
@@ -106,6 +107,9 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("ui-egui", "ui-common"),
     ("ui-egui", "platform"),
     ("automation", "platform"),
+    ("app-service", "platform"),
+    ("ui-egui", "app-service"),
+    ("automation", "app-service"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).
