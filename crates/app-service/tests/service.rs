@@ -412,7 +412,7 @@ fn a_late_save_result_does_not_overwrite_a_newer_document() {
     let v2 = rotate(&mut service, key, v1.content_revision, 2).expect("a newer edit").version.expect("version");
     assert!(!service.is_current(key, v1.content_revision), "a worker can tell that the document moved on");
 
-    let report = saved_report(service.finish_save(plan, written).expect("finishes"));
+    let report = saved_report(service.finish_save(&written).expect("finishes"));
     assert!(report.edited_since && report.document_open);
     let view = service.document(key).expect("open");
     assert_eq!(view.version().content_revision, v2.content_revision, "the newer edit is still the content");
@@ -454,7 +454,7 @@ fn a_save_that_finishes_after_its_document_closed_leaves_the_file_and_nothing_el
     let written = plan.write().expect("writes");
     run(&mut service, Some(key), Operation::Close { expected_revision: v1.content_revision, discard_changes: true }).expect("closes");
 
-    let done = service.finish_save(plan, written).expect("the file stands");
+    let done = service.finish_save(&written).expect("the file stands");
     let Outcome::Saved(report) = &done.outcome else { panic!("saved") };
     assert!(!report.document_open);
     assert_eq!((done.version, done.effects.len()), (None, 1));
@@ -529,4 +529,234 @@ fn link_dir(to: &Path, at: &Path) {
         let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(at).arg(to).output().expect("runs cmd").status.success();
         assert!(made, "mklink /J must be available to run this test");
     }
+}
+
+// ---- saves that land late, out of order, or with the wrong receipt (BUILD-007 review, P1) ----
+
+#[test]
+fn undoing_during_a_save_leaves_the_document_unsaved_because_the_file_holds_the_edit() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = file_in(&dir, "doc.pdf", 2);
+    let mut service = Service::new();
+    let (key, v0) = open_file(&mut service, &path);
+    let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
+
+    let plan = service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let written = plan.write().expect("writes");
+    // While the write is landing the user undoes the edit: back at the opened content, which is what the file held.
+    let v2 = run(&mut service, Some(key), Operation::Undo { expected_revision: v1.content_revision }).expect("undo").version.expect("version");
+    assert!(!v2.dirty());
+
+    let report = saved_report(service.finish_save(&written).expect("finishes"));
+    assert!(report.edited_since);
+    let view = service.document(key).expect("open");
+    assert!(view.version().dirty(), "the file now holds the edit and the document shows the opened content: not clean");
+    let refused =
+        run(&mut service, Some(key), Operation::Close { expected_revision: v2.content_revision, discard_changes: false }).expect_err("unsaved");
+    assert_eq!(refused.conflict, Some(ConflictKind::UnsavedChanges), "closing without discarding asks first");
+    // The file really does hold the edit.
+    let mut fresh = Service::new();
+    let (reopened, _) = open_file(&mut fresh, &path);
+    assert_eq!(rotations(&fresh, reopened), [90, 0]);
+    // Redo is back at what the file holds: clean.
+    let v3 = run(&mut service, Some(key), Operation::Redo { expected_revision: v2.content_revision }).expect("redo").version.expect("version");
+    assert!(!v3.dirty());
+}
+
+#[test]
+fn a_save_that_was_overtaken_does_not_restore_its_older_destination() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = file_in(&dir, "doc.pdf", 2);
+    let mut service = Service::new();
+    let (key, v0) = open_file(&mut service, &path);
+    let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
+    let (a, b) = (dir.path().join("a.pdf"), dir.path().join("b.pdf"));
+
+    // Two Save As, planned in this order; the second finishes first.
+    let plan_a = service.prepare_save(key, v1.content_revision, SaveTarget::Path(a.clone()), Overwrite::Tracked, None).expect("plans a");
+    let plan_b = service.prepare_save(key, v1.content_revision, SaveTarget::Path(b.clone()), Overwrite::Tracked, None).expect("plans b");
+    let written_b = plan_b.write().expect("writes b");
+    let done_b = service.finish_save(&written_b).expect("finishes b");
+    let after_b = done_b.version.expect("version");
+    assert!(!saved_report(done_b.clone()).superseded);
+    assert_eq!(service.document(key).expect("open").info().name, "b.pdf");
+
+    let written_a = plan_a.write().expect("writes a");
+    let done_a = service.finish_save(&written_a).expect("finishes a");
+    let report_a = saved_report(done_a.clone());
+    assert!(report_a.superseded && !report_a.edited_since, "the older save only wrote its file");
+    assert_eq!(done_a.effects.len(), 1, "and says so");
+    let view = service.document(key).expect("open");
+    assert_eq!(view.info().name, "b.pdf", "the document did not go back to the older destination");
+    assert_eq!(view.version(), after_b, "nor did its saved state change");
+    assert!(a.exists(), "the older file was written all the same");
+    assert!(!view.version().dirty(), "the document is clean against b, which is the newer save");
+
+    // The tracked version is b's: the next save replaces it without a conflict, and leaves a alone.
+    let a_bytes = std::fs::read(&a).expect("reads");
+    let v2 = rotate(&mut service, key, after_b.content_revision, 2).expect("edit").version.expect("version");
+    saved_report(save(&mut service, key, v2.content_revision, SaveTarget::Tracked, Overwrite::Tracked).expect("saves to b"));
+    assert_eq!(std::fs::read(&a).expect("reads"), a_bytes);
+    let mut fresh = Service::new();
+    let (reopened, _) = open_file(&mut fresh, &b);
+    assert_eq!(rotations(&fresh, reopened), [90, 90]);
+}
+
+#[test]
+fn a_write_completion_finishes_its_own_save_and_no_other() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    // Two documents with byte-identical files and the same edit: the bytes cannot tell the saves apart.
+    let (path_a, path_b) = (file_in(&dir, "a.pdf", 1), file_in(&dir, "b.pdf", 1));
+    let mut service = Service::new().with_clock(|| 1_700_000_000);
+    let (key_a, a0) = open_file(&mut service, &path_a);
+    let (key_b, b0) = open_file(&mut service, &path_b);
+    let a1 = rotate(&mut service, key_a, a0.content_revision, 1).expect("edit").version.expect("version");
+    let b1 = rotate(&mut service, key_b, b0.content_revision, 1).expect("edit").version.expect("version");
+    let on_disk_a = std::fs::read(&path_a).expect("reads");
+
+    let plan_a = service.prepare_save(key_a, a1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans a");
+    let plan_b = service.prepare_save(key_b, b1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans b");
+    // Only B is written. Its completion is B's: it names B's document, and finishing it leaves A alone, unsaved and
+    // unwritten (the completion has no way to be paired with A's plan, which is the point).
+    let written_b = plan_b.write().expect("writes b");
+    assert_eq!(written_b.document(), key_b);
+    let done_b = service.finish_save(&written_b).expect("b finishes");
+    assert_eq!(done_b.effects.len(), 1);
+    assert_eq!(service.document(key_a).expect("open").version(), a1, "A is exactly as it was: still unsaved");
+    assert!(service.document(key_a).expect("open").version().dirty());
+    assert_eq!(std::fs::read(&path_a).expect("reads"), on_disk_a, "A's file was never written");
+    assert!(!service.document(key_b).expect("open").version().dirty());
+    // A can still not be closed without discarding: it was never saved.
+    let refused =
+        run(&mut service, Some(key_a), Operation::Close { expected_revision: a1.content_revision, discard_changes: false }).expect_err("unsaved");
+    assert_eq!(refused.conflict, Some(ConflictKind::UnsavedChanges));
+
+    // A finishes with its own. A completion finishes once.
+    let written_a = plan_a.write().expect("writes a");
+    saved_report(service.finish_save(&written_a).expect("a finishes"));
+    assert!(!service.document(key_a).expect("open").version().dirty());
+    let again = service.finish_save(&written_a).expect_err("finished already");
+    assert_eq!(again.code, ErrorCode::InvalidArgument);
+    assert_eq!(again.committed.len(), 1, "the refusal still says what the write left on disk");
+}
+
+#[test]
+fn a_completion_from_another_service_is_refused_and_says_what_it_wrote() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = file_in(&dir, "doc.pdf", 1);
+    let mut first = Service::new();
+    let mut second = Service::new();
+    let (key, v0) = open_file(&mut first, &path);
+    let other_path = file_in(&dir, "other.pdf", 1);
+    let (other_key, w0) = open_file(&mut second, &other_path);
+    assert_eq!(key.document, other_key.document, "both services number their first document alike, and plan numbers start alike too");
+    let v1 = rotate(&mut first, key, v0.content_revision, 1).expect("edit").version.expect("version");
+    let w1 = rotate(&mut second, other_key, w0.content_revision, 1).expect("edit").version.expect("version");
+    // The second service has a save of its own in flight, with the same plan number as the first one's: a completion
+    // from elsewhere must not be able to pass for it.
+    let own_plan = second.prepare_save(other_key, w1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+
+    let plan = first.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let written = plan.write().expect("writes");
+    let error = second.finish_save(&written).expect_err("another service's completion");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(matches!(error.committed.as_slice(), [Effect::FileWritten { file, .. }] if file == "doc.pdf"), "{:?}", error.committed);
+    assert_eq!(second.document(other_key).expect("open").version(), w1, "the other service's document is untouched, still unsaved");
+    // Its own service still finishes it, and the second service's own save is still waiting for its own write.
+    saved_report(first.finish_save(&written).expect("finishes at home"));
+    assert!(!first.document(key).expect("open").version().dirty());
+    let own_written = own_plan.write().expect("writes");
+    saved_report(second.finish_save(&own_written).expect("finishes its own"));
+}
+
+#[test]
+fn planned_saves_are_bounded_and_can_be_given_up() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = file_in(&dir, "doc.pdf", 1);
+    let mut service = Service::new();
+    let (key, v0) = open_file(&mut service, &path);
+    let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
+    let mut plans = Vec::new();
+    for _ in 0..MAX_SAVES_IN_FLIGHT {
+        plans.push(service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans"));
+    }
+    let error = service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect_err("too many");
+    assert_eq!(error.code, ErrorCode::ResourceLimit);
+    service.abandon_save(&plans[0]);
+    service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("room again");
+    // A save that fails to write gives its place back by itself.
+    std::fs::write(&path, fixture(4)).expect("another program changes the file");
+    for p in &plans[1..] {
+        service.abandon_save(p);
+    }
+    let failed = save(&mut service, key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked).expect_err("conflict");
+    assert_eq!(failed.code, ErrorCode::Conflict);
+    for _ in 0..=MAX_SAVES_IN_FLIGHT {
+        let _ = save(&mut service, key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked);
+    }
+    let again = save(&mut service, key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked).expect_err("still a conflict, not a limit");
+    assert_eq!(again.code, ErrorCode::Conflict, "failed saves do not use up the places");
+}
+
+#[test]
+fn a_confined_open_does_not_follow_a_file_link_out_of_the_root() {
+    let base = tempfile::tempdir().expect("temp dir");
+    let root = base.path().join("root");
+    let outside = base.path().join("outside");
+    std::fs::create_dir_all(&root).expect("root");
+    std::fs::create_dir_all(&outside).expect("outside");
+    std::fs::write(outside.join("secret.pdf"), fixture(3)).expect("a document outside");
+    std::fs::write(root.join("plain.pdf"), fixture(1)).expect("a document inside");
+    if !link_file(&outside.join("secret.pdf"), &root.join("in.pdf")) {
+        eprintln!("SKIPPED: this machine cannot create a file symbolic link (Windows needs Developer Mode or an elevated user)");
+        return;
+    }
+
+    let mut service = Service::confined_to(&root).expect("a folder");
+    let error =
+        run(&mut service, None, Operation::Open { source: OpenSource::File("in.pdf".into()), password: None }).expect_err("a link is not opened");
+    assert!(matches!(error.code, ErrorCode::IoFailure | ErrorCode::InvalidArgument), "{error}");
+    assert!(service.documents().is_empty(), "nothing from outside was opened");
+    // An ordinary file in the root still opens, and an unconfined service still follows links as people expect.
+    open_file(&mut service, Path::new("plain.pdf"));
+    let mut free = Service::new();
+    let (linked, _) = open_file(&mut free, &root.join("in.pdf"));
+    assert_eq!(free.document(linked).expect("open").page_count(), 3);
+}
+
+/// A file link `at` -> `to`; `false` if this machine will not make one.
+fn link_file(to: &Path, at: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(to, at).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(to, at).is_ok()
+    }
+}
+
+#[test]
+fn the_open_size_limit_refuses_a_large_file_as_a_resource_limit_and_opens_one_at_the_limit() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = file_in(&dir, "doc.pdf", 1);
+    let size = std::fs::metadata(&path).expect("metadata").len();
+    for (limit, opens) in [(size, true), (size - 1, false), (0, false)] {
+        let mut service = Service::new().with_open_limit(limit);
+        let result = run(&mut service, None, Operation::Open { source: OpenSource::File(path.clone()), password: None });
+        match (opens, result) {
+            (true, Ok(_)) => {}
+            (false, Err(error)) => {
+                assert_eq!(error.code, ErrorCode::ResourceLimit, "limit {limit}");
+                assert!(service.documents().is_empty());
+            }
+            (expected, other) => panic!("limit {limit}: expected opens={expected}, got {other:?}"),
+        }
+    }
+    // The same through a root, which reads on the validated handle.
+    let mut confined = Service::confined_to(dir.path()).expect("a folder").with_open_limit(size - 1);
+    let error = run(&mut confined, None, Operation::Open { source: OpenSource::File("doc.pdf".into()), password: None }).expect_err("over");
+    assert_eq!(error.code, ErrorCode::ResourceLimit);
+    // A limit above the maximum is the maximum.
+    assert!(Service::new().with_open_limit(u64::MAX).documents().is_empty());
 }

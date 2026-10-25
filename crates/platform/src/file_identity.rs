@@ -77,12 +77,99 @@ pub fn parse_fingerprint(text: &str) -> Option<[u8; 32]> {
 /// Read the file at `path` and say which version those bytes are. The metadata comes from the same open handle,
 /// so the version describes the bytes returned, not whatever the path names a moment later.
 pub fn read_with_version(path: &Path) -> io::Result<(Vec<u8>, FileVersion)> {
-    let mut file = File::open(path)?;
+    read_with_version_limited(path, u64::MAX)
+}
+
+/// [`read_with_version`], refusing a file of more than `limit` bytes. The limit is applied to the handle that is read
+/// from, twice: to the length it reports before anything is allocated, and to what is actually read, so a file that
+/// grows between the two is still stopped.
+pub fn read_with_version_limited(path: &Path, limit: u64) -> io::Result<(Vec<u8>, FileVersion)> {
+    let file = File::open(path)?;
+    read_handle(file, limit)
+}
+
+fn read_handle(mut file: File, limit: u64) -> io::Result<(Vec<u8>, FileVersion)> {
     let meta = file.metadata()?;
+    let too_large = |size: u64| io::Error::new(io::ErrorKind::FileTooLarge, format!("{size} bytes is more than the {limit} byte limit"));
+    if meta.len() > limit {
+        return Err(too_large(meta.len()));
+    }
     let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0).min(1 << 28));
-    file.read_to_end(&mut bytes)?;
+    // One byte more than the limit is enough to know it was exceeded.
+    (&mut file).take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
+        return Err(too_large(u64::try_from(bytes.len()).unwrap_or(u64::MAX)));
+    }
     let version = FileVersion::of_bytes(&bytes, Some(&meta));
     Ok((bytes, version))
+}
+
+/// [`read_with_version_limited`] for a file that must itself be a regular file: a symbolic link is refused instead of
+/// followed. The size limit applies to the handle that was checked, like everything else here.
+///
+/// A confined reader pins the folder the file is in, but the file name is a different matter: a link named like the
+/// document, put there by a program that can write the folder, would carry the read outside it. The check is made on
+/// the handle that is read from, so there is no gap between looking and opening.
+///
+/// * **Unix:** the file is opened with `O_NOFOLLOW`, which fails on a link, and the handle must be a regular file.
+/// * **Windows:** it is opened with `FILE_FLAG_OPEN_REPARSE_POINT`, which opens a link itself rather than its target,
+///   and the handle must be a regular file with no reparse point. A reparse point that is not a link (a cloud
+///   placeholder, a deduplicated file) cannot be read through that handle, so it is opened again the ordinary way
+///   once the handle has shown it is not a link; for those files only, a link swapped in during that instant is not
+///   seen.
+///
+/// A hard link to a file outside the folder cannot be told from the file itself and is not covered.
+pub fn read_regular_with_version(path: &Path, limit: u64) -> io::Result<(Vec<u8>, FileVersion)> {
+    let refused = || io::Error::new(io::ErrorKind::InvalidInput, "a link, not a regular file");
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Not `FILE_FLAG`-style magic: the platform's own `O_NOFOLLOW`, whatever its value is on this system.
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options.open(path).map_err(open_failure)?;
+    let mut meta = file.metadata()?;
+    if meta.file_type().is_symlink() || !(meta.is_file() || has_reparse_point(&meta)) {
+        return Err(refused());
+    }
+    if has_reparse_point(&meta) {
+        // Not a link (checked above) but a reparse point that must be opened the ordinary way to be read.
+        file = File::open(path)?;
+        meta = file.metadata()?;
+        if !meta.is_file() {
+            return Err(refused());
+        }
+    }
+    read_handle(file, limit)
+}
+
+/// `O_NOFOLLOW` reports a link as "too many levels of symbolic links" (ELOOP; EMLINK on FreeBSD): say what it was.
+fn open_failure(e: io::Error) -> io::Error {
+    #[cfg(unix)]
+    if matches!(rustix::io::Errno::from_io_error(&e), Some(rustix::io::Errno::LOOP | rustix::io::Errno::MLINK)) {
+        return io::Error::new(io::ErrorKind::InvalidInput, "a link, not a regular file");
+    }
+    e
+}
+
+#[cfg(windows)]
+fn has_reparse_point(meta: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn has_reparse_point(_: &Metadata) -> bool {
+    false
 }
 
 /// The version of the file at `path` now: `None` if there is no regular file there. Streamed, so a large file is not
@@ -350,6 +437,54 @@ mod tests {
         assert_eq!(current(&path).unwrap().unwrap().sha256, v.sha256);
         assert_eq!(current(&d.join("missing")).unwrap(), None);
         assert_eq!(current(&d).unwrap(), None, "a folder is not a file version");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A file link `at` -> `to`; `false` if this machine will not make one.
+    fn link_file(to: &Path, at: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(to, at).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(to, at).is_ok()
+        }
+    }
+
+    #[test]
+    fn a_strict_read_returns_a_regular_file_and_refuses_a_link_or_a_folder() {
+        let d = dir("strict-read");
+        let (real, linked) = (d.join("real.bin"), d.join("linked.bin"));
+        std::fs::write(&real, b"inside").unwrap();
+        let (bytes, version) = read_regular_with_version(&real, u64::MAX).unwrap();
+        assert_eq!(bytes, b"inside");
+        assert!(version.same_content(&FileVersion::of_bytes(b"inside", None)));
+        assert!(read_regular_with_version(&d, u64::MAX).is_err(), "a folder is not a file");
+        assert!(read_regular_with_version(&d.join("missing"), u64::MAX).is_err());
+
+        if link_file(&real, &linked) {
+            assert!(read_with_version(&linked).is_ok(), "the ordinary read follows a link, as people expect");
+            let error = read_regular_with_version(&linked, u64::MAX).expect_err("the strict read does not");
+            assert!(error.to_string().contains("link"), "{error}");
+        } else {
+            eprintln!("SKIPPED the link half: this machine cannot create a file symbolic link");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_read_stops_at_its_limit_on_the_handle_it_reads() {
+        let d = dir("read-limit");
+        let path = d.join("ten.bin");
+        std::fs::write(&path, b"0123456789").unwrap();
+        assert_eq!(read_with_version_limited(&path, 10).unwrap().0, b"0123456789", "exactly the limit is fine");
+        for limit in [9, 0] {
+            let error = read_with_version_limited(&path, limit).expect_err("over the limit");
+            assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{limit}");
+            assert_eq!(read_regular_with_version(&path, limit).expect_err("over the limit").kind(), io::ErrorKind::FileTooLarge, "{limit}");
+        }
+        assert_eq!(read_regular_with_version(&path, 10).unwrap().0.len(), 10);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -36,7 +36,9 @@ use std::sync::Arc;
 
 use pdfcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
 use pdfcraft_platform::confinement::{pin_existing, write_confined_with};
-use pdfcraft_platform::file_identity::{Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_with_version, write_guarded};
+use pdfcraft_platform::file_identity::{
+    Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_regular_with_version, read_with_version, write_guarded,
+};
 use pdfcraft_platform::persistence::{Steps, write_replace_with};
 use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
@@ -901,8 +903,11 @@ impl Automation {
             (Some(root), Some(dir)) => Some(pin_existing(root, dir).map_err(|e| failed(format!("{}: {e}", path.display())))?),
             _ => None,
         };
-        // The version is taken from the same open handle as the bytes, so it describes exactly what was opened.
-        let (bytes, version) = read_with_version(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        // The version is taken from the same open handle as the bytes, so it describes exactly what was opened. With a
+        // root the path is the canonical one (a link inside the root was resolved by `resolve`), so the file itself must
+        // not be a link: one swapped in after the check would carry the read out of the root.
+        let read = if self.root.is_some() { read_regular_with_version(&path, u64::MAX) } else { read_with_version(&path) };
+        let (bytes, version) = read.map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         self.versions.insert(id, version);

@@ -5,9 +5,11 @@ use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{DocId, Document, Edit, EditError, OpenError, Saved, Session};
+use pdfcraft_engine::{DocId, Document, Edit, EditError, OpenError, SaveToken, Saved, Session};
 use pdfcraft_platform::confinement::{pin_existing, write_confined_with};
-use pdfcraft_platform::file_identity::{Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_with_version, write_guarded};
+use pdfcraft_platform::file_identity::{
+    Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_regular_with_version, read_with_version_limited, write_guarded,
+};
 use pdfcraft_platform::persistence::{PersistError, Steps};
 use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 
@@ -20,6 +22,10 @@ use crate::version::{DocumentKey, DocumentVersion, SavedSnapshot, SessionId};
 /// The largest file `document.open` reads. An interim admission limit, checked before the file is read; the budgets for
 /// a whole session belong to the work on bounded jobs.
 pub const MAX_OPEN_BYTES: u64 = 512 * 1024 * 1024;
+
+/// How many planned saves may be waiting to be finished at once. A plan that is never finished (its worker died)
+/// would otherwise stay registered for ever; [`Service::abandon_save`] drops one, and this bounds the rest.
+pub const MAX_SAVES_IN_FLIGHT: usize = 16;
 
 /// What a request is made on behalf of. Every caller is the local user who started this process until the policy
 /// layer adds identities and grants; nothing here authorizes anything, and the request id only correlates.
@@ -50,6 +56,20 @@ pub struct Service {
     files: HashMap<u64, FileVersion>,
     /// When set, every file the service reads or writes is a relative path below this folder.
     root: Option<PathBuf>,
+    /// Saves that were planned and not yet finished or abandoned, by plan number, with the document each is for.
+    pending: HashMap<u64, u64>,
+    /// The order saves of one document were planned in, and the newest one whose result has been applied.
+    orders: HashMap<u64, SaveOrder>,
+    /// The last plan number handed out.
+    last_plan: u64,
+    /// The largest file an open reads (at most [`MAX_OPEN_BYTES`]).
+    open_limit: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SaveOrder {
+    issued: u64,
+    applied: u64,
 }
 
 impl Default for Service {
@@ -60,7 +80,16 @@ impl Default for Service {
 
 impl Service {
     pub fn new() -> Self {
-        Self { session: Session::new(), id: SessionId(random_id()), files: HashMap::new(), root: None }
+        Self {
+            session: Session::new(),
+            id: SessionId(random_id()),
+            files: HashMap::new(),
+            root: None,
+            pending: HashMap::new(),
+            orders: HashMap::new(),
+            last_plan: 0,
+            open_limit: MAX_OPEN_BYTES,
+        }
     }
 
     /// A service whose files all lie below `root`: paths must be relative to it and may not climb out, the folder of
@@ -72,6 +101,12 @@ impl Service {
             return Err(OperationError::invalid(format!("{}: the root must be a folder", root.display())));
         }
         Ok(Self { root: Some(root), ..Self::new() })
+    }
+
+    /// Read no more than `bytes` from a file when opening (never more than [`MAX_OPEN_BYTES`]).
+    pub fn with_open_limit(mut self, bytes: u64) -> Self {
+        self.open_limit = bytes.min(MAX_OPEN_BYTES);
+        self
     }
 
     /// Fix the clock the engine stamps edits with (deterministic tests).
@@ -132,8 +167,14 @@ impl Service {
             Operation::Save { expected_revision, target, overwrite, full } => {
                 let key = self.key_of(self.need(doc_id)?);
                 let prepared = self.prepare_save(key, expected_revision, target, overwrite, full)?;
-                let written = prepared.write()?;
-                self.finish_save(prepared, written)
+                let written = match prepared.write() {
+                    Ok(written) => written,
+                    Err(e) => {
+                        self.abandon_save(&prepared);
+                        return Err(e);
+                    }
+                };
+                self.finish_save(&written)
             }
             Operation::Close { discard_changes, .. } => self.close(self.need(doc_id)?, discard_changes),
         }
@@ -146,7 +187,7 @@ impl Service {
     /// target may replace, and return a plan that can be written on any thread. Nothing is written and nothing is marked
     /// saved.
     pub fn prepare_save(
-        &self,
+        &mut self,
         key: DocumentKey,
         expected_revision: u64,
         target: SaveTarget,
@@ -178,34 +219,78 @@ impl Service {
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = full.unwrap_or(!same_file);
         let revision = doc.content_revision();
-        let generation = doc.edit_generation();
+        let token = doc.save_token();
         let bytes = if full { self.session.save_full_bytes(doc.id) } else { self.session.save_bytes(doc.id) }.map_err(edit_error)?;
         let incremental = !full && bytes.starts_with(&doc.saved_bytes());
-        Ok(PreparedSave { key, revision, generation, bytes, target: path, authority, root: self.root.clone(), incremental })
+        let (doc_id, root) = (doc.id, self.root.clone());
+        if self.pending.len() >= MAX_SAVES_IN_FLIGHT {
+            return Err(OperationError::new(ErrorCode::ResourceLimit, "too many saves are waiting to be finished"));
+        }
+        self.last_plan = self.last_plan.saturating_add(1);
+        let plan = self.last_plan;
+        let order = self.orders.entry(doc_id.0).or_default();
+        order.issued = order.issued.saturating_add(1);
+        let seq = order.issued;
+        self.pending.insert(plan, doc_id.0);
+        Ok(PreparedSave { service: self.id, plan, seq, key, revision, token, bytes, target: path, authority, root, incremental })
     }
 
-    /// Second half: publish a write that happened. The file is on disk by now, so the version this session tracks for
-    /// it is updated first, whatever becomes of the document. A document that was edited meanwhile keeps those edits
-    /// and stays unsaved; one that was closed meanwhile is left alone and the file stands.
-    pub fn finish_save(&mut self, prepared: PreparedSave, written: WrittenFile) -> Result<OperationResult> {
+    /// Give up a planned save that will not be finished (its write failed or its worker is gone).
+    pub fn abandon_save(&mut self, plan: &PreparedSave) {
+        if plan.service == self.id {
+            self.pending.remove(&plan.plan);
+        }
+    }
+
+    /// Second half: publish a write that happened.
+    ///
+    /// The completion carries its own plan, so it can only finish the save it belongs to. It is refused, with nothing
+    /// changed here, when that plan belongs to another service or has already been finished or abandoned; the refusal
+    /// still names the file the write left on disk (`committed`), because that stands.
+    ///
+    /// What the document learns is exactly this: the file holds the content the plan was taken from. If the document
+    /// was edited, or undone, meanwhile it is unsaved (the file does not hold what it holds now), and undoing or
+    /// redoing back to what was written is clean again. A document closed meanwhile is left alone and the file stands.
+    /// A plan that was overtaken, because a save planned after it has already been applied, changes nothing at all: it
+    /// must not give the document back an older destination, saved state or tracked file version.
+    pub fn finish_save(&mut self, written: &WrittenSave) -> Result<OperationResult> {
+        let prepared = &written.plan;
+        let effect = written.effect();
+        let refuse = |why: &str| OperationError { committed: vec![effect.clone()], ..OperationError::invalid(why) };
+        if prepared.service != self.id {
+            return Err(refuse("this save was planned by another service"));
+        }
+        let Some(doc_number) = self.pending.remove(&prepared.plan) else {
+            return Err(refuse("this save was already finished or abandoned"));
+        };
         let file = file_name(&prepared.target);
-        let effect = Effect::FileWritten { file: file.clone(), bytes: written.version.len, fingerprint: written.version.fingerprint() };
         let mut report = SaveReport {
             file,
             bytes: written.version.len,
             incremental: prepared.incremental,
             fingerprint: written.version.fingerprint(),
             edited_since: false,
+            superseded: false,
             document_open: false,
         };
         let key = prepared.key;
         let Ok(doc_id) = self.get(key).map(|d| d.id) else {
             // Closed (or never ours): the file stands, nothing else is touched.
+            self.orders.remove(&doc_number);
             return Ok(OperationResult { outcome: Outcome::Saved(report), version: None, warnings: Vec::new(), effects: vec![effect] });
         };
-        self.files.insert(doc_id.0, written.version);
+        report.document_open = true;
+        let applied = self.orders.get(&doc_number).map_or(0, |o| o.applied);
+        if prepared.seq < applied {
+            // A later save of this document has been applied already. This one wrote its file, and that is all it did.
+            report.superseded = true;
+            let version = self.get(key).ok().map(version_of);
+            return Ok(OperationResult { outcome: Outcome::Saved(report), version, warnings: Vec::new(), effects: vec![effect] });
+        }
+        self.orders.entry(doc_number).or_default().applied = prepared.seq;
+        self.files.insert(doc_id.0, written.version.clone());
         let path = prepared.target.to_string_lossy().into_owned();
-        match self.session.mark_saved_at(doc_id, prepared.bytes.clone(), Some(path), prepared.generation) {
+        match self.session.mark_saved_at(doc_id, prepared.bytes.clone(), Some(path), prepared.token) {
             Ok(Saved::Rebased) => {}
             Ok(Saved::EditedSince) => report.edited_since = true,
             Err(e) => {
@@ -219,7 +304,6 @@ impl Service {
                 return Err(error);
             }
         }
-        report.document_open = true;
         let version = self.get(key).ok().map(version_of);
         Ok(OperationResult { outcome: Outcome::Saved(report), version, warnings: Vec::new(), effects: vec![effect] })
     }
@@ -231,15 +315,10 @@ impl Service {
             OpenSource::Bytes { name, bytes } => (name, None, bytes, None),
             OpenSource::File(requested) => {
                 let path = self.storage_path(&requested)?;
+                // The limit is applied to the handle that is read. Confined: the file itself may not be a link either, which
+                // would carry the read out of the root.
                 let read = |p: &Path| -> std::io::Result<(Vec<u8>, FileVersion)> {
-                    let size = std::fs::metadata(p)?.len();
-                    if size > MAX_OPEN_BYTES {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::FileTooLarge,
-                            format!("{size} bytes is more than the {MAX_OPEN_BYTES} byte limit"),
-                        ));
-                    }
-                    read_with_version(p)
+                    if self.root.is_some() { read_regular_with_version(p, self.open_limit) } else { read_with_version_limited(p, self.open_limit) }
                 };
                 let pinned = match (&self.root, path.parent()) {
                     (Some(root), Some(dir)) => Some(pin_existing(root, dir).map_err(|e| io_error(&path, &e))?),
@@ -333,6 +412,7 @@ impl Service {
         }
         self.session.close(id);
         self.files.remove(&id.0);
+        self.orders.remove(&id.0);
         Ok(OperationResult { outcome: Outcome::Closed, version: None, warnings: Vec::new(), effects: vec![Effect::DocumentClosed] })
     }
 
@@ -382,10 +462,15 @@ impl Service {
 
 /// A save that has been planned and can be written without the service: the bytes of one revision, the file they go to
 /// and what they may replace. It holds no reference to the service, so a worker can own it.
+#[derive(Clone)]
 pub struct PreparedSave {
+    /// The service that planned it, this plan's number, and its place among the saves planned for the document.
+    service: SessionId,
+    plan: u64,
+    seq: u64,
     key: DocumentKey,
     revision: u64,
-    generation: u64,
+    token: SaveToken,
     bytes: Arc<Vec<u8>>,
     target: PathBuf,
     authority: OwnedAuthority,
@@ -405,10 +490,23 @@ impl std::fmt::Debug for PreparedSave {
     }
 }
 
-/// What a write left on disk. Handed back to [`Service::finish_save`].
+/// What a write left on disk, together with the plan that wrote it: the two cannot be separated, so a completion can only
+/// finish the save it belongs to. Handed to [`Service::finish_save`].
 #[derive(Debug)]
-pub struct WrittenFile {
+pub struct WrittenSave {
+    plan: PreparedSave,
     version: FileVersion,
+}
+
+impl WrittenSave {
+    pub fn document(&self) -> DocumentKey {
+        self.plan.key
+    }
+
+    /// The effect the write had, which stands whatever happens to the completion.
+    fn effect(&self) -> Effect {
+        Effect::FileWritten { file: file_name(&self.plan.target), bytes: self.version.len, fingerprint: self.version.fingerprint() }
+    }
 }
 
 impl PreparedSave {
@@ -423,7 +521,7 @@ impl PreparedSave {
 
     /// Write the bytes. The target is replaced only if it is still what the plan said it may replace, checked at the
     /// moment of replacement; otherwise nothing is written and the error is a conflict that names what is there.
-    pub fn write(&self) -> Result<WrittenFile> {
+    pub fn write(&self) -> Result<WrittenSave> {
         if self.target.is_dir() {
             return Err(OperationError::invalid(format!("{}: is a folder, not a file", file_name(&self.target))));
         }
@@ -440,11 +538,11 @@ impl PreparedSave {
             }
         };
         result.map_err(|e| persist_error(&self.target, &e))?;
-        Ok(WrittenFile { version: FileVersion::of_bytes(&self.bytes, None) })
+        Ok(WrittenSave { plan: self.clone(), version: FileVersion::of_bytes(&self.bytes, None) })
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum OwnedAuthority {
     CreateNew,
     ReplaceTracked(FileVersion),
@@ -556,7 +654,8 @@ fn file_name(path: &Path) -> String {
 
 /// A filesystem error that names the file, never the folders above it.
 fn io_error(path: &Path, e: &std::io::Error) -> OperationError {
-    OperationError::new(ErrorCode::IoFailure, format!("{}: {e}", file_name(path)))
+    let code = if e.kind() == std::io::ErrorKind::FileTooLarge { ErrorCode::ResourceLimit } else { ErrorCode::IoFailure };
+    OperationError::new(code, format!("{}: {e}", file_name(path)))
 }
 
 fn persist_error(target: &Path, e: &PersistError) -> OperationError {

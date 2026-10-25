@@ -25,5 +25,5 @@ pub use operations::{
     PageSelection, Release, SCHEMA_VERSION, SaveTarget,
 };
 pub use results::{DocumentInfo, History, OperationResult, Outcome, PageSummary, SaveReport};
-pub use service::{DocumentView, MAX_OPEN_BYTES, PreparedSave, RequestContext, SchemaRange, Service, WrittenFile};
+pub use service::{DocumentView, MAX_OPEN_BYTES, MAX_SAVES_IN_FLIGHT, PreparedSave, RequestContext, SchemaRange, Service, WrittenSave};
 pub use version::{DocumentKey, DocumentVersion, SavedSnapshot, SessionId};

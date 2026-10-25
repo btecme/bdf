@@ -672,9 +672,9 @@ impl PdfCraftApp {
             self.notify_tr("The document was closed before it could be saved.");
             return false;
         };
-        // The generation the bytes are taken at: an edit made before the write is recorded must not be
-        // mistaken for part of what was saved.
-        let generation = self.session.get(id).map(|d| d.edit_generation()).unwrap_or_default();
+        // What the bytes are taken from (the edit generation and the content): an edit made before the write is
+        // recorded must not be mistaken for part of what was saved.
+        let Some(token) = self.session.get(id).map(|d| d.save_token()) else { return false };
         let bytes = match self.session.save_bytes(id) {
             Ok(b) => b,
             Err(e) => {
@@ -702,11 +702,10 @@ impl PdfCraftApp {
             }
         }
         self.disk_versions.insert(id, FileVersion::of_bytes(&bytes, None));
-        self.record_committed_save(id, dest, bytes, generation)
+        self.record_committed_save(id, dest, bytes, token)
     }
 
-    /// The bytes of a save have replaced the file at `dest` (they were taken when the document's edit generation was
-    /// `generation`): record that in the document and tell the user what state it is in. Returns `true` only when
+    /// The bytes of a save have replaced the file at `dest` (they were taken from the document as `token` says): record that in the document and tell the user what state it is in. Returns `true` only when
     /// the document is now saved and clean, which is when a pending "then close" may go ahead.
     ///
     /// The file on disk and the document are two outcomes here, kept apart: once the write has replaced the file the
@@ -714,10 +713,16 @@ impl PdfCraftApp {
     /// taken, leaves the document unsaved with its edits and its recovery copy (`forget_recovery` is only reached
     /// when the document really is clean), pointing at the file that was written.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn record_committed_save(&mut self, id: pdfcraft_engine::DocId, dest: &str, bytes: std::sync::Arc<Vec<u8>>, generation: u64) -> bool {
+    pub fn record_committed_save(
+        &mut self,
+        id: pdfcraft_engine::DocId,
+        dest: &str,
+        bytes: std::sync::Arc<Vec<u8>>,
+        token: pdfcraft_engine::SaveToken,
+    ) -> bool {
         // Our own write is not a change on disk to reload (#431).
         self.watch.known_now(id, dest);
-        match self.session.mark_saved_at(id, bytes, Some(dest.to_string()), generation) {
+        match self.session.mark_saved_at(id, bytes, Some(dest.to_string()), token) {
             Ok(pdfcraft_engine::Saved::EditedSince) => {
                 // Written, but the document changed while it was being saved: those edits are not in the file,
                 // so it stays unsaved and keeps its recovery copy.

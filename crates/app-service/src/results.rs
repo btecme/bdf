@@ -73,6 +73,9 @@ pub struct SaveReport {
     /// The document was edited between taking the bytes and finishing the save: those edits are kept and the
     /// document is still unsaved.
     pub edited_since: bool,
+    /// A save planned after this one had already been applied, so this one only wrote its file: the document's
+    /// destination, saved content and tracked file version are those of the later save.
+    pub superseded: bool,
     /// The document was closed (or replaced) before the save finished; the file is written and nothing else changed.
     pub document_open: bool,
 }
