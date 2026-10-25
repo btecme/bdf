@@ -113,20 +113,43 @@ fn read_handle(mut file: File, limit: u64) -> io::Result<(Vec<u8>, FileVersion)>
 ///
 /// * **Unix:** the file is opened with `O_NOFOLLOW`, which fails on a link, and the handle must be a regular file.
 /// * **Windows:** it is opened with `FILE_FLAG_OPEN_REPARSE_POINT`, which opens a link itself rather than its target,
-///   and the handle must be a regular file with no reparse point. A reparse point that is not a link (a cloud
-///   placeholder, a deduplicated file) cannot be read through that handle, so it is opened again the ordinary way
-///   once the handle has shown it is not a link; for those files only, a link swapped in during that instant is not
-///   seen.
+///   and the handle must be a regular file with **no reparse point at all**. Nothing is ever read from a second open
+///   of the name: a file that is a reparse point without being a link (an online-only cloud placeholder, a
+///   deduplicated file) cannot be read safely through this handle and could only be read by following its name again,
+///   which is exactly the step a substituted link would use, so it is refused. That is a deliberate fail-closed choice
+///   with a cost (see [`strict_verdict`]); a file that is only available online has to be made available offline
+///   first, or opened from outside the confined folder.
 ///
 /// A hard link to a file outside the folder cannot be told from the file itself and is not covered.
 pub fn read_regular_with_version(path: &Path, limit: u64) -> io::Result<(Vec<u8>, FileVersion)> {
-    let refused = || io::Error::new(io::ErrorKind::InvalidInput, "a link, not a regular file");
+    read_regular_with(path, limit, &open_without_following, &has_reparse_point)
+}
+
+/// [`read_regular_with_version`] with its two platform questions as parameters, so that a test can stand in for them: how
+/// the name is opened, and whether the opened handle is a reparse point. **The name is opened exactly once.** Every
+/// decision after that is about the handle, and nothing is ever read from any other open of the name.
+fn read_regular_with(
+    path: &Path,
+    limit: u64,
+    open: &dyn Fn(&Path) -> io::Result<File>,
+    reparse_point: &dyn Fn(&Metadata) -> bool,
+) -> io::Result<(Vec<u8>, FileVersion)> {
+    let file = open(path).map_err(open_failure)?;
+    let meta = file.metadata()?;
+    strict_verdict(meta.file_type().is_symlink(), meta.is_file(), reparse_point(&meta))
+        .map_err(|why| io::Error::new(io::ErrorKind::InvalidInput, why))?;
+    read_handle(file, limit)
+}
+
+/// Open `path` without following a link at its last component: `O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on
+/// Windows (which opens a link itself rather than its target).
+fn open_without_following(path: &Path) -> io::Result<File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        // Not `FILE_FLAG`-style magic: the platform's own `O_NOFOLLOW`, whatever its value is on this system.
+        // The platform's own `O_NOFOLLOW`, whatever its value is on this system.
         options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     }
     #[cfg(windows)]
@@ -135,20 +158,29 @@ pub fn read_regular_with_version(path: &Path, limit: u64) -> io::Result<(Vec<u8>
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let mut file = options.open(path).map_err(open_failure)?;
-    let mut meta = file.metadata()?;
-    if meta.file_type().is_symlink() || !(meta.is_file() || has_reparse_point(&meta)) {
-        return Err(refused());
+    options.open(path)
+}
+
+/// Whether a handle that was opened without following links may be read from, given what it says it is. The only
+/// answer that reads is a regular file that is neither a link nor a reparse point; everything else is refused, and the
+/// handle is never traded for a fresh open of the name.
+///
+/// *The cost of refusing every reparse point:* on Windows a file that is only available online (OneDrive Files
+/// On-Demand and similar) or that sits on a deduplicated volume is a reparse point and is refused by a confined read
+/// with this message. The confined folder is the agent's root; an ordinary open by the user is not confined and reads
+/// them as before.
+fn strict_verdict(is_symlink: bool, is_file: bool, reparse_point: bool) -> Result<(), &'static str> {
+    if is_symlink {
+        Err("a link, not a regular file")
+    } else if reparse_point {
+        Err(
+            "a Windows reparse point (an online-only cloud file, a deduplicated file or a link of another kind), which cannot be read without following its name again; make the file available offline, or open it from outside the confined folder",
+        )
+    } else if !is_file {
+        Err("not a regular file")
+    } else {
+        Ok(())
     }
-    if has_reparse_point(&meta) {
-        // Not a link (checked above) but a reparse point that must be opened the ordinary way to be read.
-        file = File::open(path)?;
-        meta = file.metadata()?;
-        if !meta.is_file() {
-            return Err(refused());
-        }
-    }
-    read_handle(file, limit)
 }
 
 /// `O_NOFOLLOW` reports a link as "too many levels of symbolic links" (ELOOP; EMLINK on FreeBSD): say what it was.
@@ -485,6 +517,76 @@ mod tests {
             assert_eq!(read_regular_with_version(&path, limit).expect_err("over the limit").kind(), io::ErrorKind::FileTooLarge, "{limit}");
         }
         assert_eq!(read_regular_with_version(&path, 10).unwrap().0.len(), 10);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_strict_handle_is_read_only_when_it_is_a_plain_regular_file() {
+        // (is_symlink, is_file, reparse_point) -> may be read
+        for (link, file, reparse, reads) in [
+            (false, true, false, true),
+            (true, false, false, false),
+            (true, true, true, false),
+            (false, true, true, false), // a placeholder or deduplicated file: refused, never reopened by name
+            (false, false, true, false),
+            (false, false, false, false), // a folder
+        ] {
+            let verdict = strict_verdict(link, file, reparse);
+            assert_eq!(verdict.is_ok(), reads, "link {link}, file {file}, reparse point {reparse}: {verdict:?}");
+        }
+        assert!(strict_verdict(false, true, true).unwrap_err().contains("reparse point"), "the refusal says what it is and what to do");
+    }
+
+    /// The review's case (BUILD-007 R3, Windows): the handle says it is a reparse point that is not a link (a cloud
+    /// placeholder), and the name is replaced by a link to a file outside the folder while the handle is open. The old
+    /// reader opened the name a second time to read the placeholder and returned the outside file's bytes. Now the name is
+    /// opened once, whatever the substitution, and the read is refused.
+    #[test]
+    fn a_placeholder_is_refused_and_the_name_is_never_opened_a_second_time() {
+        use std::cell::Cell;
+        let d = dir("placeholder-race");
+        let (inside, outside) = (d.join("inside.pdf"), d.join("outside.pdf"));
+        std::fs::write(&inside, b"INSIDE").unwrap();
+        std::fs::write(&outside, b"OUTSIDE").unwrap();
+        let opens = Cell::new(0);
+        let swapped = Cell::new(false);
+        // The first open hands out the real file's handle and, as another program would, then substitutes a link to the
+        // outside file for the name. A second open of the name would follow it.
+        let open = |p: &Path| -> io::Result<File> {
+            opens.set(opens.get() + 1);
+            let handle = File::open(p);
+            if opens.get() == 1 {
+                let _ = std::fs::remove_file(p);
+                swapped.set(link_file(&outside, p));
+            }
+            handle
+        };
+        let as_a_placeholder = |_: &Metadata| true;
+        let result = read_regular_with(&inside, u64::MAX, &open, &as_a_placeholder);
+        let error = result.expect_err("a reparse point that is not a link is not read");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("reparse point"), "{error}");
+        assert_eq!(opens.get(), 1, "the name was opened once: nothing can be read from a second open of it");
+        if !swapped.get() {
+            eprintln!("SKIPPED the link half: this machine cannot create a file symbolic link (the single-open assertion above still ran)");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The same seam with an ordinary file: one open, and the bytes of that handle.
+    #[test]
+    fn an_ordinary_file_is_read_from_the_one_handle_that_was_opened() {
+        use std::cell::Cell;
+        let d = dir("single-open");
+        let path = d.join("plain.bin");
+        std::fs::write(&path, b"plain").unwrap();
+        let opens = Cell::new(0);
+        let open = |p: &Path| -> io::Result<File> {
+            opens.set(opens.get() + 1);
+            File::open(p)
+        };
+        let (bytes, _) = read_regular_with(&path, u64::MAX, &open, &|_: &Metadata| false).unwrap();
+        assert_eq!((bytes, opens.get()), (b"plain".to_vec(), 1));
         let _ = std::fs::remove_dir_all(&d);
     }
 }
