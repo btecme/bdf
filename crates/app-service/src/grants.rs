@@ -218,9 +218,12 @@ struct Grant {
 struct State {
     grants: Vec<Grant>,
     path: Option<PathBuf>,
-    clock: fn() -> i64,
+    clock: Clock,
     owner: OsPrincipal,
 }
+
+/// Where the store reads the time from.
+type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// The grants of one operating-system user. Clone it to share it.
 #[derive(Clone)]
@@ -242,7 +245,7 @@ pub(crate) fn system_now() -> i64 {
 impl GrantStore {
     /// A store that lives in memory only, for `owner`.
     pub fn in_memory(owner: OsPrincipal) -> Self {
-        Self { state: Arc::new(Mutex::new(State { grants: Vec::new(), path: None, clock: system_now, owner })) }
+        Self { state: Arc::new(Mutex::new(State { grants: Vec::new(), path: None, clock: Arc::new(system_now), owner })) }
     }
 
     /// The store kept in the private file `path`, for `owner` (created empty if it does not exist). A file that is not
@@ -258,7 +261,7 @@ impl GrantStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(GrantError::Storage(e.to_string())),
         };
-        let store = Self { state: Arc::new(Mutex::new(State { grants, path: Some(path.to_path_buf()), clock: system_now, owner })) };
+        let store = Self { state: Arc::new(Mutex::new(State { grants, path: Some(path.to_path_buf()), clock: Arc::new(system_now), owner })) };
         if !path.exists() {
             let state = store.lock();
             persist(&state)?;
@@ -267,8 +270,8 @@ impl GrantStore {
     }
 
     /// Use `clock` (seconds since the Unix epoch) instead of the system's, for deterministic tests.
-    pub fn with_clock(self, clock: fn() -> i64) -> Self {
-        self.lock().clock = clock;
+    pub fn with_clock(self, clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        self.lock().clock = Arc::new(clock);
         self
     }
 
@@ -534,22 +537,37 @@ mod tests {
     use crate::testutil::{make_shared, private_dir};
     use std::sync::atomic::{AtomicI64, Ordering};
 
-    static NOW: AtomicI64 = AtomicI64::new(1_000_000);
+    const START: i64 = 1_000_000;
+
+    /// A clock that belongs to one test: tests run in parallel, so a clock they share would be moved under each other.
+    #[derive(Clone)]
+    struct TestClock(Arc<AtomicI64>);
+
+    impl TestClock {
+        fn new() -> Self {
+            Self(Arc::new(AtomicI64::new(START)))
+        }
+
+        fn set(&self, now: i64) {
+            self.0.store(now, Ordering::SeqCst);
+        }
+
+        fn reading(&self) -> impl Fn() -> i64 + Send + Sync + use<> {
+            let now = self.0.clone();
+            move || now.load(Ordering::SeqCst)
+        }
+    }
 
     /// A new grant lives no longer than a working day, checked when the crate is built.
     const _: () = assert!(DEFAULT_TTL_SECONDS <= 8 * 3600);
-
-    fn clock() -> i64 {
-        NOW.load(Ordering::SeqCst)
-    }
 
     fn owner() -> OsPrincipal {
         OsPrincipal::current().expect("a user")
     }
 
-    fn store() -> GrantStore {
-        NOW.store(1_000_000, Ordering::SeqCst);
-        GrantStore::in_memory(owner()).with_clock(clock)
+    fn store() -> (GrantStore, TestClock) {
+        let clock = TestClock::new();
+        (GrantStore::in_memory(owner()).with_clock(clock.reading()), clock)
     }
 
     fn client(name: &str) -> ClientId {
@@ -566,7 +584,7 @@ mod tests {
 
     #[test]
     fn the_secret_opens_its_own_grant_and_nothing_else_does_and_every_failure_looks_the_same() {
-        let grants = store();
+        let (grants, clock) = store();
         let issued = grants.issue(GrantRequest::read_only(client("reader"))).expect("issues");
         let other = grants.issue(GrantRequest::read_only(client("other"))).expect("issues");
         assert!(issued.secret().starts_with("bdfg_") && issued.secret().len() == 5 + 64);
@@ -593,17 +611,17 @@ mod tests {
 
     #[test]
     fn a_revoked_or_expired_grant_no_longer_authenticates_or_holds() {
-        let grants = store();
+        let (grants, clock) = store();
         let issued = grants.issue(GrantRequest { ttl_seconds: 3600, ..GrantRequest::read_only(client("short")) }).expect("issues");
         let actor = grants.authenticate("short", issued.secret()).expect("authenticates");
         assert!(grants.check(&actor).is_ok());
         // Expiry: the clock moves past it.
-        NOW.store(1_000_000 + 3600, Ordering::SeqCst);
+        clock.set(START + 3600);
         assert_eq!(grants.check(&actor).unwrap_err(), GrantProblem::Expired);
         assert_eq!(grants.authenticate("short", issued.secret()).unwrap_err(), AuthError);
 
         // Revocation: seen at once through any handle.
-        NOW.store(1_000_000, Ordering::SeqCst);
+        clock.set(START);
         let handle = grants.clone();
         assert!(grants.check(&actor).is_ok());
         handle.revoke(&issued.terms.id).expect("revokes");
@@ -615,7 +633,7 @@ mod tests {
 
     #[test]
     fn a_grant_of_another_account_does_not_hold_for_this_one() {
-        let grants = store();
+        let (grants, clock) = store();
         let issued = grants.issue(GrantRequest::read_only(client("reader"))).expect("issues");
         let stranger = OsPrincipal::from_stored("S-1-5-21-1-2-3-9999").expect("an account");
         let actor = ActorContext::agent(stranger, client("reader"), issued.terms.id.clone());
@@ -626,7 +644,7 @@ mod tests {
 
     #[test]
     fn requests_are_validated() {
-        let grants = store();
+        let (grants, clock) = store();
         let ok = || GrantRequest::read_only(client("c"));
         let refuse = |request: GrantRequest, what: &str| {
             assert!(matches!(grants.issue(request), Err(GrantError::Invalid(_))), "{what}");
@@ -663,7 +681,7 @@ mod tests {
 
     #[test]
     fn the_store_is_bounded_and_prune_makes_room() {
-        let grants = store();
+        let (grants, clock) = store();
         let mut ids = Vec::new();
         for n in 0..MAX_GRANTS {
             ids.push(grants.issue(GrantRequest::read_only(client(&format!("c{n}")))).expect("issues").terms.id);
@@ -672,7 +690,7 @@ mod tests {
         grants.revoke(&ids[0]).expect("revokes");
         assert_eq!(grants.prune().expect("prunes"), 1);
         grants.issue(GrantRequest::read_only(client("one-more"))).expect("room again");
-        NOW.store(1_000_000 + DEFAULT_TTL_SECONDS + 1, Ordering::SeqCst);
+        clock.set(START + DEFAULT_TTL_SECONDS + 1);
         assert_eq!(grants.prune().expect("prunes"), MAX_GRANTS, "expired grants go too");
     }
 
@@ -680,18 +698,18 @@ mod tests {
     fn grants_persist_in_a_private_file_that_holds_no_secret() {
         let dir = private_dir("grants-persist");
         let path = dir.join("grants.json");
-        NOW.store(1_000_000, Ordering::SeqCst);
-        let first = GrantStore::open(&path, owner()).expect("creates").with_clock(clock);
+        let clock = TestClock::new();
+        let first = GrantStore::open(&path, owner()).expect("creates").with_clock(clock.reading());
         let issued = first.issue(GrantRequest::read_only(client("kept"))).expect("issues");
         let text = std::fs::read_to_string(&path).expect("reads");
         assert!(!text.contains(issued.secret()) && !text.contains(&issued.secret()[5..]), "only a hash is stored: {text}");
         pdfcraft_platform::private_files::verify_private(&path).expect("the file is private");
 
         // Another process opens it, and the secret still works; a revocation is kept too.
-        let second = GrantStore::open(&path, owner()).expect("reopens").with_clock(clock);
+        let second = GrantStore::open(&path, owner()).expect("reopens").with_clock(clock.reading());
         let actor = second.authenticate("kept", issued.secret()).expect("authenticates");
         second.revoke(&issued.terms.id).expect("revokes");
-        let third = GrantStore::open(&path, owner()).expect("reopens").with_clock(clock);
+        let third = GrantStore::open(&path, owner()).expect("reopens").with_clock(clock.reading());
         assert_eq!(third.check(&actor).unwrap_err(), GrantProblem::Revoked, "a revocation outlives the run");
         assert_eq!(third.authenticate("kept", issued.secret()).unwrap_err(), AuthError);
         let _ = std::fs::remove_dir_all(&dir);
@@ -701,7 +719,8 @@ mod tests {
     fn a_failed_write_leaves_the_store_as_it_was() {
         let dir = private_dir("grants-fail");
         let path = dir.join("grants.json");
-        let grants = GrantStore::open(&path, owner()).expect("creates").with_clock(clock);
+        let clock = TestClock::new();
+        let grants = GrantStore::open(&path, owner()).expect("creates").with_clock(clock.reading());
         grants.issue(GrantRequest::read_only(client("first"))).expect("issues");
         // The file's place is taken by a folder: it cannot be replaced.
         std::fs::remove_file(&path).expect("removes");
@@ -755,14 +774,15 @@ mod tests {
     fn grants_delegated_by_another_account_are_dropped_not_honoured() {
         let dir = private_dir("grants-foreign");
         let path = dir.join("grants.json");
-        let store = GrantStore::open(&path, owner()).expect("creates").with_clock(clock);
+        let clock = TestClock::new();
+        let store = GrantStore::open(&path, owner()).expect("creates").with_clock(clock.reading());
         let issued = store.issue(GrantRequest::read_only(client("mine"))).expect("issues");
         let text = std::fs::read_to_string(&path).expect("reads");
         let mine = owner();
         let edited = text.replace(mine.as_str(), "S-1-5-21-1-2-3-9999");
         assert_ne!(text, edited);
         std::fs::write(&path, edited).expect("writes");
-        let reopened = GrantStore::open(&path, owner()).expect("opens").with_clock(clock);
+        let reopened = GrantStore::open(&path, owner()).expect("opens").with_clock(clock.reading());
         assert!(reopened.list().is_empty(), "a grant that someone else delegated is not this user's");
         assert_eq!(reopened.authenticate("mine", issued.secret()).unwrap_err(), AuthError);
         let _ = std::fs::remove_dir_all(&dir);
