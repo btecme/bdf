@@ -1,6 +1,6 @@
 # BUILD-007 — independent Codex correction retest
 
-Status: **changes requested: R1 and R2 closed; R3 partially corrected, one P1 remains.**
+Status: **historical retest of `87683c7e`: R1/R2 closed; R3 remained open.** The [2026-10-27 final retest](BUILD-007-codex-final-retest.md) at `b03e2379` closes R3; no findings remain in this correction review.
 
 Reviewed 2026-10-25: [PR #9](https://github.com/btecme/bdf/pull/9), head
 `87683c7eb6aa81a3a80ff72e4c98e9e996cee5da`, base `main` at

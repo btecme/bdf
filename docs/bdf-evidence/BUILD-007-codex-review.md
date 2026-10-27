@@ -1,6 +1,6 @@
 # BUILD-007 — independent Codex review
 
-Status: **historical review of `295722f0`: three P1 findings.** The [2026-10-25 correction retest](BUILD-007-codex-retest.md) at `87683c7e` closes R1/R2 and the static R3 case; R3 remains open for the Windows reparse fallback. Do not merge yet.
+Status: **historical review of `295722f0`: three P1 findings.** The [2026-10-25 correction retest](BUILD-007-codex-retest.md) at `87683c7e` closes R1/R2 and the static R3 case; R3 remained open for the Windows reparse fallback. The [2026-10-27 final retest](BUILD-007-codex-final-retest.md) at `b03e2379` closes it; all three findings are resolved.
 
 Reviewed 2026-10-24: [PR #9](https://github.com/btecme/bdf/pull/9), head
 `295722f0f807f5d3fcc16ca0e4b4687f8f2e0a3b`, base `main` at
