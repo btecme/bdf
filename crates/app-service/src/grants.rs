@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn the_secret_opens_its_own_grant_and_nothing_else_does_and_every_failure_looks_the_same() {
-        let (grants, clock) = store();
+        let (grants, _) = store();
         let issued = grants.issue(GrantRequest::read_only(client("reader"))).expect("issues");
         let other = grants.issue(GrantRequest::read_only(client("other"))).expect("issues");
         assert!(issued.secret().starts_with("bdfg_") && issued.secret().len() == 5 + 64);
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn a_grant_of_another_account_does_not_hold_for_this_one() {
-        let (grants, clock) = store();
+        let (grants, _) = store();
         let issued = grants.issue(GrantRequest::read_only(client("reader"))).expect("issues");
         let stranger = OsPrincipal::from_stored("S-1-5-21-1-2-3-9999").expect("an account");
         let actor = ActorContext::agent(stranger, client("reader"), issued.terms.id.clone());
@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn requests_are_validated() {
-        let (grants, clock) = store();
+        let (grants, _) = store();
         let ok = || GrantRequest::read_only(client("c"));
         let refuse = |request: GrantRequest, what: &str| {
             assert!(matches!(grants.issue(request), Err(GrantError::Invalid(_))), "{what}");
