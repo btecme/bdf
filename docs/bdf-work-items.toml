@@ -2,7 +2,7 @@
 # Evidence must name the actual reviewed commit and real commands/artifacts.
 schema_version = 1
 spec_version = "0.1"
-updated = "2026-10-19"
+updated = "2026-10-27"
 target = "Windows 11 x64 desktop"
 spec = "docs/bdf-build-spec.md"
 kickoff = "docs/bdf-claude-kickoff.md"
@@ -175,7 +175,13 @@ stop_conditions = ["Remaining exploitable root escape under the stated threat mo
 [[work_item]]
 id = "BUILD-007"
 title = "Introduce the shared application service and revision contracts"
-status = "pending"
+status = "pending_review"
+evidence = "docs/bdf-evidence/BUILD-007.md"
+codex_review = "docs/bdf-evidence/BUILD-007-codex-final-retest.md"
+review_status = "corrections_pass"
+reviewed_heads = ["295722f0f807f5d3fcc16ca0e4b4687f8f2e0a3b", "87683c7eb6aa81a3a80ff72e4c98e9e996cee5da", "b03e2379eb437df3a743a0f273cce758716d7a8a"]
+review_result = "2026-10-27 final correction retest passes at b03e2379: R1/R2/R3 closed. Confined reads reject every Windows reparse point and never reopen the filename. Six rebuilt public-service probes and two independent strict-reader cases pass; an isolated fallback mutant reads the outside fixture and fails as expected. Scoped platform/service/automation tests and current-head hosted CI, FreeBSD and ARM64 pass; fuzz skipped. No new correction-review findings."
+status_note = "First service slice only: typed operations, private session, revision/saved-content contracts and two-phase saves. Correction review passes; status returns to pending_review per the work-item vocabulary. Authorization and adapter migration remain BUILD-008/009. Confined Windows reads intentionally reject cloud/deduplication reparse files; ordinary unconfined reads retain existing behavior. Native cloud-provider and macOS tests are not claimed. Overall owner verification and the BUILD-006 dependency are not newly accepted here. No production fix, commit, push or merge by Codex."
 priority = "P0"
 depends_on = ["BUILD-006"]
 prd_milestone = "BDF-04"

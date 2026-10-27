@@ -474,7 +474,7 @@ fn save_is_incremental_stamps_mod_date_and_rebases() {
 fn an_edit_made_while_a_save_was_in_flight_is_kept_and_stays_unsaved() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::SetInfo { key: "Title".into(), value: "First".into() }).unwrap();
-    let generation = s.get(id).unwrap().edit_generation();
+    let generation = s.get(id).unwrap().save_token();
     let saved = s.save_bytes(id).unwrap();
     // The user edits again before the write is recorded.
     s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Second".into() }).unwrap();
@@ -485,7 +485,7 @@ fn an_edit_made_while_a_save_was_in_flight_is_kept_and_stays_unsaved() {
     assert_eq!(doc.info_value("Title").as_deref(), Some("Second"), "the newer edit is kept");
     assert_eq!(doc.name, "first.pdf", "the file on disk is where this document now lives");
     // The next save writes the newer state, and with no edit in between it rebases and is clean.
-    let generation = s.get(id).unwrap().edit_generation();
+    let generation = s.get(id).unwrap().save_token();
     let second = s.save_bytes(id).unwrap();
     assert_eq!(s.mark_saved_at(id, second, None, generation).unwrap(), Saved::Rebased);
     assert!(!s.get(id).unwrap().dirty);
@@ -506,7 +506,7 @@ fn unshowable(pages: usize) -> Arc<Vec<u8>> {
 fn a_saved_file_that_reads_but_cannot_be_shown_leaves_the_working_edit_alone() {
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::SetInfo { key: "Title".into(), value: "KEEP WORKING EDIT".into() }).unwrap();
-    let generation = s.get(id).unwrap().edit_generation();
+    let generation = s.get(id).unwrap().save_token();
     let bad = unshowable(1);
     assert!(pdfcraft_cos::Document::open(bad.clone()).is_ok(), "the probe is structurally valid, so only the refresh can reject it");
     let outcome = s.mark_saved_at(id, bad, Some("/tmp/out/probe.pdf".into()), generation);
@@ -559,7 +559,7 @@ fn a_rejected_rebase_leaves_the_working_buffers_the_page_and_the_next_recovery_c
     assert_eq!(first.len(), 1);
     assert_eq!(recovered_title(first[0].bytes.clone()).as_deref(), Some("KEEP WORKING EDIT"), "the snapshot before the failure is good");
 
-    let generation = s.get(id).unwrap().edit_generation();
+    let generation = s.get(id).unwrap().save_token();
     let outcome = s.mark_saved_at(id, unshowable(1), Some("/tmp/out/probe.pdf".into()), generation);
     assert!(matches!(outcome, Err(EditError::Reopen(_))), "{outcome:?}");
 
@@ -583,7 +583,7 @@ fn a_rejected_rebase_of_a_clean_document_keeps_its_own_recovery_copy() {
     for (what, bad) in [("unshowable", unshowable(2)), ("not a PDF", Arc::new(b"not a pdf at all".to_vec()))] {
         let (mut s, id) = session_with(2);
         let bytes_before = s.get(id).unwrap().bytes.clone();
-        let generation = s.get(id).unwrap().edit_generation();
+        let generation = s.get(id).unwrap().save_token();
         assert!(s.mark_saved_at(id, bad, Some("/tmp/out/save-as.pdf".into()), generation).is_err(), "{what}");
         assert_eq!(*s.get(id).unwrap().bytes, *bytes_before, "{what}");
         let snaps = s.autosave_snapshots();
@@ -603,14 +603,15 @@ fn a_clean_document_whose_saved_copy_cannot_be_reopened_becomes_unsaved() {
     for (what, bytes) in [("not a PDF", Arc::new(b"not a pdf at all".to_vec())), ("unshowable", unshowable(2))] {
         let (mut s, id) = session_with(2);
         assert!(!s.get(id).unwrap().dirty);
-        let generation = s.get(id).unwrap().edit_generation();
+        let generation = s.get(id).unwrap().save_token();
+        let generation_before = s.get(id).unwrap().edit_generation();
         let outcome = s.mark_saved_at(id, bytes, Some("/tmp/out/save-as.pdf".into()), generation);
         assert!(matches!(outcome, Err(EditError::Reopen(_))), "{what}: {outcome:?}");
         let doc = s.get(id).unwrap();
         assert!(doc.dirty, "{what}: the document must be marked unsaved");
         assert_eq!(doc.path.as_deref(), Some("/tmp/out/save-as.pdf"), "{what}");
         assert_eq!(doc.info.pages.len(), 2, "{what}: still showing its own pages");
-        assert!(s.get(id).unwrap().edit_generation() > generation, "{what}: autosave sees the change");
+        assert!(s.get(id).unwrap().edit_generation() > generation_before, "{what}: autosave sees the change");
     }
 }
 
@@ -620,7 +621,7 @@ fn a_clean_document_whose_saved_copy_cannot_be_reopened_becomes_unsaved() {
 fn a_saved_file_that_cannot_be_reopened_moves_the_document_but_keeps_it_unsaved() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Kept".into() }).unwrap();
-    let generation = s.get(id).unwrap().edit_generation();
+    let generation = s.get(id).unwrap().save_token();
     let outcome = s.mark_saved_at(id, Arc::new(b"not a pdf at all".to_vec()), Some("/tmp/out/moved.pdf".into()), generation);
     assert!(matches!(outcome, Err(EditError::Reopen(_))), "{outcome:?}");
     let doc = s.get(id).unwrap();
@@ -1279,7 +1280,17 @@ fn autosave_snapshots_only_changed_documents() {
     assert_eq!(snaps[0].bytes, s.get(id).unwrap().bytes, "the working file");
     assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
     s.undo(id).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1, "undo is a change too");
+    // Undo back to the opened content leaves nothing unsaved, so there is nothing to snapshot, but the copy written
+    // for the edit is now stale and is reported once for withdrawal.
+    assert!(s.autosave_snapshots().is_empty(), "back at the saved content");
+    assert_eq!(s.take_obsolete_recovery(), [id]);
+    assert!(s.take_obsolete_recovery().is_empty(), "reported once");
+    s.redo(id).unwrap();
+    assert_eq!(s.autosave_snapshots().len(), 1, "redo to unsaved content is a change again");
+    s.undo(id).unwrap();
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "other".into() }).unwrap();
+    assert_eq!(s.autosave_snapshots().len(), 1, "a different edit is a change");
+    assert!(s.take_obsolete_recovery().is_empty(), "and its copy is current");
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved, None).unwrap();
     assert!(s.autosave_snapshots().is_empty(), "saved documents need no recovery");
@@ -4687,4 +4698,179 @@ fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     // The largest picture in the group, as the JPEG stored in the PDF.
     assert_eq!(d.page_image_copy_file(0, 0).unwrap(), ("jpg", jpeg));
     assert!(d.page_image_copy_file(0, 1).is_err());
+}
+
+// ---- BUILD-007: content revision and saved-content identity ----
+
+fn rotate_first(s: &mut Session, id: DocId) {
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("rotates");
+}
+
+fn save_current(s: &mut Session, id: DocId) -> Saved {
+    let generation = s.get(id).unwrap().save_token();
+    let bytes = s.save_bytes(id).expect("serializes");
+    s.mark_saved_at(id, bytes, Some("/tmp/out/rev.pdf".into()), generation).expect("marks saved")
+}
+
+#[test]
+fn content_revision_moves_with_content_and_only_with_content() {
+    let (mut s, id) = session_with(2);
+    let r0 = s.get(id).unwrap().content_revision();
+    rotate_first(&mut s, id);
+    let r1 = s.get(id).unwrap().content_revision();
+    assert!(r1 > r0, "an edit advances the revision");
+    s.undo(id).unwrap();
+    let r2 = s.get(id).unwrap().content_revision();
+    assert!(r2 > r1, "undo changes the content, so it advances the revision too");
+    s.redo(id).unwrap();
+    let r3 = s.get(id).unwrap().content_revision();
+    assert!(r3 > r2, "and so does redo; a revision never returns to an earlier value");
+
+    // Saving does not change what the document contains; neither does a display-only change.
+    let generation_before = s.get(id).unwrap().edit_generation();
+    assert_eq!(save_current(&mut s, id), Saved::Rebased);
+    assert!(s.get(id).unwrap().edit_generation() > generation_before, "the cache generation moved on the save");
+    assert_eq!(s.get(id).unwrap().content_revision(), r3, "the content revision did not");
+    assert!(s.set_hide_comments(id, true));
+    assert_eq!(s.get(id).unwrap().content_revision(), r3, "a display change is not a content change");
+}
+
+#[test]
+fn a_failed_edit_leaves_the_revision_and_the_history_alone() {
+    let (mut s, id) = session_with(1);
+    rotate_first(&mut s, id);
+    let before = s.get(id).unwrap().content_revision();
+    let undo = s.get(id).unwrap().undo_label().cloned();
+    assert!(s.apply(id, Edit::RotatePages { pages: vec![7], degrees: 90 }).is_err(), "page 8 of a one-page document");
+    assert_eq!(s.get(id).unwrap().content_revision(), before);
+    assert_eq!(s.get(id).unwrap().undo_label().cloned(), undo);
+}
+
+#[test]
+fn undoing_back_to_the_saved_content_is_clean_again() {
+    let (mut s, id) = session_with(2);
+    assert!(!s.get(id).unwrap().dirty && s.get(id).unwrap().at_saved_content(), "as opened");
+    rotate_first(&mut s, id);
+    assert!(s.get(id).unwrap().dirty);
+    s.undo(id).unwrap();
+    assert!(!s.get(id).unwrap().dirty, "undo back to the opened file leaves nothing unsaved");
+    s.redo(id).unwrap();
+    assert!(s.get(id).unwrap().dirty, "redo to the edited content is unsaved again");
+
+    // After a save, the saved content is the new baseline, in both directions.
+    assert_eq!(save_current(&mut s, id), Saved::Rebased);
+    assert!(!s.get(id).unwrap().dirty);
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().dirty, "undo past the saved content is unsaved");
+    s.redo(id).unwrap();
+    assert!(!s.get(id).unwrap().dirty, "redo back to the saved content is clean");
+    assert!(s.get(id).unwrap().at_saved_content());
+}
+
+#[test]
+fn two_different_edits_never_look_like_the_saved_content() {
+    // Revision equality would call these the same; content identity does not.
+    let (mut s, id) = session_with(1);
+    rotate_first(&mut s, id);
+    assert_eq!(save_current(&mut s, id), Saved::Rebased);
+    s.undo(id).unwrap();
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "other".into() }).unwrap();
+    assert!(s.get(id).unwrap().dirty, "a different edit on the same base is not the saved content");
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().dirty, "undone to the pre-save state, which is not the saved content");
+}
+
+#[test]
+fn a_save_that_overlaps_an_edit_keeps_both_the_edit_and_the_unsaved_state() {
+    let (mut s, id) = session_with(2);
+    rotate_first(&mut s, id);
+    let generation = s.get(id).unwrap().save_token();
+    let bytes = s.save_bytes(id).unwrap();
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "later".into() }).unwrap();
+    let revision = s.get(id).unwrap().content_revision();
+    assert_eq!(s.mark_saved_at(id, bytes, None, generation).unwrap(), Saved::EditedSince);
+    assert!(s.get(id).unwrap().dirty, "the later edit is not in the file");
+    assert_eq!(s.get(id).unwrap().content_revision(), revision);
+}
+
+#[test]
+fn new_recovered_reverted_and_reloaded_documents_keep_the_invariant() {
+    let (mut s, id) = session_with(1);
+    // A document made from generated bytes has never been in a file.
+    let fresh = s.open_new("combined.pdf", Arc::new(fixture(1))).unwrap();
+    assert!(s.get(fresh).unwrap().dirty && !s.get(fresh).unwrap().at_saved_content());
+    rotate_first(&mut s, fresh);
+    s.undo(fresh).unwrap();
+    assert!(s.get(fresh).unwrap().dirty, "undo back to never-saved content is still unsaved");
+
+    // Revert returns to the opened file: clean, history gone, and the revision moved.
+    rotate_first(&mut s, id);
+    let before = s.get(id).unwrap().content_revision();
+    s.revert(id).unwrap();
+    assert!(!s.get(id).unwrap().dirty && s.get(id).unwrap().at_saved_content());
+    assert!(s.get(id).unwrap().content_revision() > before);
+    assert!(s.get(id).unwrap().undo_label().is_none());
+
+    // Reload keeps the id, so the revision continues and cannot match an earlier value.
+    let before = s.get(id).unwrap().content_revision();
+    s.reload(id, Arc::new(fixture(3))).unwrap();
+    assert!(s.get(id).unwrap().content_revision() > before);
+    assert!(!s.get(id).unwrap().dirty);
+
+    // Recovered content is not the file's content.
+    let recovered = s.open("recovered.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    s.mark_recovered(recovered, Some("/tmp/out/recovered.pdf".into()));
+    rotate_first(&mut s, recovered);
+    s.undo(recovered).unwrap();
+    assert!(s.get(recovered).unwrap().dirty, "undo back to the recovered content is not a saved state");
+}
+
+#[test]
+fn a_rejected_rebase_leaves_the_document_unsaved_and_consistent() {
+    let (mut s, id) = session_with(1);
+    let generation = s.get(id).unwrap().save_token();
+    // A clean document whose Save As produced an unshowable file: unsaved even though it was clean.
+    assert!(s.mark_saved_at(id, unshowable(1), Some("/tmp/out/probe.pdf".into()), generation).is_err());
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty && !doc.at_saved_content(), "dirty and the saved-content test agree after a failed rebase");
+}
+
+// ---- BUILD-007 review: a save that lands after the document moved on ----
+
+/// P1: an edit is being saved, the user undoes it back to the opened content (clean, as far as the old file goes), and
+/// then the save lands: the file now holds the edit, so the document, which shows the opened content, is not clean.
+#[test]
+fn undoing_while_a_save_is_in_flight_does_not_leave_content_the_file_lacks_marked_clean() {
+    let (mut s, id) = session_with(2);
+    rotate_first(&mut s, id);
+    let token = s.get(id).unwrap().save_token();
+    let bytes = s.save_bytes(id).unwrap();
+    s.undo(id).unwrap();
+    assert!(!s.get(id).unwrap().dirty, "back at the opened content, which is what the file held until now");
+
+    assert_eq!(s.mark_saved_at(id, bytes, Some("/tmp/out/inflight.pdf".into()), token).unwrap(), Saved::EditedSince);
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty && !doc.at_saved_content(), "the file holds the edit and the document shows the opened content");
+    assert_eq!(doc.path.as_deref(), Some("/tmp/out/inflight.pdf"), "the file written is the document's file");
+
+    // Redo is back at what the file holds.
+    s.redo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty && doc.at_saved_content(), "redone to exactly what was written");
+    // And a different edit is not what was written.
+    s.undo(id).unwrap();
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "different".into() }).unwrap();
+    assert!(s.get(id).unwrap().dirty);
+}
+
+/// The identity a late save carries must not match anything in a document that was reloaded under it.
+#[test]
+fn a_save_in_flight_across_a_reload_does_not_match_the_reloaded_content() {
+    let (mut s, id) = session_with(1);
+    let token = s.get(id).unwrap().save_token();
+    let bytes = s.save_bytes(id).unwrap();
+    s.reload(id, Arc::new(fixture(3))).unwrap();
+    assert!(!s.get(id).unwrap().dirty);
+    assert_eq!(s.mark_saved_at(id, bytes, None, token).unwrap(), Saved::EditedSince);
+    assert!(s.get(id).unwrap().dirty, "the reloaded content is not what that save wrote");
 }

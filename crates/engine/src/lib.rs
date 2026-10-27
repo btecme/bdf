@@ -150,7 +150,8 @@ pub type SplitPart = (usize, usize, Arc<Vec<u8>>);
 use std::sync::Arc;
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
-use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, inspect};
+pub use pdfcraft_render::OpenError;
+use pdfcraft_render::{DocInfo, Layer, LayerOp, ReadingColors, RenderConfig, RenderPool, inspect};
 
 /// Stable identifier of an open document within a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -241,7 +242,12 @@ fn scope_of(edit: &Edit) -> Scope {
 }
 
 /// One undo/redo step: its label, the document state, its passwords, and what it changed.
-type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope);
+type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope, StateId);
+
+/// Which document state an editor holds. Applying an edit gives the new state a fresh id; undo and redo bring
+/// back the id the restored state had, so two moments with the same id hold the same content. That is what lets
+/// the saved file be recognised again after undoing back to it (and what a monotonic revision cannot do).
+type StateId = u64;
 
 /// Editing state of a document (absent when the document cannot be edited yet, e.g. encrypted).
 #[derive(Clone)]
@@ -250,6 +256,12 @@ struct Editor {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     keys: Keys,
+    /// The id of the state held in `cos`.
+    state: StateId,
+    /// The id of the state last opened from or written to a file; `None` for content that has never been in one.
+    saved_state: Option<StateId>,
+    /// The last id handed out.
+    last_state: StateId,
     /// Display appearances built for annotations without any, reused while no annotation edit
     /// runs (content edits leave every annotation dictionary alone). Cleared on any refresh
     /// that may change annotations; see [`AppearanceCache`].
@@ -276,6 +288,13 @@ impl Clone for TextBlocksCache {
 }
 
 impl Editor {
+    /// A state id never used before. Saturating: after 2^64 edits a repeat would only make a document look saved
+    /// when it is not, and that many edits cannot be made.
+    fn fresh_state(&mut self) -> StateId {
+        self.last_state = self.last_state.saturating_add(1);
+        self.last_state
+    }
+
     /// The text blocks on `page` (0-based), from the cache when the document hasn't changed.
     fn text_blocks(&self, page: usize) -> Result<Arc<Vec<pdfcraft_edit::TextBlock>>, EditError> {
         let source = (!self.cos.is_modified()).then(|| self.cos.source_identity());
@@ -314,8 +333,15 @@ pub struct Document {
     pub dirty: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     generation: u64,
+    /// Advances when what the document *contains* changes (an edit, undo, redo, revert, reload) and at no other
+    /// time: not for a save, a rebase on the saved file, a layer toggle, reading colours or a repaint. See
+    /// [`Document::content_revision`].
+    revision: u64,
     /// The generation last handed out by `autosave_snapshots`.
     snapshot_generation: u64,
+    /// A recovery copy of this document was handed out and has not been withdrawn: if the document becomes clean
+    /// (undo back to the saved content) that copy is stale and [`Session::take_obsolete_recovery`] says so.
+    recovery_pending: bool,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
     /// Interactive form fields of the current state (empty without a form).
@@ -523,6 +549,42 @@ impl Document {
     /// A counter that changes with every edit (for caches of derived data).
     pub fn edit_generation(&self) -> u64 {
         self.generation
+    }
+
+    /// A counter of changes to what the document contains, for callers that must act on the content they saw:
+    /// it advances with every edit, undo, redo, revert and reload, and with nothing else. Saving does not
+    /// advance it (the content is the same), and neither does anything that only changes how the document is
+    /// shown. It is not [`Self::edit_generation`], which also moves for saves and display changes and exists to
+    /// invalidate caches. It never repeats within a session, so a value read earlier names exactly one content.
+    pub fn content_revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// What a save taken now is a save of; see [`SaveToken`].
+    pub fn save_token(&self) -> SaveToken {
+        SaveToken { generation: self.generation, content: self.content_id() }
+    }
+
+    /// The identity of the working content within this session: equal for two moments exactly when they hold the same
+    /// content (undo and redo bring back the identity the restored content had). `0` for a document that cannot be
+    /// edited.
+    pub fn content_id(&self) -> u64 {
+        self.editor.as_ref().map_or(0, |e| e.state)
+    }
+
+    /// The identity ([`Self::content_id`]) of the content last opened from or written to a file; `None` if the working
+    /// content has never been in one.
+    pub fn saved_content_id(&self) -> Option<u64> {
+        self.editor.as_ref().and_then(|e| e.saved_state)
+    }
+
+    /// Whether the working content is the content last opened from or written to a file. This, not equality of
+    /// revisions, is what "unsaved changes" means: undoing back to the saved content is clean again.
+    pub fn at_saved_content(&self) -> bool {
+        match self.editor.as_ref() {
+            Some(e) => e.saved_state == Some(e.state),
+            None => !self.dirty,
+        }
     }
 
     /// Edit a PDF ▸ Edit text: the lines of existing text on `page` (0-based).
@@ -2607,6 +2669,15 @@ fn plural(one: &'static str, many: &'static str, n: usize) -> Label {
     Label::of(if n == 1 { one } else { many })
 }
 
+/// What a save was taken from: the document's edit generation and the identity of its content at that moment
+/// ([`Document::save_token`]). A save that finishes later hands it back, so the document can tell which content the
+/// file now holds even if it has been edited, undone or saved again since.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveToken {
+    generation: u64,
+    content: u64,
+}
+
 /// What [`Session::mark_saved_at`] did with a save that reached the disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Saved {
@@ -3221,6 +3292,9 @@ impl Session {
                         undo: Vec::new(),
                         redo: Vec::new(),
                         keys,
+                        state: 0,
+                        saved_state: Some(0),
+                        last_state: 0,
                         appearances: AppearanceCache::default(),
                         text_blocks: TextBlocksCache::default(),
                     }),
@@ -3272,7 +3346,9 @@ impl Session {
             password: render_password,
             dirty: false,
             generation: 0,
+            revision: 0,
             snapshot_generation: 0,
+            recovery_pending: false,
             read_only_reason,
             form: Arc::new(form),
             marks,
@@ -3443,7 +3519,9 @@ impl Session {
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
         let scope = scope_of(&edit);
-        editor.undo.push((label, previous, previous_keys, scope));
+        let before = editor.state;
+        editor.undo.push((label, previous, previous_keys, scope, before));
+        editor.state = editor.fresh_state();
         if editor.undo.len() > MAX_UNDO {
             editor.undo.remove(0);
         }
@@ -3454,10 +3532,11 @@ impl Session {
         if let Err(e) = refreshed {
             // Roll back: the edit produced something we cannot display.
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((_, prev, keys, _)) = ed.undo.pop()
+                && let Some((_, prev, keys, _, state)) = ed.undo.pop()
             {
                 ed.cos = prev;
                 ed.keys = keys;
+                ed.state = state;
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
@@ -3465,8 +3544,9 @@ impl Session {
             }
             return Err(e);
         }
-        doc.dirty = true;
+        doc.dirty = true; // a fresh state is never the saved one
         doc.generation += 1;
+        doc.revision = doc.revision.saturating_add(1);
         doc.edit_notices = notices;
         note_warnings(&mut doc.xfa_warnings, &xfa_notes);
         let notes = doc.xfa_warnings.clone();
@@ -3487,13 +3567,16 @@ impl Session {
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
-        let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
+        let (label, prev, keys, scope, state) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
         let current = std::mem::replace(&mut editor.cos, prev);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.redo.push((label.clone(), current, current_keys, scope));
+        let current_state = std::mem::replace(&mut editor.state, state);
+        editor.redo.push((label.clone(), current, current_keys, scope, current_state));
+        // The content has changed from here, whether or not it can be shown.
+        doc.revision = doc.revision.saturating_add(1);
+        Self::sync_dirty(doc);
         Self::adopt_keys(doc);
         Self::refresh_scoped(doc, scope).inspect_err(|_| Self::show_released(doc))?;
-        doc.dirty = true;
         doc.generation += 1;
         Ok(label)
     }
@@ -3502,15 +3585,24 @@ impl Session {
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
-        let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
+        let (label, next, keys, scope, state) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
         let current = std::mem::replace(&mut editor.cos, next);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label.clone(), current, current_keys, scope));
+        let current_state = std::mem::replace(&mut editor.state, state);
+        editor.undo.push((label.clone(), current, current_keys, scope, current_state));
+        doc.revision = doc.revision.saturating_add(1);
+        Self::sync_dirty(doc);
         Self::adopt_keys(doc);
         Self::refresh_scoped(doc, scope).inspect_err(|_| Self::show_released(doc))?;
-        doc.dirty = true;
         doc.generation += 1;
         Ok(label)
+    }
+
+    /// `dirty` follows from which content the editor holds, never from the history of operations.
+    fn sync_dirty(doc: &mut Document) {
+        if let Some(e) = doc.editor.as_ref() {
+            doc.dirty = e.saved_state != Some(e.state);
+        }
     }
 
     /// Use the current state's password for viewing (protection edits change it).
@@ -3755,12 +3847,12 @@ impl Session {
     /// so the next save appends only newer edits. Undo history is kept. This is for a save made with
     /// no chance of an edit in between; a save that can overlap edits uses [`Self::mark_saved_at`].
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
-        let generation = self.get(id).ok_or(EditError::NoDocument)?.edit_generation();
-        self.mark_saved_at(id, bytes, path, generation).map(|_| ())
+        let token = self.get(id).ok_or(EditError::NoDocument)?.save_token();
+        self.mark_saved_at(id, bytes, path, token).map(|_| ())
     }
 
-    /// Record that `bytes` were written to `path` (if any), having been taken when the document's
-    /// [`Document::edit_generation`] was `generation`.
+    /// Record that `bytes` were written to `path` (if any), having been taken from the document as `token` describes
+    /// ([`Document::save_token`]).
     ///
     /// The file on disk is what it is, so the document always takes the new `path` and name, even if
     /// the rest fails. If the document changed since the bytes were taken, nothing else is touched: the
@@ -3769,13 +3861,21 @@ impl Session {
     /// is clean. If the saved bytes can't be reopened, or reopen but can't be shown, that is an
     /// [`EditError::Reopen`]: the document keeps its working state (edits, undo history, view) untouched
     /// and is marked unsaved even if it was clean, so close and recovery still see it.
-    pub fn mark_saved_at(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>, generation: u64) -> Result<Saved, EditError> {
+    pub fn mark_saved_at(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>, token: SaveToken) -> Result<Saved, EditError> {
         let doc = self.doc_mut(id)?;
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
             doc.path = Some(p);
         }
-        if doc.generation != generation {
+        if doc.generation != token.generation {
+            // The file now holds `token.content`, whatever the document holds. Recording that is what keeps the
+            // document honest in both directions: content edited or undone since is unsaved (it is not what the file
+            // holds), and undoing or redoing back to what was written is clean. Leaving the previous saved identity in
+            // place would call content clean that the file no longer has.
+            if let Some(editor) = doc.editor.as_mut() {
+                editor.saved_state = Some(token.content);
+            }
+            Self::sync_dirty(doc);
             return Ok(Saved::EditedSince);
         }
         let before = doc.generation;
@@ -3815,6 +3915,10 @@ impl Session {
             Self::show_released(doc);
             return Err(Self::left_unsaved(doc, before + 1, e));
         }
+        // What was written is the content held now (no edit came between taking the bytes and here).
+        if let Some(editor) = doc.editor.as_mut() {
+            editor.saved_state = Some(token.content);
+        }
         Ok(Saved::Rebased)
     }
 
@@ -3822,6 +3926,9 @@ impl Session {
     /// was clean (a Save As of a document with no edits), so closing it asks and recovery keeps it.
     fn left_unsaved(doc: &mut Document, generation: u64, e: EditError) -> EditError {
         doc.dirty = true;
+        if let Some(editor) = doc.editor.as_mut() {
+            editor.saved_state = None;
+        }
         doc.generation = generation + 1;
         e
     }
@@ -3851,7 +3958,7 @@ impl Session {
         reopen_as_owner(&editor.cos, &mut editor.keys);
         // Other states with the same restricted access are unlocked too; states opened with
         // other passwords (protection changed and saved since) stay as they are.
-        for (_, cos, keys, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
+        for (_, cos, keys, _, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
             if cos.permissions().is_some_and(|p| !p.owner) && cos.unlock(password).is_ok() {
                 reopen_as_owner(cos, keys);
             }
@@ -3878,9 +3985,16 @@ impl Session {
         editor.keys = keys;
         editor.undo.clear();
         editor.redo.clear();
+        // The saved file's content is the one saved earlier; content that never was in a file is its own base.
+        editor.state = match editor.saved_state {
+            Some(saved) => saved,
+            None => editor.fresh_state(),
+        };
+        editor.saved_state = Some(editor.state);
         Self::adopt_keys(doc);
         doc.dirty = false;
         doc.generation += 1;
+        doc.revision = doc.revision.saturating_add(1);
         Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
     }
 
@@ -3892,7 +4006,8 @@ impl Session {
     pub fn reload(&mut self, id: DocId, bytes: Arc<Vec<u8>>) -> Result<(), OpenError> {
         let old = self.docs.iter().position(|d| d.id == id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
         let doc = &self.docs[old];
-        let (name, path, generation) = (doc.name.clone(), doc.path.clone(), doc.generation);
+        let (name, path, generation, revision) = (doc.name.clone(), doc.path.clone(), doc.generation, doc.revision);
+        let last_state = doc.editor.as_ref().map_or(0, |e| e.last_state);
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone()).or_else(|| doc.password.clone());
         let new_id = self.open(name, path, bytes, password.as_deref())?;
         let at = self.docs.iter().position(|d| d.id == new_id).ok_or_else(|| OpenError::Invalid("the new version was not kept".into()))?;
@@ -3902,6 +4017,15 @@ impl Session {
         // one; there is nothing new to autosave.
         doc.generation = generation + 1;
         doc.snapshot_generation = doc.generation;
+        // The id stays, so the revision continues: a request made against the old content must not match the new.
+        doc.revision = revision.saturating_add(1);
+        // The content identities continue too. A save that was in flight across the reload carries an identity from
+        // before it, and the new content must not be given one that could equal it.
+        if let Some(editor) = doc.editor.as_mut() {
+            editor.last_state = last_state.saturating_add(1);
+            editor.state = editor.last_state;
+            editor.saved_state = Some(editor.state);
+        }
         // `open` pushed the new version last, so the old one is still at `old`.
         *self.docs.get_mut(old).ok_or_else(|| OpenError::Invalid("the document is not open".into()))? = doc;
         Ok(())
@@ -4309,6 +4433,9 @@ impl Session {
         let id = self.open(name, None, bytes, None)?;
         if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
             d.dirty = true;
+            if let Some(editor) = d.editor.as_mut() {
+                editor.saved_state = None;
+            }
             // Unsaved work with no edit yet still needs its first recovery snapshot.
             d.generation += 1;
         }
@@ -4332,6 +4459,7 @@ impl Session {
         for d in &mut self.docs {
             if d.dirty && d.generation != d.snapshot_generation {
                 d.snapshot_generation = d.generation;
+                d.recovery_pending = true;
                 out.push(RecoverySnapshot {
                     doc: d.id,
                     name: d.name.clone(),
@@ -4344,12 +4472,30 @@ impl Session {
         out
     }
 
+    /// Documents whose recovery copy no longer describes anything unsaved: they were snapshotted, and have since
+    /// become clean without a save going through the caller (undo back to the content that is in the file). The caller
+    /// withdraws those copies; a crash would otherwise offer to recover an edit that was undone. Each document is
+    /// reported once.
+    pub fn take_obsolete_recovery(&mut self) -> Vec<DocId> {
+        let mut out = Vec::new();
+        for d in &mut self.docs {
+            if d.recovery_pending && !d.dirty {
+                d.recovery_pending = false;
+                out.push(d.id);
+            }
+        }
+        out
+    }
+
     /// Mark a document opened from a recovery file: it has unsaved changes and belongs at
     /// `path` (where Save writes), as when the session ended.
     pub fn mark_recovered(&mut self, id: DocId, path: Option<String>) {
         if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
             d.path = path;
             d.dirty = true;
+            if let Some(editor) = d.editor.as_mut() {
+                editor.saved_state = None; // the recovered content is not the file's
+            }
             d.generation += 1;
             d.snapshot_generation = d.generation; // its bytes are already in the recovery store
         }

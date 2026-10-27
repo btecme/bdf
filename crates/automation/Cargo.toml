@@ -27,6 +27,8 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+# The service and the tools must agree (tests/service_parity.rs); the adapters become dependents in BUILD-009.
+pdfcraft-app-service = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
