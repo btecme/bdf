@@ -115,14 +115,7 @@ mod imp {
 
     /// The current user's SID as a string such as `S-1-5-21-...`.
     fn current_user_sid() -> io::Result<String> {
-        let os = |e: winsafe::co::ERROR| io::Error::from_raw_os_error(e.raw() as i32);
-        let token = winsafe::HPROCESS::GetCurrentProcess().OpenProcessToken(winsafe::co::TOKEN::QUERY).map_err(os)?;
-        match token.GetTokenInformation(winsafe::co::TOKEN_INFORMATION_CLASS::User).map_err(os)? {
-            winsafe::TokenInfo::User(user) => {
-                user.User.Sid().map(|sid| sid.to_string()).ok_or_else(|| io::Error::other("the current user has no SID"))
-            }
-            _ => Err(io::Error::other("unexpected token information")),
-        }
+        crate::identity::current_user()
     }
 
     /// The file's access list in SDDL form, from `icacls /save`, which is locale-independent (unlike its normal

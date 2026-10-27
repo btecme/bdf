@@ -3,13 +3,13 @@
 The application service behind every PdfCraft surface. The desktop, the command line and the MCP server are meant to be adapters over this crate: they turn their own shapes (widgets, arguments, JSON-RPC) into the typed requests below and the results and errors back out, and none of them keeps its own document session, save logic or policy. This is BUILD-007 of the BDF plan ([work items](../../docs/bdf-work-items.toml), finding F08).
 
 - **Layer:** L7, headless. It depends on `engine` and `platform`, never on a UI toolkit, and never on `automation`. The only same-layer edges `xtask layers` allows into or out of it are `app-service → platform`, `automation → app-service` and `ui-egui → app-service`.
-- **Status:** the first slice, used by tests only. Nothing in the desktop, the CLI or the MCP server calls it yet; moving them over is BUILD-009. **It authorizes nothing**: every caller is the local user who started the process until BUILD-008 adds identities, grants and audit.
+- **Status:** used by tests only. Nothing in the desktop, the CLI or the MCP server calls it yet; moving them over is BUILD-009, so **no client can reach a document through any shipped surface and agent access is not released**. What the service enforces is described under "Who may do what" below (BUILD-008).
 
 ## Contract
 
 ```rust
 let mut service = Service::new();                       // or Service::confined_to(root)
-let ctx = RequestContext::local(1);
+let ctx = RequestContext::new(1, ActorContext::local_user()?);   // the person; a client is made by GrantStore::authenticate
 let opened = service.execute(&ctx, OperationRequest::new(None, Operation::Open { source, password: None }))?;
 // opened.outcome == Outcome::Opened { document: DocumentKey, info }, opened.version == Some(DocumentVersion)
 service.execute(&ctx, OperationRequest::new(Some(key), Operation::Rotate {
@@ -25,6 +25,17 @@ service.execute(&ctx, OperationRequest::new(Some(key), Operation::Rotate {
 * **Saving** is two halves so the file I/O can run elsewhere. `prepare_save` takes the bytes of one revision, registers the plan (at most `MAX_SAVES_IN_FLIGHT` at once; `abandon_save` gives one up, and a save that fails to write does so itself) and works out what the target may replace (`CreateNew`, the tracked version, or a confirmed fingerprint; never "whatever is there"). `PreparedSave::write` writes with the check made at the moment of replacement and returns a `WrittenSave`: **the completion carries its own plan**, so it cannot be paired with another save's. `finish_save(&completion)` publishes it. A completion is refused, changing nothing, when its plan belongs to another service or was already finished or abandoned, and the refusal still names the file the write left on disk in `committed`. What the document learns from a completion is exactly that *the file holds the content the plan was taken from*: content edited or undone since is unsaved, undoing or redoing back to what was written is clean, and a document closed meanwhile is left alone with the file standing. A plan that was **overtaken** (a save planned after it has already been applied) writes its file and changes nothing else: it cannot give the document back an older destination, saved state or tracked file version (`superseded` in the report). `is_current` lets any worker ask before it publishes. A save whose file was written but whose document could not be refreshed from it reports `internal_failure` with the write in `committed`.
 * **Files.** `Service::confined_to(root)` accepts only root-relative paths without `..`, pins the destination folder (Windows) and revalidates it at the commit, as the platform crate does for the tools. Opening reads at most `MAX_OPEN_BYTES` (`with_open_limit` lowers it; a larger file is `resource_limit`), applied to the same handle that is read, both to the length it reports and to the bytes actually read; it records the file's version for the save; and in a confined service it refuses a file that is itself a link, and on Windows any reparse point at all (an online-only cloud file, a deduplicated file): the name is opened once without following a link (`O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows), every decision is about that handle, and nothing is read from a second open of the name. The cost is that a confined read refuses a file that is only available online; make it available offline, or open it from outside the confined folder.
 
+## Who may do what (BUILD-008)
+
+* **Actors** ([`actors.rs`](src/actors.rs)): the person is read from the operating system (`ActorContext::local_user()` takes no argument, and a test fails if any production crate but this one calls it); a client is made only by `GrantStore::authenticate(client, secret)`. Nothing in a request is read as an identity.
+* **Grants** ([`grants.rs`](src/grants.rs)): read-only by default, with expiry, shown a secret once and keeping only its hash, in a private bounded file; a revocation through any handle is seen at once by every running operation.
+* **Policy** ([`policy.rs`](src/policy.rs)): the release has the operation (deferred, excluded and unknown operations are refused, for everyone), the grant is live, it holds the capability for this document (a missing and an out-of-scope document look the same to a client), undo and redo need the capability of the change they revert (the service records it per document), and a file needs a granted folder. The PDF's own permission bits stay with the engine.
+* **Revocation** is checked before an effect, at the moment a file write commits (a `gate` in the platform's guarded writes) and before data is handed back.
+* **Audit** ([`audit.rs`](src/audit.rs)): one bounded, chained, private record per outcome, without content, secrets or full paths; a service that cannot write it stops serving clients (not the person).
+* **Document scripts** are off unless `ScriptTrust::Enabled` is chosen.
+
+Details and limits: [`docs/bdf-evidence/BUILD-008.md`](../../docs/bdf-evidence/BUILD-008.md).
+
 ## Not here yet
 
-Local principals, grants, release policy and audit (BUILD-008); moving the desktop, CLI and MCP onto the service and deleting their duplicate orchestration (BUILD-009); jobs, cancellation, deadlines and aggregate memory budgets (BUILD-010); absolute-path and `..` resolution against a root (still in `automation`); the other tools of the catalogue; rendering through the facade.
+Where the grant and audit files live, issuing and revoking grants, and delivering a secret to a client (the applications, BUILD-008's second part); moving the desktop, CLI and MCP onto the service and deleting their duplicate orchestration (BUILD-009); jobs, cancellation, deadlines and aggregate memory budgets (BUILD-010); absolute-path and `..` resolution against a root (still in `automation`); the other tools of the catalogue; rendering through the facade.

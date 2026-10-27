@@ -298,9 +298,19 @@ pub fn conflict_of(error: &PersistError) -> Option<&Conflict> {
     error.source.get_ref().and_then(|inner| inner.downcast_ref::<Conflict>())
 }
 
+/// A last question asked at the moment of replacement, after the new bytes are staged, flushed and closed and before they
+/// replace anything: `Err` refuses the write, leaving the target untouched and the staging file removed. It is how a
+/// permission that can be withdrawn (a revoked grant) is checked at the commit and not only when the save began.
+pub type Gate<'a> = &'a dyn Fn() -> io::Result<()>;
+
 /// Save `bytes` over `path`, but only if `authority` still holds when the new bytes are about to replace the file.
 pub fn write_guarded(path: &Path, bytes: &[u8], form: StagingName, authority: Authority) -> Result<Committed, PersistError> {
     write_guarded_with(path, bytes, form, authority, staging_suffixes(), &Steps::real())
+}
+
+/// [`write_guarded`], also refusing if `gate` says no at the moment of replacement.
+pub fn write_guarded_gated(path: &Path, bytes: &[u8], form: StagingName, authority: Authority, gate: Gate) -> Result<Committed, PersistError> {
+    write_guarded_gated_with(path, bytes, form, authority, gate, staging_suffixes(), &Steps::real())
 }
 
 /// [`write_guarded`], trying the staging names `suffixes` give and performing the operations `steps` give (its
@@ -313,7 +323,23 @@ pub fn write_guarded_with(
     suffixes: impl IntoIterator<Item = u64>,
     steps: &Steps,
 ) -> Result<Committed, PersistError> {
-    let guard = |target: &Path| check(target, authority);
+    write_guarded_gated_with(path, bytes, form, authority, &|| Ok(()), suffixes, steps)
+}
+
+/// [`write_guarded_with`] and the `gate` of [`write_guarded_gated`]. The gate is asked first, then the authority.
+pub fn write_guarded_gated_with(
+    path: &Path,
+    bytes: &[u8],
+    form: StagingName,
+    authority: Authority,
+    gate: Gate,
+    suffixes: impl IntoIterator<Item = u64>,
+    steps: &Steps,
+) -> Result<Committed, PersistError> {
+    let guard = |target: &Path| {
+        gate()?;
+        check(target, authority)
+    };
     let steps = Steps { guard: &guard, ..*steps };
     write_replace_with(path, bytes, form, suffixes, &steps)
 }
@@ -587,6 +613,28 @@ mod tests {
         };
         let (bytes, _) = read_regular_with(&path, u64::MAX, &open, &|_: &Metadata| false).unwrap();
         assert_eq!((bytes, opens.get()), (b"plain".to_vec(), 1));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_gate_that_says_no_at_the_commit_leaves_the_target_untouched() {
+        let d = dir("gate");
+        let path = d.join("doc.bin");
+        std::fs::write(&path, b"ORIGINAL").unwrap();
+        let version = read_with_version(&path).unwrap().1;
+        let asked = std::cell::Cell::new(0);
+        let refuse = || {
+            asked.set(asked.get() + 1);
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "revoked"))
+        };
+        let error = write_guarded_gated(&path, b"NEW", StagingName::SuffixThenTag, Authority::ReplaceTracked(&version), &refuse).unwrap_err();
+        assert_eq!(error.source.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(asked.get(), 1, "asked once, at the commit");
+        assert_eq!(std::fs::read(&path).unwrap(), b"ORIGINAL");
+        assert_eq!(names(&d), ["doc.bin"], "no staging file is left");
+        // A gate that agrees changes nothing about the save.
+        write_guarded_gated(&path, b"NEW", StagingName::SuffixThenTag, Authority::ReplaceTracked(&version), &|| Ok(())).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"NEW");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

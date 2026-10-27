@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use pdfcraft_app_service::{DocumentKey, ErrorCode, OpenSource, Operation, OperationRequest, Outcome, PageSelection, RequestContext, Service};
+use pdfcraft_app_service::{
+    ActorContext, DocumentKey, ErrorCode, OpenSource, Operation, OperationRequest, Outcome, PageSelection, RequestContext, Service,
+};
 use pdfcraft_automation::{Automation, Content, ToolError};
 use serde_json::{Value, json};
 
@@ -64,14 +66,19 @@ fn tool_pages(a: &mut Automation, doc: u64) -> Vec<(u64, f64, f64, u64)> {
 fn service_with(pages: usize) -> (Service, DocumentKey, u64) {
     let mut service = Service::new();
     let source = OpenSource::Bytes { name: "a.pdf".into(), bytes: Arc::new(fixture(pages)) };
-    let done = service.execute(&RequestContext::local(1), OperationRequest::new(None, Operation::Open { source, password: None })).expect("opens");
+    let done = service
+        .execute(
+            &RequestContext::new(1, ActorContext::local_user().expect("the current user")),
+            OperationRequest::new(None, Operation::Open { source, password: None }),
+        )
+        .expect("opens");
     let Outcome::Opened { document, .. } = done.outcome else { panic!("opened") };
     (service, document, done.version.expect("version").content_revision)
 }
 
 fn service_pages(service: &Service, key: DocumentKey) -> Vec<(u64, f64, f64, u64)> {
     service
-        .document(key)
+        .document(&ActorContext::local_user().expect("the current user"), key)
         .expect("open")
         .info()
         .pages
@@ -103,7 +110,7 @@ fn a_valid_rotation_does_the_same_thing_on_both() {
         tool(&mut a, "page_rotate", json!({ "doc": doc, "pages": pages, "degrees": degrees })).expect("tool rotates");
         service
             .execute(
-                &RequestContext::local(2),
+                &RequestContext::new(2, ActorContext::local_user().expect("the current user")),
                 OperationRequest::new(
                     Some(key),
                     Operation::Rotate { expected_revision: revision, pages: PageSelection::Numbers(pages.clone()), degrees },
@@ -133,7 +140,7 @@ fn a_wrong_rotation_is_refused_with_the_same_words() {
         };
         let from_service = service
             .execute(
-                &RequestContext::local(2),
+                &RequestContext::new(2, ActorContext::local_user().expect("the current user")),
                 OperationRequest::new(
                     Some(key),
                     Operation::Rotate { expected_revision: revision, pages: PageSelection::Numbers(pages.clone()), degrees },
