@@ -328,6 +328,30 @@ fn segments(dir: &Path) -> io::Result<Vec<u32>> {
     Ok(found)
 }
 
+/// The last `count` lines of the log in `dir` (each a JSON record, newest last), reading the newest segments first. The
+/// log holds no content, secret or full path, so its lines can be shown as they are. An empty or missing log is no lines.
+pub fn recent_lines(dir: &Path, count: usize) -> io::Result<Vec<String>> {
+    let found = match segments(dir) {
+        Ok(found) => found,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for index in found.iter().rev() {
+        let path = dir.join(format!("audit-{index:06}.jsonl"));
+        let (bytes, _) = pdfcraft_platform::file_identity::read_regular_with_version(&path, MAX_SEGMENT_BYTES * 2)?;
+        let text = String::from_utf8_lossy(&bytes);
+        let mut segment: Vec<String> = text.lines().map(str::to_owned).collect();
+        segment.append(&mut lines);
+        lines = segment;
+        if lines.len() >= count {
+            break;
+        }
+    }
+    let skip = lines.len().saturating_sub(count);
+    Ok(lines.split_off(skip))
+}
+
 /// What [`verify`] found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VerifyReport {

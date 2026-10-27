@@ -11,3 +11,4 @@ pub mod identity;
 pub mod persistence;
 pub mod private_files;
 pub mod staging;
+pub mod state;
