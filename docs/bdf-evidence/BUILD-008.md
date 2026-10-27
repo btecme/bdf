@@ -1,6 +1,6 @@
 # BUILD-008 evidence: local principals, grants, release policy and audit
 
-Status: **in progress (2026-10-27). First slice implemented and tested locally on Windows 11 x64: the policy, the grants and the audit log live in the service crate and are enforced on every request. Not yet run hosted, not reviewed by Codex.** The part of the work item that touches the applications (`apps/pdfcraft`, `apps/pdfcraft-cli`: where the grant and audit files live, a command to issue and revoke grants, handing the secret to the client) is **not done**; see section 6. Work item BUILD-008 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`. It depends on BUILD-005 and BUILD-007, both merged. Branch `feat/build-008-principals-grants-audit`, from `main` at `ccfc041b`. Finding F08 of the [foundation review](../bdf-foundation-review.md). Local commands ran with Rust 1.99.0, `--offline --locked` (one relock: three dependency edges on the service crate, all crates already in the tree), two jobs.
+Status: **in progress (2026-10-27). First slice implemented, tested locally on Windows 11 x64 and hosted-green on `02cb8af2` (PR #11, draft): the policy, the grants and the audit log live in the service crate and are enforced on every request. Not reviewed by Codex.** The part of the work item that touches the applications (`apps/pdfcraft`, `apps/pdfcraft-cli`: where the grant and audit files live, a command to issue and revoke grants, handing the secret to the client) is **not done**; see section 6. Work item BUILD-008 in [bdf-work-items.toml](../bdf-work-items.toml) stays `pending`. It depends on BUILD-005 and BUILD-007, both merged. Branch `feat/build-008-principals-grants-audit`, from `main` at `ccfc041b`. Finding F08 of the [foundation review](../bdf-foundation-review.md). Local commands ran with Rust 1.99.0, `--offline --locked` (one relock: three dependency edges on the service crate, all crates already in the tree), two jobs.
 
 **Scope, stated plainly.** Nothing outside this crate's tests uses the service yet (adapter migration is BUILD-009), so **no agent can reach a document through any shipped surface today, and this work does not release agent access.** What it does is make the service refuse, on every path it offers, what a client was not granted, and make that refusal observable. The work item's stop condition ("an unauthenticated same-user impersonation route or a scope escalation exists: do not release agent access") is the gate BUILD-009 must pass when it connects MCP, the CLI and the UI control channel; section 5 lists what that gate relies on.
 
@@ -56,6 +56,12 @@ The agent scenarios: a read-only agent reads, and cannot rotate, undo, redo, sav
 
 Two failures of my own on the way, both fixed and kept visible: the first agent test run found that undoing a "change" recorded as needing only `document.read` was allowed (section 3, step 4), and the first audit tests failed because the system temporary folder grants another account access on this machine, which the private-file check correctly refused; the tests now make their folders private explicitly (`icacls` on Windows, mode 0700 on Unix).
 
+## Hosted runs
+
+* First head `027d5774`: Ubuntu, FreeBSD, wasm32 and the dependency job passed; hosted Windows failed one test, `grants_persist_in_a_private_file_that_holds_no_secret`. **A flaky test of mine, not the product:** two grant tests shared a global clock, so when the expiry test advanced it the persistence test's grant looked expired between issuing and authenticating. It passed locally by timing. Each test now owns its clock (the store takes any shareable closure); 40 parallel and one single-threaded local runs pass.
+* Second head `b870a781`: Windows and Ubuntu failed the Clippy step (`-D warnings`, whole workspace): three tests bound a `clock` they no longer used after that change. **My slip:** I pushed after running tests but not clippy. Cleared, and reproduced locally with the CI command (`cargo clippy --workspace --all-targets -- -D warnings`) before pushing.
+* **Head `02cb8af2`: Windows, Ubuntu, FreeBSD 15, wasm32 and the dependency policy all pass** (fuzz skipped by event), read at job level through the API. The Windows ARM64 packaging check **fails on every branch for a reason unrelated to this change**: `cargo xtask models` downloads two OCR model files from a third-party bucket that now answers HTTP 403 (it passed days earlier; see the progress log in `ROADMAP.md`). The Unix identity and file-permission code compiled and its tests passed on Ubuntu and FreeBSD (the Windows-only icacls helper and the SID path ran on the hosted Windows runner).
+
 ## 6. Not done, and not claimed
 
 * **No application integration.** The desktop and the command line do not issue, list or revoke grants, do not choose where the grant and audit files live, and do not hand a secret to a client. Those are the `apps/` part of this work item. **Open decision for the owner:** the per-user state folder's name (the product name is still undecided: BDF or PdfCraft; the service takes any path and does not choose one).
@@ -65,10 +71,11 @@ Two failures of my own on the way, both fixed and kept visible: the first agent 
 * **Only four capabilities and eight operations,** the ones the service has. Forms, annotations, export, print and diagnostics capabilities arrive with their operations.
 * **Revocation cannot undo what already happened**: an in-memory edit applied in the instant after the last check, before delivery, stands and is audited as a denial whose revision moved. The record is truthful about it.
 * **The audit chain is not a signature** and its clock is the machine's.
-* No hosted run and no Codex review yet. Unix-specific code (`identity` for Unix, the 0600 file checks) was not compiled or run locally.
+* No Codex review yet. The Unix-specific code was not compiled locally; it compiled and ran in the hosted Ubuntu and FreeBSD jobs.
 
 ## Revision history
 
 | Date | Change |
 |---|---|
+| 2026-10-27 | Hosted results recorded (two of my own mistakes found and fixed). |
 | 2026-10-27 | First version: actors, grants, policy, audit and script trust in the service crate; the commit gate and the identity in the platform crate; tests, mutation proofs and limits. |
