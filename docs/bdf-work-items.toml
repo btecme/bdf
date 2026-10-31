@@ -216,6 +216,7 @@ stop_conditions = ["Unauthenticated same-user impersonation route or scope escal
 id = "BUILD-009"
 title = "Migrate and qualify the first vertical slice across adapters"
 status = "pending"
+status_note = "Started 2026-10-31 on feat/build-009-adapter-migration (inventory only, nothing migrated). The service has 8 operations; the release profile has 34 Core tools, so 28 have no service operation. Moving only the six slice operations would leave two sources of truth for open documents; the owner chooses between migrating every Core tool in groups, shrinking the shipped surface to the service until each group lands, or a general pass-through operation. See docs/bdf-evidence/BUILD-009.md."
 priority = "P0"
 depends_on = ["BUILD-008"]
 prd_milestone = "BDF-03"
