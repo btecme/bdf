@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use crate::actors::{ActorContext, ClientId, GrantId, OsPrincipal};
 use crate::operations::Capability;
+use crate::version::{DocumentKey, SessionId};
 
 /// Longest and shortest time a grant may live, in seconds. A grant is never open-ended.
 pub const MAX_TTL_SECONDS: i64 = 30 * 24 * 3600;
@@ -39,20 +40,25 @@ const MAX_PATH_BYTES: usize = 1024;
 /// The largest grant file read.
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 
-/// Which documents of a session a capability applies to.
+/// Which documents a capability applies to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocumentScope {
-    /// Every open document.
+    /// Every open document, in every session. This is the deliberately broad scope; a grant that must be narrower names
+    /// documents.
     All,
-    /// These document numbers of the session only.
-    Only(Vec<u64>),
+    /// These documents only, each named by its **full identity**: the session and the number within it. A document number
+    /// alone is not an identity (every session numbers its first document 1), so a grant limited to document 1 of one
+    /// window cannot be used on document 1 of another. A session lasts as long as the service that made it, so a grant
+    /// that names documents is good for that run and, once the session is gone, authorizes nothing: it never turns into
+    /// an all-sessions grant.
+    Only(Vec<DocumentKey>),
 }
 
 impl DocumentScope {
-    pub fn contains(&self, document: u64) -> bool {
+    pub fn contains(&self, document: &DocumentKey) -> bool {
         match self {
             DocumentScope::All => true,
-            DocumentScope::Only(list) => list.contains(&document),
+            DocumentScope::Only(list) => list.contains(document),
         }
     }
 }
@@ -79,6 +85,17 @@ impl FileAccess {
 
     pub fn allows_write(&self, path: &Path) -> bool {
         within(&self.write_under, path)
+    }
+
+    /// The granted folder that holds `path`, by name: the deepest one when several do. The name is only the first
+    /// question; the folder that answers it is then what the file is *confined* to, so a link inside it cannot carry the
+    /// access anywhere else.
+    pub fn granting_root(&self, write: bool, path: &Path) -> Option<&Path> {
+        let roots = if write { &self.write_under } else { &self.read_under };
+        if !within(roots, path) {
+            return None;
+        }
+        roots.iter().filter(|root| path.starts_with(root)).max_by_key(|root| root.components().count()).map(PathBuf::as_path)
     }
 }
 
@@ -512,7 +529,9 @@ fn grant_json(g: &Grant) -> Value {
         .map(|s| {
             let documents = match &s.documents {
                 DocumentScope::All => json!("all"),
-                DocumentScope::Only(list) => json!(list),
+                DocumentScope::Only(list) => {
+                    json!(list.iter().map(|k| json!({ "session": k.session.0, "document": k.document })).collect::<Vec<_>>())
+                }
             };
             json!({ "capability": s.capability.name(), "documents": documents })
         })
@@ -559,7 +578,11 @@ fn parse_grant(item: &Value) -> Option<Grant> {
         let capability = Capability::parse(s.get("capability")?.as_str()?)?;
         let documents = match s.get("documents")? {
             Value::String(text) if text == "all" => DocumentScope::All,
-            Value::Array(list) => DocumentScope::Only(list.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()?),
+            Value::Array(list) => DocumentScope::Only(
+                list.iter()
+                    .map(|k| Some(DocumentKey { session: SessionId(k.get("session")?.as_u64()?), document: k.get("document")?.as_u64()? }))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
             _ => return None,
         };
         scopes.push(Scope { capability, documents });
@@ -735,7 +758,10 @@ mod tests {
             GrantRequest {
                 scopes: vec![
                     Scope { capability: Capability::DocumentRead, documents: DocumentScope::All },
-                    Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![1]) },
+                    Scope {
+                        capability: Capability::DocumentRead,
+                        documents: DocumentScope::Only(vec![DocumentKey { session: SessionId(1), document: 1 }]),
+                    },
                 ],
                 ..ok()
             },
@@ -949,5 +975,17 @@ mod tests {
         assert_eq!(store.check(&actor).unwrap_err(), GrantProblem::Unknown, "a grant file anyone could have edited is not trusted");
         assert_eq!(store.authenticate("exposed", issued.secret()).unwrap_err(), AuthError);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_folder_that_grants_a_file_is_the_deepest_one_that_holds_it_and_read_and_write_are_separate() {
+        let files =
+            FileAccess { read_under: vec![PathBuf::from("/data"), PathBuf::from("/data/work")], write_under: vec![PathBuf::from("/data/work/out")] };
+        assert_eq!(files.granting_root(false, Path::new("/data/work/a.pdf")), Some(Path::new("/data/work")));
+        assert_eq!(files.granting_root(false, Path::new("/data/b.pdf")), Some(Path::new("/data")));
+        assert_eq!(files.granting_root(true, Path::new("/data/work/out/c.pdf")), Some(Path::new("/data/work/out")));
+        assert_eq!(files.granting_root(true, Path::new("/data/work/a.pdf")), None, "reading does not grant writing");
+        assert_eq!(files.granting_root(false, Path::new("/elsewhere/a.pdf")), None);
+        assert_eq!(files.granting_root(false, Path::new("/data/work/../../etc/a.pdf")), None, "no climbing");
     }
 }

@@ -3,7 +3,7 @@
 The application service behind every PdfCraft surface. The desktop, the command line and the MCP server are meant to be adapters over this crate: they turn their own shapes (widgets, arguments, JSON-RPC) into the typed requests below and the results and errors back out, and none of them keeps its own document session, save logic or policy. This is BUILD-007 of the BDF plan ([work items](../../docs/bdf-work-items.toml), finding F08).
 
 - **Layer:** L7, headless. It depends on `engine` and `platform`, never on a UI toolkit, and never on `automation`. The only same-layer edges `xtask layers` allows into or out of it are `app-service → platform`, `automation → app-service` and `ui-egui → app-service`.
-- **Status:** used by tests only. Nothing in the desktop, the CLI or the MCP server calls it yet; moving them over is BUILD-009, so **no client can reach a document through any shipped surface and agent access is not released**. What the service enforces is described under "Who may do what" below (BUILD-008).
+- **Status:** used by tests only. Nothing in the desktop, the CLI or the MCP server calls it yet; moving them over is BUILD-009, so **the grant policy is not yet applied to the surfaces people use: the opt-in CLI and MCP server still run on the older automation engine until BUILD-009 moves them, and agent access through this policy is not released**. What the service enforces is described under "Who may do what" below (BUILD-008).
 
 ## Contract
 

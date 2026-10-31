@@ -224,7 +224,7 @@ fn a_grant_is_limited_to_its_documents_and_the_refusal_does_not_say_whether_one_
     let (first, _) = open_file(&mut service, &file_in(&dir, "a.pdf", 1));
     let (second, _) = open_file(&mut service, &file_in(&dir, "b.pdf", 3));
     let request = GrantRequest {
-        scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![first.document]) }],
+        scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![first]) }],
         ..GrantRequest::read_only(ClientId::parse("narrow").expect("a name"))
     };
     let issued = grants.issue(request).expect("issues");
@@ -243,6 +243,40 @@ fn a_grant_is_limited_to_its_documents_and_the_refusal_does_not_say_whether_one_
     assert_eq!(service.document(&narrow, second).err().map(|e| (e.code, e.reason)), Some((ErrorCode::NotAuthorized, Some("document_out_of_scope"))));
     // The person is told the truth.
     assert_eq!(refused(run(&mut service, &human(3), Some(missing), Operation::Query)).0, ErrorCode::NotFound);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_grant_for_one_documents_does_not_reach_the_same_number_in_another_session() {
+    let dir = private_dir("session-scope");
+    let grants = GrantStore::in_memory(owner());
+    let (mut mine, mut theirs) = (service_with(&grants), service_with(&grants));
+    let (mine_doc, mine_version) = open_file(&mut mine, &file_in(&dir, "mine.pdf", 2));
+    let (theirs_doc, theirs_version) = open_file(&mut theirs, &file_in(&dir, "theirs.pdf", 3));
+    assert_eq!(mine_doc.document, theirs_doc.document, "both sessions number their first document the same way");
+    assert_ne!(mine_doc.session, theirs_doc.session);
+
+    let request = GrantRequest {
+        scopes: [Capability::DocumentRead, Capability::DocumentEditPages]
+            .into_iter()
+            .map(|capability| Scope { capability, documents: DocumentScope::Only(vec![mine_doc]) })
+            .collect(),
+        ..GrantRequest::read_only(ClientId::parse("one-document").expect("a name"))
+    };
+    let issued = grants.issue(request).expect("issues");
+    let agent = grants.authenticate("one-document", issued.secret()).expect("authenticates");
+    let ctx = RequestContext::new(2, agent.clone());
+
+    // Its own document, yes.
+    assert!(run(&mut mine, &ctx, Some(mine_doc), Operation::Query).is_ok());
+    assert!(run(&mut mine, &ctx, Some(mine_doc), rotate(mine_version.content_revision)).is_ok());
+    // The other session's document with the same number: neither read nor edited, and nothing about it is revealed.
+    let denied = (ErrorCode::NotAuthorized, Some("document_out_of_scope"));
+    assert_eq!(refused(run(&mut theirs, &ctx, Some(theirs_doc), Operation::Query)), denied);
+    assert_eq!(refused(run(&mut theirs, &ctx, Some(theirs_doc), rotate(theirs_version.content_revision))), denied);
+    assert_eq!(theirs.documents(&agent), []);
+    assert_eq!(theirs.document(&agent, theirs_doc).err().map(|e| (e.code, e.reason)), Some(denied));
+    assert_eq!(rotations(&theirs, theirs_doc), [0, 0, 0], "the other session's document is untouched");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -293,6 +327,129 @@ fn an_agent_reads_and_writes_files_only_in_its_folders() {
     let tracked = Operation::Save { expected_revision: t1.content_revision, target: SaveTarget::Tracked, overwrite: Overwrite::Tracked, full: None };
     assert_eq!(refused(run(&mut service, &ctx, Some(theirs), tracked)), (ErrorCode::NotAuthorized, Some("folder_not_granted")));
     assert_eq!(std::fs::read(&forbidden).expect("reads"), before);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A directory link `at` -> `to`: a symbolic link on Unix, a junction on Windows (which needs no privilege).
+fn link_dir(to: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(to, at).expect("symlink");
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(at).arg(to).output().expect("runs cmd").status.success();
+        assert!(made, "mklink /J must be available to run this test");
+    }
+}
+
+/// A file link `at` -> `to`; `false` if this machine will not make one (Windows without the privilege).
+fn link_file(to: &Path, at: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(to, at).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(to, at).is_ok()
+    }
+}
+
+/// Two folders, `inside` (granted) and `outside` (not), a decoy in `outside`, and a client that may read and save in `inside`.
+fn granted_and_not(test: &str) -> (PathBuf, PathBuf, PathBuf, GrantStore, ActorContext) {
+    let base = private_dir(test);
+    let (inside, outside) = (base.join("inside"), base.join("outside"));
+    std::fs::create_dir_all(&inside).expect("folder");
+    std::fs::create_dir_all(&outside).expect("folder");
+    file_in(&outside, "out.pdf", 4);
+    let grants = GrantStore::in_memory(owner());
+    let files = FileAccess { read_under: vec![inside.clone()], write_under: vec![inside.clone()] };
+    let (worker, _) = grant(&grants, "worker", &[Capability::DocumentRead, Capability::DocumentEditPages, Capability::DocumentSave], files);
+    (base, inside, outside, grants, worker)
+}
+
+#[test]
+fn a_link_inside_a_granted_folder_does_not_carry_a_client_out_of_it_when_reading() {
+    let (base, inside, outside, grants, worker) = granted_and_not("link-read");
+    let mut service = service_with(&grants);
+    let ctx = RequestContext::new(2, worker);
+    link_dir(&outside, &inside.join("alias"));
+    let open = |service: &mut Service, ctx: &RequestContext, path: PathBuf| {
+        run(service, ctx, None, Operation::Open { source: OpenSource::File(path), password: None })
+    };
+
+    // Named inside the granted folder, but the folder on the way is a link to one that is not granted.
+    let error = open(&mut service, &ctx, inside.join("alias").join("out.pdf")).expect_err("refused");
+    assert_eq!(error.code, ErrorCode::IoFailure, "{error}");
+    assert!(service.documents(&me()).is_empty(), "nothing was opened");
+    // And so is a link to a single file.
+    if link_file(&outside.join("out.pdf"), &inside.join("linked.pdf")) {
+        assert!(open(&mut service, &ctx, inside.join("linked.pdf")).is_err());
+        assert!(service.documents(&me()).is_empty());
+    }
+    // The refusal says nothing about what the link points at.
+    let text = format!("{error:?}");
+    assert!(!text.contains("outside") && !text.contains("pdfcraft-agents"), "{text}");
+    // A real file in the granted folder still opens for the client...
+    file_in(&inside, "in.pdf", 2);
+    assert!(open(&mut service, &ctx, inside.join("in.pdf")).is_ok());
+    // ...and the person is not held to a grant: links work for them as they always did.
+    assert!(open(&mut service, &human(3), inside.join("alias").join("out.pdf")).is_ok());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_link_inside_a_granted_folder_does_not_carry_a_clients_save_out_of_it() {
+    let (base, inside, outside, grants, worker) = granted_and_not("link-write");
+    let mut service = service_with(&grants);
+    let ctx = RequestContext::new(2, worker);
+    let (key, version) = open_file(&mut service, &file_in(&inside, "in.pdf", 2));
+    let decoy = std::fs::read(outside.join("out.pdf")).expect("reads");
+    link_dir(&outside, &inside.join("alias"));
+    let save = |service: &mut Service, target: PathBuf, overwrite: Overwrite| {
+        run(
+            service,
+            &ctx,
+            Some(key),
+            Operation::Save { expected_revision: version.content_revision, target: SaveTarget::Path(target), overwrite, full: None },
+        )
+    };
+
+    // A new file through the link, and the replacement of the file the link leads to (confirmed by its real fingerprint,
+    // so that only the link stands in the way).
+    let error = save(&mut service, inside.join("alias").join("new.pdf"), Overwrite::Absent).expect_err("refused");
+    assert_eq!(error.code, ErrorCode::IoFailure, "{error}");
+    assert!(!error.message.contains("inside") && !error.message.contains("outside"), "the message leaks the folder: {}", error.message);
+    let fingerprint = pdfcraft_platform::file_identity::FileVersion::of_bytes(&decoy, None).fingerprint();
+    assert!(save(&mut service, inside.join("alias").join("out.pdf"), Overwrite::Version(fingerprint)).is_err());
+    assert!(!outside.join("new.pdf").exists(), "nothing was created outside the granted folder");
+    assert_eq!(std::fs::read(outside.join("out.pdf")).expect("reads"), decoy, "and nothing there was replaced");
+    // Saving where the grant says still works, new subfolders and all.
+    assert!(save(&mut service, inside.join("sub").join("ok.pdf"), Overwrite::Absent).is_ok());
+    assert!(inside.join("sub").join("ok.pdf").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_granted_folder_swapped_for_a_link_between_open_and_save_is_not_written_through() {
+    let (base, inside, outside, grants, worker) = granted_and_not("link-swap");
+    let mut service = service_with(&grants);
+    let ctx = RequestContext::new(2, worker);
+    std::fs::create_dir_all(inside.join("work")).expect("folder");
+    let (key, v0) = open_file(&mut service, &file_in(&inside.join("work"), "in.pdf", 2));
+    let v1 = run(&mut service, &ctx, Some(key), rotate(v0.content_revision)).expect("an agent edit").version.expect("version");
+    let decoy = fixture(2);
+    std::fs::write(outside.join("in.pdf"), &decoy).expect("a byte-identical decoy, so that a version check alone could not tell");
+
+    std::fs::rename(inside.join("work"), inside.join("work-moved")).expect("moves the folder");
+    link_dir(&outside, &inside.join("work"));
+    let saved = run(
+        &mut service,
+        &ctx,
+        Some(key),
+        Operation::Save { expected_revision: v1.content_revision, target: SaveTarget::Tracked, overwrite: Overwrite::Tracked, full: None },
+    );
+    assert!(saved.is_err());
+    assert_eq!(std::fs::read(outside.join("in.pdf")).expect("reads"), decoy, "nothing was written through the link");
+    assert!(service.document(&me(), key).expect("open").version().dirty(), "and the edit is still held");
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -415,6 +572,66 @@ fn a_log_that_cannot_be_written_stops_serving_clients_but_not_the_person() {
     let mut service = service.with_audit(Box::new(MemoryAudit::new(8)));
     assert!(!service.audit_failed());
     assert!(run(&mut service, &ctx, Some(key), Operation::Query).is_ok());
+}
+
+/// A service whose log fails on its second record, with one document open (record one) and an agent that may save into `dir`.
+fn failing_log_with_saver(dir: &Path) -> (Service, DocumentKey, DocumentVersion, ActorContext) {
+    let grants = GrantStore::in_memory(owner());
+    let files = FileAccess { read_under: vec![dir.to_path_buf()], write_under: vec![dir.to_path_buf()] };
+    let (saver, _) = grant(&grants, "saver", &[Capability::DocumentRead, Capability::DocumentSave], files);
+    let mut service = service_with(&grants).with_audit(Box::new(Failing { allowed: 1, seen: 0 }));
+    let (key, version) = open_file(&mut service, &file_in(dir, "doc.pdf", 1));
+    (service, key, version, saver)
+}
+
+fn break_the_log(service: &mut Service, key: DocumentKey) {
+    assert!(run(service, &human(2), Some(key), Operation::Query).is_ok(), "the person still succeeds");
+    assert!(service.audit_failed());
+}
+
+#[test]
+fn once_the_log_has_failed_a_client_cannot_read_a_document_by_the_direct_calls_either() {
+    let dir = private_dir("audit-direct-read");
+    let (mut service, key, _, saver) = failing_log_with_saver(&dir);
+    assert_eq!(service.documents(&saver), [key]);
+    assert!(service.document(&saver, key).is_ok());
+    break_the_log(&mut service, key);
+
+    assert!(service.documents(&saver).is_empty());
+    assert_eq!(service.document(&saver, key).err().map(|e| (e.code, e.reason)), Some((ErrorCode::NotAuthorized, Some("audit_unavailable"))));
+    assert_eq!(service.documents(&me()), [key], "the person is not locked out");
+    assert!(service.document(&me(), key).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn once_the_log_has_failed_a_client_cannot_plan_or_write_a_save_and_the_person_can() {
+    let dir = private_dir("audit-direct-save");
+    let (mut service, key, version, saver) = failing_log_with_saver(&dir);
+    let out = dir.join("out.pdf");
+    let ctx = RequestContext::new(5, saver);
+    // A plan made while the log works...
+    let queued = service
+        .prepare_save(&ctx, key, version.content_revision, SaveTarget::Path(out.clone()), Overwrite::Absent, None)
+        .expect("the client may plan a save while the log works");
+    break_the_log(&mut service, key);
+
+    // ...is not written once it does not: nothing is staged and nothing appears on disk.
+    let error = queued.write().expect_err("refused");
+    assert_eq!((error.code, error.reason), (ErrorCode::NotAuthorized, Some("audit_unavailable")));
+    assert!(!out.exists(), "the refused write left nothing behind");
+    service.abandon_save(&queued);
+    // A new plan is refused outright, and the refusal does not look at the document.
+    let again = service.prepare_save(&ctx, key, version.content_revision, SaveTarget::Path(out.clone()), Overwrite::Absent, None);
+    assert_eq!(again.err().map(|e| (e.code, e.reason)), Some((ErrorCode::NotAuthorized, Some("audit_unavailable"))));
+    assert!(!out.exists());
+    // The person saves whatever the state of the log.
+    let mine = service
+        .prepare_save(&human(6), key, version.content_revision, SaveTarget::Path(out.clone()), Overwrite::Absent, None)
+        .expect("the person may plan");
+    assert!(mine.write().is_ok());
+    assert!(out.exists());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

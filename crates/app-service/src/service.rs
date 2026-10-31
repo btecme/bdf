@@ -93,8 +93,9 @@ pub struct Service {
     policy: Policy,
     /// Where the record of what was done goes.
     audit: Box<dyn AuditSink>,
-    /// The audit log could not be written; clients are not served until a log is attached again.
-    audit_failed: bool,
+    /// The audit log could not be written; clients are not served until a log is attached again. Shared with the saves
+    /// that are planned, so a save queued before the failure is refused too.
+    health: AuditHealth,
     /// For each document, the capability each undoable change needed, in step with the engine's undo and redo stacks.
     journals: HashMap<u64, Journal>,
     /// Seconds since the Unix epoch, for audit records.
@@ -152,7 +153,7 @@ impl Service {
             open_limit: MAX_OPEN_BYTES,
             policy: Policy::local(),
             audit: Box::new(MemoryAudit::new(DEFAULT_AUDIT_RECORDS)),
-            audit_failed: false,
+            health: AuditHealth::default(),
             journals: HashMap::new(),
             clock: system_now,
             #[cfg(test)]
@@ -193,7 +194,7 @@ impl Service {
     /// Record what is done in `sink` instead of in memory. A service with a new sink starts serving clients again.
     pub fn with_audit(mut self, sink: Box<dyn AuditSink>) -> Self {
         self.audit = sink;
-        self.audit_failed = false;
+        self.health.reset();
         self
     }
 
@@ -214,7 +215,7 @@ impl Service {
 
     /// Whether the audit log has failed, so that clients are refused.
     pub fn audit_failed(&self) -> bool {
-        self.audit_failed
+        self.health.failed()
     }
 
     pub fn session_id(&self) -> SessionId {
@@ -227,22 +228,24 @@ impl Service {
 
     /// The open documents `actor` may read.
     pub fn documents(&self, actor: &ActorContext) -> Vec<DocumentKey> {
+        if self.health.refuses(actor) {
+            return Vec::new();
+        }
         self.session
             .docs()
             .iter()
             .map(|d| self.key_of(d.id))
             .filter(|key| {
-                self.policy
-                    .decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(key.document), ..Facts::default() })
-                    .is_ok()
+                self.policy.decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(*key), ..Facts::default() }).is_ok()
             })
             .collect()
     }
 
     /// A read-only view of one document, for an actor that may read it. It cannot change it.
     pub fn document(&self, actor: &ActorContext, key: DocumentKey) -> Result<DocumentView<'_>> {
+        self.health.admit(actor)?;
         self.policy
-            .decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(key.document), ..Facts::default() })
+            .decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(key), ..Facts::default() })
             .map_err(|d| denied(&d))?;
         let doc = self.get(key)?;
         Ok(DocumentView { service: self, doc })
@@ -276,19 +279,18 @@ impl Service {
         negotiate(request.schema_version)?;
         let id = request.operation.id();
         let descriptor = id.descriptor();
-        if actor.is_agent() && self.audit_failed {
-            return Err(denied(&Denial {
-                reason: DenyReason::AuditUnavailable,
-                message: "this service can't record what it does, so it is not serving clients".into(),
-            }));
-        }
+        self.health.admit(actor)?;
         let file = self.file_for(&request)?;
         let facts = Facts {
-            document: request.document.filter(|k| k.session == self.id).map(|k| k.document),
+            document: request.document,
             file: file.as_ref().map(|(path, write)| if *write { FileUse::Write(path) } else { FileUse::Read(path) }),
             reverts: self.reverts_for(&request),
         };
         self.policy.decide(actor, descriptor, &facts).map_err(|d| denied(&d))?;
+        let confinement = match facts.file {
+            Some(file) => self.confine(actor, file)?,
+            None => None,
+        };
         let doc_id = match (descriptor.needs_document, request.document) {
             (false, _) => None,
             (true, None) => return Err(OperationError::invalid(format!("{} needs a document", descriptor.name))),
@@ -306,7 +308,7 @@ impl Service {
             self.policy.recheck(actor).map_err(|d| denied(&d))?;
         }
         let result = match request.operation {
-            Operation::Open { source, password } => self.open(source, password.as_deref())?,
+            Operation::Open { source, password } => self.open(source, password.as_deref(), confinement.as_ref())?,
             Operation::Query => self.query(self.need(doc_id)?)?,
             Operation::Rotate { pages, degrees, .. } => self.rotate(self.need(doc_id)?, pages, degrees)?,
             Operation::Undo { .. } => self.step(self.need(doc_id)?, Session::undo, true)?,
@@ -401,8 +403,9 @@ impl Service {
         full: Option<bool>,
     ) -> Result<PreparedSave> {
         let descriptor = OperationId::DocumentSave.descriptor();
+        self.health.admit(actor)?;
         // Before anything about the document is revealed: may this actor save it at all?
-        self.policy.decide(actor, descriptor, &Facts { document: Some(key.document), ..Facts::default() }).map_err(|d| denied(&d))?;
+        self.policy.decide(actor, descriptor, &Facts { document: Some(key), ..Facts::default() }).map_err(|d| denied(&d))?;
         let doc = self.get(key)?;
         self.check_revision(doc.id, expected_revision)?;
         let path = match target {
@@ -413,8 +416,9 @@ impl Service {
             },
         };
         self.policy
-            .decide(actor, descriptor, &Facts { document: Some(key.document), file: Some(FileUse::Write(&path)), ..Facts::default() })
+            .decide(actor, descriptor, &Facts { document: Some(key), file: Some(FileUse::Write(&path)), ..Facts::default() })
             .map_err(|d| denied(&d))?;
+        let confinement = self.confine(actor, FileUse::Write(&path))?;
         let same_file = doc.path.as_deref().is_some_and(|p| self.storage_path(Path::new(p)).is_ok_and(|stored| stored == path));
         let authority = match overwrite {
             Overwrite::Version(text) => {
@@ -434,7 +438,11 @@ impl Service {
         let token = doc.save_token();
         let bytes = if full { self.session.save_full_bytes(doc.id) } else { self.session.save_bytes(doc.id) }.map_err(edit_error)?;
         let incremental = !full && bytes.starts_with(&doc.saved_bytes());
-        let (doc_id, root) = (doc.id, self.root.clone());
+        let doc_id = doc.id;
+        let (root, io_target) = match confinement {
+            Some(c) => (Some(c.root), c.path),
+            None => (self.root.clone(), path.clone()),
+        };
         if self.pending.len() >= MAX_SAVES_IN_FLIGHT {
             return Err(OperationError::new(ErrorCode::ResourceLimit, "too many saves are waiting to be finished"));
         }
@@ -453,12 +461,15 @@ impl Service {
             token,
             bytes,
             target: path,
+            io_target,
+            client: actor.is_agent(),
             authority,
             root,
             incremental,
             actor: actor.clone(),
             request_id,
             watch: self.policy.watch(actor),
+            health: self.health.clone(),
             #[cfg(test)]
             at_commit: self.hooks.at_commit.clone(),
         })
@@ -490,7 +501,7 @@ impl Service {
         let before = self.get(plan.key).ok().map(|d| d.content_revision());
         let mut result = self.finish_save_inner(written);
         if let Ok(done) = &result
-            && let Err(denial) = plan.watch.check()
+            && let Err(denial) = plan.watch.check().and_then(|()| plan.health.check(&plan.actor))
         {
             let mut error = denied(&denial);
             error.committed = done.effects.clone();
@@ -557,21 +568,28 @@ impl Service {
 
     // ---- the operations ----
 
-    fn open(&mut self, source: OpenSource, password: Option<&str>) -> Result<OperationResult> {
+    fn open(&mut self, source: OpenSource, password: Option<&str>, confinement: Option<&Confinement>) -> Result<OperationResult> {
         let (name, path, bytes, version) = match source {
             OpenSource::Bytes { name, bytes } => (name, None, bytes, None),
             OpenSource::File(requested) => {
+                // `path` is the name the document keeps and the policy judged; the bytes are read from `io` (the same
+                // place, reached from the folder the actor was granted when it is a client).
                 let path = self.storage_path(&requested)?;
+                let (root, io) = match confinement {
+                    Some(c) => (Some(&c.root), &c.path),
+                    None => (self.root.as_ref(), &path),
+                };
                 // The limit is applied to the handle that is read. Confined: the file itself may not be a link either, which
                 // would carry the read out of the root.
                 let read = |p: &Path| -> std::io::Result<(Vec<u8>, FileVersion)> {
-                    if self.root.is_some() { read_regular_with_version(p, self.open_limit) } else { read_with_version_limited(p, self.open_limit) }
+                    if root.is_some() { read_regular_with_version(p, self.open_limit) } else { read_with_version_limited(p, self.open_limit) }
                 };
-                let pinned = match (&self.root, path.parent()) {
-                    (Some(root), Some(dir)) => Some(pin_existing(root, dir).map_err(|e| io_error(&path, &e))?),
+                let fail = |e: std::io::Error| if confinement.is_some() { client_io_error(&path, &e) } else { io_error(&path, &e) };
+                let pinned = match (root, io.parent()) {
+                    (Some(root), Some(dir)) => Some(pin_existing(root, dir).map_err(fail)?),
                     _ => None,
                 };
-                let (bytes, version) = read(&path).map_err(|e| io_error(&path, &e))?;
+                let (bytes, version) = read(io).map_err(fail)?;
                 drop(pinned);
                 (file_name(&path), Some(path.to_string_lossy().into_owned()), Arc::new(bytes), Some(version))
             }
@@ -721,7 +739,7 @@ impl Service {
             warnings,
         };
         if self.audit.record(entry).is_err() {
-            self.audit_failed = true;
+            self.health.fail();
         }
     }
 
@@ -758,6 +776,32 @@ impl Service {
     /// A path as the service will touch it. Without a root it is the path given. With one it must be below the root,
     /// written relative to it, with no `..` and no drive or root of its own. The refusal names the path the caller gave
     /// and not the root, which is not the caller's to learn.
+    /// What a client's use of `file` is confined to: the folder its grant names for it, resolved to the folder itself
+    /// (not the name), with the file placed below that. Reads and writes then go through the same no-link checks the
+    /// service-wide root gets, so a link inside a granted folder cannot carry a client to a file the grant never named.
+    /// `None` for the person. When the service also has a root, the narrower of the two is used, and two that do not
+    /// nest allow nothing. The refusal is the ordinary "that folder is not granted": it says nothing of what is there.
+    fn confine(&self, actor: &ActorContext, file: FileUse<'_>) -> Result<Option<Confinement>> {
+        if !actor.is_agent() {
+            return Ok(None);
+        }
+        let refused = || denied(&Denial::new(DenyReason::FolderNotGranted, "this client has not been granted that folder"));
+        let (FileUse::Read(path) | FileUse::Write(path)) = file;
+        let granted = self.policy.granted_root(actor, file).ok_or_else(refused)?;
+        let relative = path.strip_prefix(&granted).map_err(|_| refused())?;
+        if relative.as_os_str().is_empty() || !relative.components().all(|c| matches!(c, Component::Normal(_))) {
+            return Err(refused());
+        }
+        let resolved = granted.canonicalize().ok().filter(|dir| dir.is_dir()).ok_or_else(refused)?;
+        let placed = resolved.join(relative);
+        Ok(Some(match &self.root {
+            None => Confinement { root: resolved, path: placed },
+            Some(service_root) if service_root.starts_with(&resolved) => Confinement { root: service_root.clone(), path: path.to_path_buf() },
+            Some(service_root) if resolved.starts_with(service_root) => Confinement { root: resolved, path: placed },
+            Some(_) => return Err(refused()),
+        }))
+    }
+
     fn storage_path(&self, path: &Path) -> Result<PathBuf> {
         let Some(root) = &self.root else { return Ok(path.to_path_buf()) };
         let outside = || OperationError::invalid(format!("{} is outside the allowed directory", path.display()));
@@ -783,13 +827,19 @@ pub struct PreparedSave {
     revision: u64,
     token: SaveToken,
     bytes: Arc<Vec<u8>>,
+    /// The file as the document will know it (and as the policy judged it).
     target: PathBuf,
+    /// Where the bytes go: the same file, reached from `root`, the folder the write is confined to.
+    io_target: PathBuf,
+    /// Asked for by a client: failures say what happened to the file and not where the granted folder really is.
+    client: bool,
     authority: OwnedAuthority,
     root: Option<PathBuf>,
     incremental: bool,
     actor: ActorContext,
     request_id: u64,
     watch: Watch,
+    health: AuditHealth,
     #[cfg(test)]
     at_commit: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
@@ -825,13 +875,58 @@ impl WrittenSave {
     }
 }
 
+/// The folder a client's file access is confined to and the file below it. Both are resolved: `root` is the real folder.
+#[derive(Debug)]
+struct Confinement {
+    root: PathBuf,
+    path: PathBuf,
+}
+
+/// Whether the audit log works. Shared (by `Arc`) between a service and the saves it plans, so the answer is the same
+/// wherever it is asked: a client is not served, and a save it queued is not written, while what it does cannot be
+/// recorded. The person is never refused: their documents are theirs.
+#[derive(Clone, Debug, Default)]
+struct AuditHealth(Arc<std::sync::atomic::AtomicBool>);
+
+impl AuditHealth {
+    fn failed(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn fail(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn reset(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn refuses(&self, actor: &ActorContext) -> bool {
+        actor.is_agent() && self.failed()
+    }
+
+    fn check(&self, actor: &ActorContext) -> std::result::Result<(), Denial> {
+        if self.refuses(actor) {
+            return Err(Denial {
+                reason: DenyReason::AuditUnavailable,
+                message: "this service can't record what it does, so it is not serving clients".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn admit(&self, actor: &ActorContext) -> Result<()> {
+        self.check(actor).map_err(|d| denied(&d))
+    }
+}
+
 /// The grant behind a save was withdrawn before the file was replaced.
 #[derive(Debug)]
 struct Revoked(DenyReason);
 
 impl std::fmt::Display for Revoked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the grant was withdrawn ({})", self.0.as_str())
+        write!(f, "not allowed to write ({})", self.0.as_str())
     }
 }
 
@@ -852,8 +947,9 @@ impl PreparedSave {
     /// replaced only if it is still what the plan said it may replace, checked at the same moment; otherwise nothing is
     /// written and the error is a conflict that names what is there.
     pub fn write(&self) -> Result<WrittenSave> {
+        self.health.admit(&self.actor)?;
         self.watch.check().map_err(|d| denied(&d))?;
-        if self.target.is_dir() {
+        if self.io_target.is_dir() {
             return Err(OperationError::invalid(format!("{}: is a folder, not a file", file_name(&self.target))));
         }
         let authority = self.authority.borrow();
@@ -862,18 +958,21 @@ impl PreparedSave {
             if let Some(hook) = &self.at_commit {
                 hook();
             }
+            if self.health.refuses(&self.actor) {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, Revoked(DenyReason::AuditUnavailable)));
+            }
             self.watch.check().map_err(|d| std::io::Error::new(std::io::ErrorKind::PermissionDenied, Revoked(d.reason)))
         };
         let result = match &self.root {
-            Some(root) => write_confined_gated(root, &self.target, &self.bytes, StagingName::SuffixThenTag, Some(authority), &gate),
+            Some(root) => write_confined_gated(root, &self.io_target, &self.bytes, StagingName::SuffixThenTag, Some(authority), &gate),
             None => {
-                if let Some(dir) = self.target.parent().filter(|p| !p.as_os_str().is_empty()) {
+                if let Some(dir) = self.io_target.parent().filter(|p| !p.as_os_str().is_empty()) {
                     std::fs::create_dir_all(dir).map_err(|e| io_error(dir, &e))?;
                 }
-                write_guarded_gated(&self.target, &self.bytes, StagingName::SuffixThenTag, authority, &gate)
+                write_guarded_gated(&self.io_target, &self.bytes, StagingName::SuffixThenTag, authority, &gate)
             }
         };
-        result.map_err(|e| persist_error(&self.target, &e))?;
+        result.map_err(|e| persist_error(&self.target, &e, self.client))?;
         Ok(WrittenSave { plan: self.clone(), version: FileVersion::of_bytes(&self.bytes, None) })
     }
 }
@@ -1009,15 +1108,35 @@ fn io_error(path: &Path, e: &std::io::Error) -> OperationError {
     OperationError::new(code, format!("{}: {e}", file_name(path)))
 }
 
-fn persist_error(target: &Path, e: &PersistError) -> OperationError {
+/// An I/O failure on a file a client asked for. The message names the file and the kind of failure and nothing else: the
+/// system's own wording carries the resolved path of the granted folder, which is not the client's to learn.
+fn client_io_error(path: &Path, e: &std::io::Error) -> OperationError {
+    let code = if e.kind() == std::io::ErrorKind::FileTooLarge { ErrorCode::ResourceLimit } else { ErrorCode::IoFailure };
+    let what = match e.kind() {
+        std::io::ErrorKind::NotFound => "not found",
+        std::io::ErrorKind::FileTooLarge => "too large",
+        std::io::ErrorKind::PermissionDenied => "not permitted",
+        _ => "can't be used: it is not a plain file inside the granted folder",
+    };
+    OperationError::new(code, format!("{}: {what}", file_name(path)))
+}
+
+fn persist_error(target: &Path, e: &PersistError, client: bool) -> OperationError {
     let name = file_name(target);
     if let Some(revoked) = e.source.get_ref().and_then(|inner| inner.downcast_ref::<Revoked>()) {
+        let why = if revoked.0 == DenyReason::AuditUnavailable {
+            "this service can't record what it does"
+        } else {
+            "the grant that asked for this save was withdrawn"
+        };
         return OperationError {
             reason: Some(revoked.0.as_str()),
-            ..OperationError::new(ErrorCode::NotAuthorized, format!("{name}: not written: the grant that asked for this save was withdrawn"))
+            ..OperationError::new(ErrorCode::NotAuthorized, format!("{name}: not written: {why}"))
         };
     }
-    let Some(conflict) = conflict_of(e) else { return OperationError::new(ErrorCode::IoFailure, format!("{name}: {e}")) };
+    let Some(conflict) = conflict_of(e) else {
+        return if client { client_io_error(target, &e.source) } else { OperationError::new(ErrorCode::IoFailure, format!("{name}: {e}")) };
+    };
     let (kind, advice) = match conflict {
         Conflict::Exists { actual } => (
             ConflictKind::FileExists { disk: actual.fingerprint() },

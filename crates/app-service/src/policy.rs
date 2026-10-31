@@ -24,11 +24,12 @@
 //! that asks again immediately before each effect and before data is handed back, so a revocation stops it.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::actors::ActorContext;
 use crate::grants::{GrantProblem, GrantStore, GrantTerms};
 use crate::operations::{Capability, OperationDescriptor, OperationId, Release};
+use crate::version::DocumentKey;
 
 /// What this release contains. v1 is core-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +107,7 @@ pub struct Denial {
 }
 
 impl Denial {
-    fn new(reason: DenyReason, message: &str) -> Self {
+    pub(crate) fn new(reason: DenyReason, message: &str) -> Self {
         Self { reason, message: message.to_owned() }
     }
 }
@@ -129,8 +130,8 @@ pub enum FileUse<'a> {
 /// What the request itself says, apart from who made it: the facts the decision needs.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Facts<'a> {
-    /// The document the operation is about (its number within the session).
-    pub document: Option<u64>,
+    /// The document the operation is about, by its full identity (session and number). Never the number alone.
+    pub document: Option<DocumentKey>,
     /// The file the operation reads or writes, already resolved.
     pub file: Option<FileUse<'a>>,
     /// For undo and redo: the capability of the change they would revert, from the document's history; `None` when the
@@ -185,7 +186,7 @@ impl Policy {
         };
         if descriptor.needs_document {
             match facts.document {
-                Some(document) if scope.documents.contains(document) => {}
+                Some(document) if scope.documents.contains(&document) => {}
                 _ => return Err(Denial::new(DenyReason::DocumentOutOfScope, "this client has not been granted that document")),
             }
         }
@@ -195,6 +196,21 @@ impl Policy {
             Some(FileUse::Write(path)) if terms.files.allows_write(path) => Ok(()),
             Some(_) => Err(Denial::new(DenyReason::FolderNotGranted, "this client has not been granted that folder")),
         }
+    }
+
+    /// The folder of the actor's grant that holds the file, for an agent: what its reads and writes are confined to, so
+    /// that a link below it cannot reach what the grant never named. `None` for the person (who is not confined by a
+    /// grant) and for a file no granted folder holds.
+    pub fn granted_root(&self, actor: &ActorContext, file: FileUse<'_>) -> Option<PathBuf> {
+        if !actor.is_agent() {
+            return None;
+        }
+        let terms = self.terms_of(actor).ok()?;
+        let (write, path) = match file {
+            FileUse::Read(path) => (false, path),
+            FileUse::Write(path) => (true, path),
+        };
+        terms.files.granting_root(write, path).map(Path::to_path_buf)
     }
 
     /// Decide a request for an operation known only by name. A name with no descriptor is refused.
@@ -252,6 +268,7 @@ mod tests {
     use crate::actors::{ClientId, OsPrincipal};
     use crate::grants::{DocumentScope, FileAccess, GrantRequest, Scope};
     use crate::operations::{Access, DESCRIPTORS};
+    use crate::version::SessionId;
     use std::path::PathBuf;
 
     fn clock() -> i64 {
@@ -272,8 +289,12 @@ mod tests {
         id.descriptor()
     }
 
+    fn key(document: u64) -> DocumentKey {
+        DocumentKey { session: SessionId(1), document }
+    }
+
     fn facts_for(document: u64) -> Facts<'static> {
-        Facts { document: Some(document), ..Facts::default() }
+        Facts { document: Some(key(document)), ..Facts::default() }
     }
 
     fn client(name: &str) -> ClientId {
@@ -346,7 +367,7 @@ mod tests {
         let narrow = agent(
             &grants,
             GrantRequest {
-                scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![2]) }],
+                scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![key(2)]) }],
                 ..GrantRequest::read_only(client("narrow"))
             },
         );

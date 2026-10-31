@@ -1,10 +1,14 @@
 <#
 .SYNOPSIS
   Check the compiled MSI's install scope, publisher, shortcuts, native UI and OCR models, without installing it.
+  The core package has no OCR models and the check fails if any model payload is present; -ExpectOcrModels asks for them instead.
 .EXAMPLE
   pwsh packaging/windows/test-msi.ps1 dist/release/pdfcraft-0.2.1-windows-x64.msi
 #>
-param([Parameter(Mandatory)] [string] $Path)
+param(
+  [Parameter(Mandatory)] [string] $Path,
+  [switch] $ExpectOcrModels
+)
 $ErrorActionPreference = 'Stop'
 $Installer = New-Object -ComObject WindowsInstaller.Installer
 $Database = $Installer.OpenDatabase((Resolve-Path -LiteralPath $Path).Path, 0)
@@ -188,20 +192,26 @@ foreach ($exit in @(@('InstallComplete', '-1'), @('InstallCancelled', '-2'), @('
 }
 $title = Read-Row 'SELECT `Text` FROM `Control` WHERE `Dialog_` = ''InstallComplete'' AND `Control` = ''Title''' 1
 if ($title[0] -notmatch 'completed successfully') { throw 'Success dialog does not confirm completion' }
-# OCR models (#103): installed into models\ beside pdfcraft.exe, where the app looks for them.
-$modelsDir = Read-Row 'SELECT `Directory_Parent`, `DefaultDir` FROM `Directory` WHERE `Directory` = ''ModelsFolder''' 2
-Assert-Equal $modelsDir[0] 'INSTALLFOLDER' 'OCR models folder parent'
-# DefaultDir is `models`, or `SHORT|models` with a generated 8.3 name.
-if ($modelsDir[1] -notmatch '(^|\|)models$') { throw "OCR models folder name: '$($modelsDir[1])'" }
+# OCR models (#103). With -ExpectOcrModels they are installed into models\ beside pdfcraft.exe, where the app looks for them.
+# Without it (the v1 core package) there must be no models folder and no model file anywhere in the MSI.
 $modelFiles = 0
-$view = $Database.OpenView('SELECT `File`.`FileName` FROM `File`, `Component` WHERE `File`.`Component_` = `Component`.`Component` AND `Component`.`Directory_` = ''ModelsFolder''')
+$view = $Database.OpenView('SELECT `File`.`FileName` FROM `File`')
 try {
   [void] $view.Execute()
   while ($record = $view.Fetch()) { if ($record.StringData(1) -match '\.rten$') { $modelFiles++ } }
 } finally { [void] $view.Close() }
-if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
+if ($ExpectOcrModels) {
+  $modelsDir = Read-Row 'SELECT `Directory_Parent`, `DefaultDir` FROM `Directory` WHERE `Directory` = ''ModelsFolder''' 2
+  Assert-Equal $modelsDir[0] 'INSTALLFOLDER' 'OCR models folder parent'
+  # DefaultDir is `models`, or `SHORT|models` with a generated 8.3 name.
+  if ($modelsDir[1] -notmatch '(^|\|)models$') { throw "OCR models folder name: '$($modelsDir[1])'" }
+  if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
+} else {
+  Assert-NoRow 'SELECT `Directory` FROM `Directory` WHERE `Directory` = ''ModelsFolder''' 'the core package has no OCR models folder'
+  if ($modelFiles -ne 0) { throw "the core package must carry no OCR model, found $modelFiles *.rten file(s)" }
+}
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (on for a first install, kept on update only while present, checkbox), optional PDF context menu (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (on for a first install, kept on update only while present, checkbox), optional PDF context menu (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, ' + $(if ($ExpectOcrModels) { 'OCR models' } else { 'no OCR models (core)' })

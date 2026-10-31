@@ -5,13 +5,21 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     pdfcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    pdfcraft-<version>-windows-<arch>-portable.zip   pdfcraft.exe + pdfcraft-cli.exe + models\ + portable.txt
+    pdfcraft-<version>-windows-<arch>-portable.zip   pdfcraft.exe + pdfcraft-cli.exe + portable.txt
+                                                     (+ models\ only with -WithOcrModels)
+
+  The core package has no OCR models: OCR is deferred from the BDF v1 core, so nothing is downloaded for it and
+  neither the MSI nor the portable zip carries a models folder. -WithOcrModels restores the previous behaviour (fetch
+  the models, verified by SHA-256 against ATTRIBUTION.toml, and ship them) for a build that wants them. Everything else
+  is the same in both: the build, the architecture checks, the MSI inspection, the CLI smoke test, and the install and
+  uninstall checks. What the MSI check asserts follows the choice: with the models it expects them, without them it
+  fails if any model payload is present.
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
   warning when no signing secrets are set).
 
-  Needs: Rust (MSVC toolchain + the target), curl and the network (the OCR models), the Windows SDK (rc.exe, signtool.exe),
+  Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe), and, only with -WithOcrModels, curl and the network,
   and WiX v5: dotnet tool install --global wix --version 5.0.2
 
 .EXAMPLE
@@ -21,7 +29,9 @@
 #>
 param(
   [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
-  [switch] $SkipBuild
+  [switch] $SkipBuild,
+  # Ship the OCR models too (deferred from the v1 core; off by default).
+  [switch] $WithOcrModels
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -114,29 +124,39 @@ Copy-Item (Join-Path $Root 'assets\app-icon\LICENSE-document.txt') $Stage
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe')
 
-# OCR models (#103): the app looks in models\ beside pdfcraft.exe. `cargo xtask models` fetches every
-# ATTRIBUTION.toml `kind = "model"` file (verified by SHA-256) with its licence and ATTRIBUTION.txt;
-# the MSI and the portable zip take the whole folder, so new models ship without naming them here.
-$Models = Join-Path $Stage 'models'
-New-Item -ItemType Directory -Force -Path $Models | Out-Null
-Push-Location $Root
-try { Invoke-Native 'cargo xtask models' { cargo xtask models $Models } } finally { Pop-Location }
-Remove-Item -Force (Join-Path $Models '*.part') -ErrorAction SilentlyContinue
-if (-not (Test-Path (Join-Path $Models 'ATTRIBUTION.txt')) -or -not (Get-ChildItem (Join-Path $Models '*.LICENCE.txt'))) {
-  throw "no OCR models in $Models after cargo xtask models"
+# OCR models (#103), only when asked for: the app looks in models\ beside pdfcraft.exe. `cargo xtask models` fetches
+# every ATTRIBUTION.toml `kind = "model"` file (verified by SHA-256) with its licence and ATTRIBUTION.txt; the MSI and the
+# portable zip take the whole folder, so new models ship without naming them here. The core package (the default) has
+# none: OCR is deferred from v1, so nothing is fetched and no model payload is shipped or expected.
+$Models = $null
+if ($WithOcrModels) {
+  $Models = Join-Path $Stage 'models'
+  New-Item -ItemType Directory -Force -Path $Models | Out-Null
+  Push-Location $Root
+  try { Invoke-Native 'cargo xtask models' { cargo xtask models $Models } } finally { Pop-Location }
+  Remove-Item -Force (Join-Path $Models '*.part') -ErrorAction SilentlyContinue
+  if (-not (Test-Path (Join-Path $Models 'ATTRIBUTION.txt')) -or -not (Get-ChildItem (Join-Path $Models '*.LICENCE.txt'))) {
+    throw "no OCR models in $Models after cargo xtask models"
+  }
+} else {
+  Write-Output 'core package: no OCR models (OCR is deferred from the v1 core)'
 }
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "pdfcraft-$Version-windows-$Arch.msi"
+$WixDefines = @('-d', "Version=$MsiVersion", '-d', "BinDir=$Stage", '-d', "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')")
+if ($WithOcrModels) { $WixDefines += @('-d', "ModelsDir=$Models") }
 Invoke-Native 'wix build' {
   wix build (Join-Path $PSScriptRoot 'pdfcraft.wxs') -arch $Arch `
     (Join-Path $PSScriptRoot 'installer-ui.wxs') `
-    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "ModelsDir=$Models" -d "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
+    @WixDefines `
     -o $Msi
 }
 # Inspect the built MSI, not just the XML, before signing/publishing it. In a child process, so
 # its Windows Installer database handle is gone before signtool opens the MSI.
-Invoke-Native 'test-msi' { & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-msi.ps1') $Msi }
+$MsiArgs = @($Msi)
+if ($WithOcrModels) { $MsiArgs += '-ExpectOcrModels' }
+Invoke-Native 'test-msi' { & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-msi.ps1') @MsiArgs }
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
@@ -149,7 +169,7 @@ Copy-Item (Join-Path $Stage '*.exe') $Portable
 foreach ($f in 'NOTICE', 'LICENSE-document.txt') {
   Copy-Item (Join-Path $Stage $f) $Portable
 }
-Copy-Item -Recurse $Models (Join-Path $Portable 'models')
+if ($WithOcrModels) { Copy-Item -Recurse $Models (Join-Path $Portable 'models') }
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
