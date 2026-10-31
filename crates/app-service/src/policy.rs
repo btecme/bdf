@@ -24,7 +24,7 @@
 //! that asks again immediately before each effect and before data is handed back, so a revocation stops it.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::actors::ActorContext;
 use crate::grants::{GrantProblem, GrantStore, GrantTerms};
@@ -107,7 +107,7 @@ pub struct Denial {
 }
 
 impl Denial {
-    fn new(reason: DenyReason, message: &str) -> Self {
+    pub(crate) fn new(reason: DenyReason, message: &str) -> Self {
         Self { reason, message: message.to_owned() }
     }
 }
@@ -196,6 +196,21 @@ impl Policy {
             Some(FileUse::Write(path)) if terms.files.allows_write(path) => Ok(()),
             Some(_) => Err(Denial::new(DenyReason::FolderNotGranted, "this client has not been granted that folder")),
         }
+    }
+
+    /// The folder of the actor's grant that holds the file, for an agent: what its reads and writes are confined to, so
+    /// that a link below it cannot reach what the grant never named. `None` for the person (who is not confined by a
+    /// grant) and for a file no granted folder holds.
+    pub fn granted_root(&self, actor: &ActorContext, file: FileUse<'_>) -> Option<PathBuf> {
+        if !actor.is_agent() {
+            return None;
+        }
+        let terms = self.terms_of(actor).ok()?;
+        let (write, path) = match file {
+            FileUse::Read(path) => (false, path),
+            FileUse::Write(path) => (true, path),
+        };
+        terms.files.granting_root(write, path).map(Path::to_path_buf)
     }
 
     /// Decide a request for an operation known only by name. A name with no descriptor is refused.

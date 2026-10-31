@@ -86,6 +86,17 @@ impl FileAccess {
     pub fn allows_write(&self, path: &Path) -> bool {
         within(&self.write_under, path)
     }
+
+    /// The granted folder that holds `path`, by name: the deepest one when several do. The name is only the first
+    /// question; the folder that answers it is then what the file is *confined* to, so a link inside it cannot carry the
+    /// access anywhere else.
+    pub fn granting_root(&self, write: bool, path: &Path) -> Option<&Path> {
+        let roots = if write { &self.write_under } else { &self.read_under };
+        if !within(roots, path) {
+            return None;
+        }
+        roots.iter().filter(|root| path.starts_with(root)).max_by_key(|root| root.components().count()).map(PathBuf::as_path)
+    }
 }
 
 /// Whether `path` is below one of `roots`, by name, with no `..` anywhere in it.
@@ -815,5 +826,17 @@ mod tests {
         assert!(constant_time_eq(&a, &b));
         b[31] ^= 1;
         assert!(!constant_time_eq(&a, &b));
+    }
+
+    #[test]
+    fn the_folder_that_grants_a_file_is_the_deepest_one_that_holds_it_and_read_and_write_are_separate() {
+        let files =
+            FileAccess { read_under: vec![PathBuf::from("/data"), PathBuf::from("/data/work")], write_under: vec![PathBuf::from("/data/work/out")] };
+        assert_eq!(files.granting_root(false, Path::new("/data/work/a.pdf")), Some(Path::new("/data/work")));
+        assert_eq!(files.granting_root(false, Path::new("/data/b.pdf")), Some(Path::new("/data")));
+        assert_eq!(files.granting_root(true, Path::new("/data/work/out/c.pdf")), Some(Path::new("/data/work/out")));
+        assert_eq!(files.granting_root(true, Path::new("/data/work/a.pdf")), None, "reading does not grant writing");
+        assert_eq!(files.granting_root(false, Path::new("/elsewhere/a.pdf")), None);
+        assert_eq!(files.granting_root(false, Path::new("/data/work/../../etc/a.pdf")), None, "no climbing");
     }
 }

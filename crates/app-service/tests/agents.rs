@@ -330,6 +330,129 @@ fn an_agent_reads_and_writes_files_only_in_its_folders() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A directory link `at` -> `to`: a symbolic link on Unix, a junction on Windows (which needs no privilege).
+fn link_dir(to: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(to, at).expect("symlink");
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(at).arg(to).output().expect("runs cmd").status.success();
+        assert!(made, "mklink /J must be available to run this test");
+    }
+}
+
+/// A file link `at` -> `to`; `false` if this machine will not make one (Windows without the privilege).
+fn link_file(to: &Path, at: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(to, at).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(to, at).is_ok()
+    }
+}
+
+/// Two folders, `inside` (granted) and `outside` (not), a decoy in `outside`, and a client that may read and save in `inside`.
+fn granted_and_not(test: &str) -> (PathBuf, PathBuf, PathBuf, GrantStore, ActorContext) {
+    let base = private_dir(test);
+    let (inside, outside) = (base.join("inside"), base.join("outside"));
+    std::fs::create_dir_all(&inside).expect("folder");
+    std::fs::create_dir_all(&outside).expect("folder");
+    file_in(&outside, "out.pdf", 4);
+    let grants = GrantStore::in_memory(owner());
+    let files = FileAccess { read_under: vec![inside.clone()], write_under: vec![inside.clone()] };
+    let (worker, _) = grant(&grants, "worker", &[Capability::DocumentRead, Capability::DocumentEditPages, Capability::DocumentSave], files);
+    (base, inside, outside, grants, worker)
+}
+
+#[test]
+fn a_link_inside_a_granted_folder_does_not_carry_a_client_out_of_it_when_reading() {
+    let (base, inside, outside, grants, worker) = granted_and_not("link-read");
+    let mut service = service_with(&grants);
+    let ctx = RequestContext::new(2, worker);
+    link_dir(&outside, &inside.join("alias"));
+    let open = |service: &mut Service, ctx: &RequestContext, path: PathBuf| {
+        run(service, ctx, None, Operation::Open { source: OpenSource::File(path), password: None })
+    };
+
+    // Named inside the granted folder, but the folder on the way is a link to one that is not granted.
+    let error = open(&mut service, &ctx, inside.join("alias").join("out.pdf")).expect_err("refused");
+    assert_eq!(error.code, ErrorCode::IoFailure, "{error}");
+    assert!(service.documents(&me()).is_empty(), "nothing was opened");
+    // And so is a link to a single file.
+    if link_file(&outside.join("out.pdf"), &inside.join("linked.pdf")) {
+        assert!(open(&mut service, &ctx, inside.join("linked.pdf")).is_err());
+        assert!(service.documents(&me()).is_empty());
+    }
+    // The refusal says nothing about what the link points at.
+    let text = format!("{error:?}");
+    assert!(!text.contains("outside") && !text.contains("pdfcraft-agents"), "{text}");
+    // A real file in the granted folder still opens for the client...
+    file_in(&inside, "in.pdf", 2);
+    assert!(open(&mut service, &ctx, inside.join("in.pdf")).is_ok());
+    // ...and the person is not held to a grant: links work for them as they always did.
+    assert!(open(&mut service, &human(3), inside.join("alias").join("out.pdf")).is_ok());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_link_inside_a_granted_folder_does_not_carry_a_clients_save_out_of_it() {
+    let (base, inside, outside, grants, worker) = granted_and_not("link-write");
+    let mut service = service_with(&grants);
+    let ctx = RequestContext::new(2, worker);
+    let (key, version) = open_file(&mut service, &file_in(&inside, "in.pdf", 2));
+    let decoy = std::fs::read(outside.join("out.pdf")).expect("reads");
+    link_dir(&outside, &inside.join("alias"));
+    let save = |service: &mut Service, target: PathBuf, overwrite: Overwrite| {
+        run(
+            service,
+            &ctx,
+            Some(key),
+            Operation::Save { expected_revision: version.content_revision, target: SaveTarget::Path(target), overwrite, full: None },
+        )
+    };
+
+    // A new file through the link, and the replacement of the file the link leads to (confirmed by its real fingerprint,
+    // so that only the link stands in the way).
+    let error = save(&mut service, inside.join("alias").join("new.pdf"), Overwrite::Absent).expect_err("refused");
+    assert_eq!(error.code, ErrorCode::IoFailure, "{error}");
+    assert!(!error.message.contains("inside") && !error.message.contains("outside"), "the message leaks the folder: {}", error.message);
+    let fingerprint = pdfcraft_platform::file_identity::FileVersion::of_bytes(&decoy, None).fingerprint();
+    assert!(save(&mut service, inside.join("alias").join("out.pdf"), Overwrite::Version(fingerprint)).is_err());
+    assert!(!outside.join("new.pdf").exists(), "nothing was created outside the granted folder");
+    assert_eq!(std::fs::read(outside.join("out.pdf")).expect("reads"), decoy, "and nothing there was replaced");
+    // Saving where the grant says still works, new subfolders and all.
+    assert!(save(&mut service, inside.join("sub").join("ok.pdf"), Overwrite::Absent).is_ok());
+    assert!(inside.join("sub").join("ok.pdf").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_granted_folder_swapped_for_a_link_between_open_and_save_is_not_written_through() {
+    let (base, inside, outside, grants, worker) = granted_and_not("link-swap");
+    let mut service = service_with(&grants);
+    let ctx = RequestContext::new(2, worker);
+    std::fs::create_dir_all(inside.join("work")).expect("folder");
+    let (key, v0) = open_file(&mut service, &file_in(&inside.join("work"), "in.pdf", 2));
+    let v1 = run(&mut service, &ctx, Some(key), rotate(v0.content_revision)).expect("an agent edit").version.expect("version");
+    let decoy = fixture(2);
+    std::fs::write(outside.join("in.pdf"), &decoy).expect("a byte-identical decoy, so that a version check alone could not tell");
+
+    std::fs::rename(inside.join("work"), inside.join("work-moved")).expect("moves the folder");
+    link_dir(&outside, &inside.join("work"));
+    let saved = run(
+        &mut service,
+        &ctx,
+        Some(key),
+        Operation::Save { expected_revision: v1.content_revision, target: SaveTarget::Tracked, overwrite: Overwrite::Tracked, full: None },
+    );
+    assert!(saved.is_err());
+    assert_eq!(std::fs::read(outside.join("in.pdf")).expect("reads"), decoy, "nothing was written through the link");
+    assert!(service.document(&me(), key).expect("open").version().dirty(), "and the edit is still held");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn a_service_without_the_grants_refuses_every_client() {
     let theirs = GrantStore::in_memory(owner());
