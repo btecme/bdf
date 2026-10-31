@@ -17,6 +17,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod access;
 mod batch;
 
 use std::io::Write;
@@ -62,6 +63,12 @@ pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
                       [--recursive] [--root DIR] [--stop-on-error]
                       [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
+pdfcraft-cli grant issue --client NAME [--allow CAPS] [--read DIR] [--write DIR] [--ttl 8h] [--state-dir DIR]
+                      let a client act for you: read-only unless --allow names more (document.edit.pages,
+                      document.save, document.close); files need --read / --write folders; the secret is shown once
+pdfcraft-cli grant list|prune [--state-dir DIR]            the grants you have issued; remove revoked and expired ones
+pdfcraft-cli grant revoke <GRANT-ID> [--state-dir DIR]     withdraw a grant (a running service notices at once)
+pdfcraft-cli activity verify|show [--last N] [--state-dir DIR]   check, or print, the record of what clients did
 pdfcraft-cli tools                                       automation tools and their JSON Schemas
 pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 pdfcraft-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
@@ -96,6 +103,8 @@ fn main() -> ExitCode {
         Some("tools") => tools(),
         Some("run") => run(&args[1..]),
         Some("batch") => batch::run(&args[1..]),
+        Some("grant") => access::grant(&args[1..]),
+        Some("activity") => access::activity(&args[1..]),
         Some("ui") => ui(&args[1..]),
         #[cfg(feature = "mcp")]
         Some("mcp") => mcp(&args[1..]),

@@ -2,7 +2,7 @@
 # Evidence must name the actual reviewed commit and real commands/artifacts.
 schema_version = 1
 spec_version = "0.1"
-updated = "2026-10-27"
+updated = "2026-10-31"
 target = "Windows 11 x64 desktop"
 spec = "docs/bdf-build-spec.md"
 kickoff = "docs/bdf-claude-kickoff.md"
@@ -195,9 +195,13 @@ stop_conditions = ["Proposed boundary requires general layer exceptions or dupli
 [[work_item]]
 id = "BUILD-008"
 title = "Implement local principals, grants, release policy and audit"
-status = "pending"
+status = "changes_requested"
 evidence = "docs/bdf-evidence/BUILD-008.md"
-status_note = "First slice 2026-10-27 on feat/build-008-principals-grants-audit (from main ccfc041b), in the service crate: actors that cannot be written by a caller (local_user takes no argument; a source-scan test keeps every production crate but the service from calling it), read-only default grants with expiry, constant-time secret check, private bounded grant file, shared revocation; a policy that intersects release profile (deferred/excluded/unknown refused, even for the person), live grant, capability per document, undo/redo needing the capability of the change reverted, and granted folders for files; revocation checked before the effect, at the commit of a file write (new platform gate) and before delivery; a bounded, chained, private audit log without content, secrets or full paths, with clients refused if it cannot be written; document scripts off by default. 27 mutation proofs. NOT done: the apps/ part (where grant and audit files live, issuing/revoking grants, delivering the secret to a client), no adapter on the service yet (BUILD-009), and the state-folder name depends on the undecided product name. Head 02cb8af2 is hosted-green (Windows, Ubuntu, FreeBSD, wasm32, dependency policy; ARM64 packaging fails on an unrelated upstream download); not reviewed. Review round 1 (2026-10-31): Codex reproduced four P1 defects; three are fixed on this branch with regressions seen to fail when reverted (document grants name session and document; the failed-audit safeguard covers every client path including queued saves; per-grant confinement against links and junctions) and the fourth (concurrent grant updates) is fixed in the access-commands PR. Not yet re-reviewed; status stays pending."
+codex_review = "docs/bdf-evidence/BUILD-008-codex-review.md"
+review_status = "changes_requested"
+reviewed_heads = ["be477d71ddc70c164fd507792b640b02e2014a22", "586a00d665f3e04f80511a7c2f72537089d70aef"]
+review_result = "Four P1 findings reproduced with five public-API probes on the stacked #12 tree; all five safety assertions fail. R1/R2/R3 affect unchanged #11 code; R4 defeats the second slice cross-process revocation contract. Existing tests pass but miss these counterexamples. Both heads have red ARM64 model packaging. No production fix, commit, push or merge by Codex."
+status_note = "First two slices are implemented in draft PRs #11 and #12: service actors/grants/policy/audit/script trust; CLI grant/activity commands and cross-process refresh. Independent Codex review on 2026-10-31 requests four P1 corrections: actual I/O escapes folder grants through links; document-only grants lose session identity; public direct saves/reads bypass the failed-audit gate; overlapping grant writers resurrect a revoked secret. Current-head CI and FreeBSD pass, but ARM64 packaging fails fetching a deferred OCR model (HTTP 403), so overall checks are not green. Owner-confirmed BDF branding requires a BDF-specific state folder (already in the spec). Apply existing core-only scope by omitting deferred OCR models; #11 precedes retargeted #12 after corrections and green checks. No adapter uses the new policy yet; inherited opt-in adapters still use their existing engine until BUILD-009. No agent access release or overall verification claimed."
 priority = "P0"
 depends_on = ["BUILD-005", "BUILD-007"]
 prd_milestone = "BDF-04"
