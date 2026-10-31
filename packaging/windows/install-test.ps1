@@ -7,7 +7,7 @@
   (per machine, silently), then checks that:
     * pdfcraft.exe and pdfcraft-cli.exe are in Program Files\PdfCraft and are built for -Arch
       (the machine field of the PE header, so an x64 build cannot ship labelled arm64);
-    * the OCR models folder was installed;
+    * the OCR models folder was installed with -ExpectOcrModels, and in the core package (the default) is absent;
     * the CLI runs and reports a version, when the build can run on this machine;
     * uninstalling removes the executables.
   It needs an elevated session and changes the machine; run it on a CI runner or a throwaway VM.
@@ -17,7 +17,8 @@
 #>
 param(
   [Parameter(Mandatory)] [string] $Msi,
-  [Parameter(Mandatory)] [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch
+  [Parameter(Mandatory)] [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch,
+  [switch] $ExpectOcrModels
 )
 $ErrorActionPreference = 'Stop'
 
@@ -53,8 +54,14 @@ try {
     if ($m -ne $Machine) { throw ("{0} is built for machine 0x{1:X}, expected 0x{2:X} ({3})" -f $exe, $m, $Machine, $Arch) }
     Write-Output "ok $path is a $Arch build"
   }
-  if (-not (Test-Path -LiteralPath (Join-Path $Dir 'models'))) { throw "the OCR models folder was not installed in $Dir" }
-  Write-Output 'ok models folder installed'
+  $hasModels = Test-Path -LiteralPath (Join-Path $Dir 'models')
+  if ($ExpectOcrModels) {
+    if (-not $hasModels) { throw "the OCR models folder was not installed in $Dir" }
+    Write-Output 'ok models folder installed'
+  } else {
+    if ($hasModels) { throw "the core package installed an OCR models folder in $Dir" }
+    Write-Output 'ok no OCR models folder (core package)'
+  }
   if ($CanRun) {
     $out = & (Join-Path $Dir 'pdfcraft-cli.exe') --version 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "pdfcraft-cli.exe --version exited with $LASTEXITCODE" }
