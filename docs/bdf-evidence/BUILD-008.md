@@ -95,6 +95,8 @@ Local results after the fixes (Windows 11 x64, Rust 1.99.0): service crate 37 un
 
 * **Second slice, head `ca15f8a6` (PR #12, stacked on #11): Windows, Ubuntu, FreeBSD 15, wasm32 and the dependency policy pass** (fuzz skipped); the ARM64 packaging check fails for the same unrelated upstream download (above). The Unix state-folder rules and the Unix permission paths ran on Ubuntu and FreeBSD.
 
+* **Review round 1 (2026-10-31).** PR #11 head `e9dac3ed`: CI (Windows, Ubuntu, wasm32, dependency policy), FreeBSD 15, Windows ARM64 packaging, x64 package and packaging lint all pass; the ARM64 job is green again because the core package no longer fetches the OCR models. PR #12 head `5abba39c`: CI, Windows ARM64 packaging and FreeBSD 15 pass. **PR #11 was merged into `main` as `983b4921` on the owner's explicit instruction (2026-10-31), before Codex retested the four fixes; it is merged, not independently accepted.** #12 was retargeted to `main`; main was merged into its branch with no content change (the tree is identical). Hosted results for that head are recorded below once read.
+
 ## 6. Not done, and not claimed
 
 * **The application part is only partly done** (section 5a): the command line issues, lists, revokes and prunes grants and verifies and shows the activity log, and the files have a default per-user place. The desktop has no grants screen, and nothing delivers a secret to a client. **Decided by the owner (2026-10-31):** the per-user folder is named BDF (`%LOCALAPPDATA%\BDF\Access`). **Recorded, not done:** the applications' older per-user folders (settings, the recovery store, the clipboard cache) still use the inherited `PdfCraft` name; whether to move them, and how existing user data is carried across, is a separate decision. No grant or credential is ever imported from a `PdfCraft` folder.
@@ -111,6 +113,7 @@ Local results after the fixes (Windows 11 x64, Rust 1.99.0): service crate 37 un
 
 | Date | Change |
 |---|---|
+| 2026-10-31 | PR #11 merged to main on the owner's instruction (not yet retested by Codex); #12 retargeted. |
 | 2026-10-31 | Review round 1: session-qualified document grants, the failed-audit safeguard on every client path, per-grant confinement against links, honest scope wording. |
 | 2026-10-27 | Application part: state folder, grant and activity commands, cross-process revocation (section 5a). |
 | 2026-10-27 | Hosted results recorded (two of my own mistakes found and fixed). |
