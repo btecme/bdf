@@ -93,8 +93,9 @@ pub struct Service {
     policy: Policy,
     /// Where the record of what was done goes.
     audit: Box<dyn AuditSink>,
-    /// The audit log could not be written; clients are not served until a log is attached again.
-    audit_failed: bool,
+    /// The audit log could not be written; clients are not served until a log is attached again. Shared with the saves
+    /// that are planned, so a save queued before the failure is refused too.
+    health: AuditHealth,
     /// For each document, the capability each undoable change needed, in step with the engine's undo and redo stacks.
     journals: HashMap<u64, Journal>,
     /// Seconds since the Unix epoch, for audit records.
@@ -152,7 +153,7 @@ impl Service {
             open_limit: MAX_OPEN_BYTES,
             policy: Policy::local(),
             audit: Box::new(MemoryAudit::new(DEFAULT_AUDIT_RECORDS)),
-            audit_failed: false,
+            health: AuditHealth::default(),
             journals: HashMap::new(),
             clock: system_now,
             #[cfg(test)]
@@ -193,7 +194,7 @@ impl Service {
     /// Record what is done in `sink` instead of in memory. A service with a new sink starts serving clients again.
     pub fn with_audit(mut self, sink: Box<dyn AuditSink>) -> Self {
         self.audit = sink;
-        self.audit_failed = false;
+        self.health.reset();
         self
     }
 
@@ -214,7 +215,7 @@ impl Service {
 
     /// Whether the audit log has failed, so that clients are refused.
     pub fn audit_failed(&self) -> bool {
-        self.audit_failed
+        self.health.failed()
     }
 
     pub fn session_id(&self) -> SessionId {
@@ -227,6 +228,9 @@ impl Service {
 
     /// The open documents `actor` may read.
     pub fn documents(&self, actor: &ActorContext) -> Vec<DocumentKey> {
+        if self.health.refuses(actor) {
+            return Vec::new();
+        }
         self.session
             .docs()
             .iter()
@@ -239,6 +243,7 @@ impl Service {
 
     /// A read-only view of one document, for an actor that may read it. It cannot change it.
     pub fn document(&self, actor: &ActorContext, key: DocumentKey) -> Result<DocumentView<'_>> {
+        self.health.admit(actor)?;
         self.policy
             .decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(key), ..Facts::default() })
             .map_err(|d| denied(&d))?;
@@ -274,12 +279,7 @@ impl Service {
         negotiate(request.schema_version)?;
         let id = request.operation.id();
         let descriptor = id.descriptor();
-        if actor.is_agent() && self.audit_failed {
-            return Err(denied(&Denial {
-                reason: DenyReason::AuditUnavailable,
-                message: "this service can't record what it does, so it is not serving clients".into(),
-            }));
-        }
+        self.health.admit(actor)?;
         let file = self.file_for(&request)?;
         let facts = Facts {
             document: request.document,
@@ -399,6 +399,7 @@ impl Service {
         full: Option<bool>,
     ) -> Result<PreparedSave> {
         let descriptor = OperationId::DocumentSave.descriptor();
+        self.health.admit(actor)?;
         // Before anything about the document is revealed: may this actor save it at all?
         self.policy.decide(actor, descriptor, &Facts { document: Some(key), ..Facts::default() }).map_err(|d| denied(&d))?;
         let doc = self.get(key)?;
@@ -457,6 +458,7 @@ impl Service {
             actor: actor.clone(),
             request_id,
             watch: self.policy.watch(actor),
+            health: self.health.clone(),
             #[cfg(test)]
             at_commit: self.hooks.at_commit.clone(),
         })
@@ -488,7 +490,7 @@ impl Service {
         let before = self.get(plan.key).ok().map(|d| d.content_revision());
         let mut result = self.finish_save_inner(written);
         if let Ok(done) = &result
-            && let Err(denial) = plan.watch.check()
+            && let Err(denial) = plan.watch.check().and_then(|()| plan.health.check(&plan.actor))
         {
             let mut error = denied(&denial);
             error.committed = done.effects.clone();
@@ -719,7 +721,7 @@ impl Service {
             warnings,
         };
         if self.audit.record(entry).is_err() {
-            self.audit_failed = true;
+            self.health.fail();
         }
     }
 
@@ -788,6 +790,7 @@ pub struct PreparedSave {
     actor: ActorContext,
     request_id: u64,
     watch: Watch,
+    health: AuditHealth,
     #[cfg(test)]
     at_commit: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
@@ -823,13 +826,51 @@ impl WrittenSave {
     }
 }
 
+/// Whether the audit log works. Shared (by `Arc`) between a service and the saves it plans, so the answer is the same
+/// wherever it is asked: a client is not served, and a save it queued is not written, while what it does cannot be
+/// recorded. The person is never refused: their documents are theirs.
+#[derive(Clone, Debug, Default)]
+struct AuditHealth(Arc<std::sync::atomic::AtomicBool>);
+
+impl AuditHealth {
+    fn failed(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn fail(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn reset(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn refuses(&self, actor: &ActorContext) -> bool {
+        actor.is_agent() && self.failed()
+    }
+
+    fn check(&self, actor: &ActorContext) -> std::result::Result<(), Denial> {
+        if self.refuses(actor) {
+            return Err(Denial {
+                reason: DenyReason::AuditUnavailable,
+                message: "this service can't record what it does, so it is not serving clients".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn admit(&self, actor: &ActorContext) -> Result<()> {
+        self.check(actor).map_err(|d| denied(&d))
+    }
+}
+
 /// The grant behind a save was withdrawn before the file was replaced.
 #[derive(Debug)]
 struct Revoked(DenyReason);
 
 impl std::fmt::Display for Revoked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the grant was withdrawn ({})", self.0.as_str())
+        write!(f, "not allowed to write ({})", self.0.as_str())
     }
 }
 
@@ -850,6 +891,7 @@ impl PreparedSave {
     /// replaced only if it is still what the plan said it may replace, checked at the same moment; otherwise nothing is
     /// written and the error is a conflict that names what is there.
     pub fn write(&self) -> Result<WrittenSave> {
+        self.health.admit(&self.actor)?;
         self.watch.check().map_err(|d| denied(&d))?;
         if self.target.is_dir() {
             return Err(OperationError::invalid(format!("{}: is a folder, not a file", file_name(&self.target))));
@@ -859,6 +901,9 @@ impl PreparedSave {
             #[cfg(test)]
             if let Some(hook) = &self.at_commit {
                 hook();
+            }
+            if self.health.refuses(&self.actor) {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, Revoked(DenyReason::AuditUnavailable)));
             }
             self.watch.check().map_err(|d| std::io::Error::new(std::io::ErrorKind::PermissionDenied, Revoked(d.reason)))
         };
@@ -1010,9 +1055,14 @@ fn io_error(path: &Path, e: &std::io::Error) -> OperationError {
 fn persist_error(target: &Path, e: &PersistError) -> OperationError {
     let name = file_name(target);
     if let Some(revoked) = e.source.get_ref().and_then(|inner| inner.downcast_ref::<Revoked>()) {
+        let why = if revoked.0 == DenyReason::AuditUnavailable {
+            "this service can't record what it does"
+        } else {
+            "the grant that asked for this save was withdrawn"
+        };
         return OperationError {
             reason: Some(revoked.0.as_str()),
-            ..OperationError::new(ErrorCode::NotAuthorized, format!("{name}: not written: the grant that asked for this save was withdrawn"))
+            ..OperationError::new(ErrorCode::NotAuthorized, format!("{name}: not written: {why}"))
         };
     }
     let Some(conflict) = conflict_of(e) else { return OperationError::new(ErrorCode::IoFailure, format!("{name}: {e}")) };

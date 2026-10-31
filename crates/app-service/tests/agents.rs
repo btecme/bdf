@@ -451,6 +451,66 @@ fn a_log_that_cannot_be_written_stops_serving_clients_but_not_the_person() {
     assert!(run(&mut service, &ctx, Some(key), Operation::Query).is_ok());
 }
 
+/// A service whose log fails on its second record, with one document open (record one) and an agent that may save into `dir`.
+fn failing_log_with_saver(dir: &Path) -> (Service, DocumentKey, DocumentVersion, ActorContext) {
+    let grants = GrantStore::in_memory(owner());
+    let files = FileAccess { read_under: vec![dir.to_path_buf()], write_under: vec![dir.to_path_buf()] };
+    let (saver, _) = grant(&grants, "saver", &[Capability::DocumentRead, Capability::DocumentSave], files);
+    let mut service = service_with(&grants).with_audit(Box::new(Failing { allowed: 1, seen: 0 }));
+    let (key, version) = open_file(&mut service, &file_in(dir, "doc.pdf", 1));
+    (service, key, version, saver)
+}
+
+fn break_the_log(service: &mut Service, key: DocumentKey) {
+    assert!(run(service, &human(2), Some(key), Operation::Query).is_ok(), "the person still succeeds");
+    assert!(service.audit_failed());
+}
+
+#[test]
+fn once_the_log_has_failed_a_client_cannot_read_a_document_by_the_direct_calls_either() {
+    let dir = private_dir("audit-direct-read");
+    let (mut service, key, _, saver) = failing_log_with_saver(&dir);
+    assert_eq!(service.documents(&saver), [key]);
+    assert!(service.document(&saver, key).is_ok());
+    break_the_log(&mut service, key);
+
+    assert!(service.documents(&saver).is_empty());
+    assert_eq!(service.document(&saver, key).err().map(|e| (e.code, e.reason)), Some((ErrorCode::NotAuthorized, Some("audit_unavailable"))));
+    assert_eq!(service.documents(&me()), [key], "the person is not locked out");
+    assert!(service.document(&me(), key).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn once_the_log_has_failed_a_client_cannot_plan_or_write_a_save_and_the_person_can() {
+    let dir = private_dir("audit-direct-save");
+    let (mut service, key, version, saver) = failing_log_with_saver(&dir);
+    let out = dir.join("out.pdf");
+    let ctx = RequestContext::new(5, saver);
+    // A plan made while the log works...
+    let queued = service
+        .prepare_save(&ctx, key, version.content_revision, SaveTarget::Path(out.clone()), Overwrite::Absent, None)
+        .expect("the client may plan a save while the log works");
+    break_the_log(&mut service, key);
+
+    // ...is not written once it does not: nothing is staged and nothing appears on disk.
+    let error = queued.write().expect_err("refused");
+    assert_eq!((error.code, error.reason), (ErrorCode::NotAuthorized, Some("audit_unavailable")));
+    assert!(!out.exists(), "the refused write left nothing behind");
+    service.abandon_save(&queued);
+    // A new plan is refused outright, and the refusal does not look at the document.
+    let again = service.prepare_save(&ctx, key, version.content_revision, SaveTarget::Path(out.clone()), Overwrite::Absent, None);
+    assert_eq!(again.err().map(|e| (e.code, e.reason)), Some((ErrorCode::NotAuthorized, Some("audit_unavailable"))));
+    assert!(!out.exists());
+    // The person saves whatever the state of the log.
+    let mine = service
+        .prepare_save(&human(6), key, version.content_revision, SaveTarget::Path(out.clone()), Overwrite::Absent, None)
+        .expect("the person may plan");
+    assert!(mine.write().is_ok());
+    assert!(out.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_log_on_disk_records_what_was_done_and_verifies() {
     let dir = private_dir("disk-audit");
