@@ -4,7 +4,12 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use pdfcraft_app_service::{ActorContext, AuditEffect, AuditEntry, AuditOutcome, AuditSink, FileAudit, GrantStore, OsPrincipal, PrincipalKind};
+use std::sync::{Mutex, mpsc};
+use std::time::Duration;
+
+use pdfcraft_app_service::{
+    ActorContext, AuditEffect, AuditEntry, AuditOutcome, AuditSink, ClientId, FileAudit, GrantRequest, GrantStore, OsPrincipal, PrincipalKind,
+};
 
 const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
 
@@ -174,6 +179,58 @@ fn revoking_from_the_command_reaches_a_service_already_running_in_another_proces
     json(&run(&state, &["grant", "revoke", id]));
     assert!(service.check(&actor).is_err(), "the running service noticed the revocation without being restarted");
     assert!(service.authenticate("running", secret).is_err());
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+/// Two processes change the grants at the same moment. One issues a grant and is held, partway through its change, until
+/// the test lets it go; the other, a real `pdfcraft-cli`, revokes a grant meanwhile. Without turns the first writes the
+/// file from what it read before the revocation and the revoked grant is live again.
+#[test]
+fn a_revocation_is_not_lost_to_a_grant_issued_in_another_process_at_the_same_moment() {
+    let state = private_dir("overlap");
+    let victim = json(&run(&state, &["grant", "issue", "--client", "victim"]));
+    let victim_id = victim["grant"].as_str().expect("an id").to_owned();
+    let victim_secret = victim["secret"].as_str().expect("a secret").to_owned();
+    let path = state.join("grants.json");
+
+    let (inside_tx, inside_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (inside_tx, release_rx) = (Mutex::new(inside_tx), Mutex::new(release_rx));
+    // The clock is read once while a grant is being issued, after the file has been read: that is where it is held.
+    let issuing = GrantStore::open(&path, owner()).expect("opens").with_clock(move || {
+        if let (Ok(inside), Ok(release)) = (inside_tx.lock(), release_rx.lock()) {
+            let _ = inside.send(());
+            let _ = release.recv_timeout(Duration::from_secs(60));
+        }
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+    });
+    let issuer =
+        std::thread::spawn(move || issuing.issue(GrantRequest::read_only(ClientId::parse("later").expect("a name"))).map(|g| g.secret().to_owned()));
+    inside_rx.recv_timeout(Duration::from_secs(30)).expect("the issuing process is partway through its change");
+
+    let mut revoker = Command::new(BIN)
+        .args(["grant", "revoke", &victim_id])
+        .arg("--state-dir")
+        .arg(&state)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("starts the revoking process");
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(revoker.try_wait().expect("polls").is_none(), "the second change waits for the first instead of racing it");
+
+    release_tx.send(()).expect("lets the issuer go");
+    let later_secret = issuer.join().expect("the issuing thread finished").expect("the grant was issued");
+    assert!(revoker.wait().expect("waits").success(), "the revocation went through once its turn came");
+
+    // Both changes are in the file: the revoked grant is revoked, and the new one exists.
+    let listed = json(&run(&state, &["grant", "list"]));
+    let by_client = |name: &str| listed["grants"].as_array().expect("a list").iter().find(|g| g["client"] == name).cloned();
+    assert_eq!(by_client("victim").expect("still listed")["revoked"], true, "the revocation was not overwritten");
+    assert_eq!(by_client("later").expect("the new grant is there")["revoked"], false);
+    let fresh = GrantStore::open(&path, owner()).expect("opens");
+    assert!(fresh.authenticate("victim", &victim_secret).is_err(), "a revoked secret does not work again");
+    assert!(fresh.authenticate("later", &later_secret).is_ok());
     let _ = std::fs::remove_dir_all(&state);
 }
 

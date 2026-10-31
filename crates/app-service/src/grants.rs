@@ -261,11 +261,18 @@ impl State {
     /// makes every grant fail until it can be (a revocation must not be lost to a file that was damaged or deleted).
     fn refresh(&mut self) {
         let Some(path) = self.path.clone() else { return };
-        let now = stamp_of(&path);
-        if now == self.stamp {
+        if stamp_of(&path) == self.stamp {
             // Unchanged since it was last read, whether that read worked or not.
             return;
         }
+        self.reload();
+    }
+
+    /// Read the grant file again, whatever the stamp says. A change is made on what the file holds *now*, so a writer
+    /// never trusts a stamp: two files of the same length and time are not the same file.
+    fn reload(&mut self) {
+        let Some(path) = self.path.clone() else { return };
+        let now = stamp_of(&path);
         match load(&path, &self.owner) {
             Ok(grants) => {
                 self.grants = grants;
@@ -274,6 +281,50 @@ impl State {
             Err(_) => self.unreadable = true,
         }
         self.stamp = now;
+    }
+}
+
+/// The right to change the grant file, held across processes: a lock on a file beside it, released when this is dropped
+/// (or when the process ends, however it ends). A change is read, made and written while it is held, so two processes
+/// that change the grants at once take turns instead of one writing over the other's change (which would bring back a
+/// grant the other had just revoked).
+struct FileLock {
+    _file: std::fs::File,
+}
+
+/// How long a change waits for another process that is changing the grants. A change takes milliseconds.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FileLock {
+    fn acquire(grants: &Path) -> Result<Self, GrantError> {
+        let storage = |e: io::Error| GrantError::Storage(e.to_string());
+        let mut name = grants.as_os_str().to_owned();
+        name.push(".lock");
+        let path = PathBuf::from(name);
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(storage)?;
+        }
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(storage)?;
+        let deadline = std::time::Instant::now() + LOCK_WAIT;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(e)) => return Err(storage(e)),
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(GrantError::Storage("another process is changing the grants; try again".into()));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl FileLock {
+    fn acquire(_grants: &Path) -> Result<Self, GrantError> {
+        Err(GrantError::Storage("grant files are not available in the browser build".into()))
     }
 }
 
@@ -335,11 +386,9 @@ impl GrantStore {
         let grants = load(path, &owner)?;
         let state = State { grants, path: Some(path.to_path_buf()), clock: Arc::new(system_now), owner, stamp: stamp_of(path), unreadable: false };
         let store = Self { state: Arc::new(Mutex::new(state)) };
-        if !path.exists() {
-            let mut state = store.lock();
-            persist(&state)?;
-            state.stamp = stamp_of(path);
-        }
+        // Creating the file is a change like any other: a second process starting at the same moment must not replace a
+        // grant the first has already issued with an empty list.
+        store.transact(|state| if path.exists() { Ok(()) } else { persist(state) })?;
         Ok(store)
     }
 
@@ -354,12 +403,29 @@ impl GrantStore {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Change the grants: take turns with every other process that changes them, read the file as it is now, let `change`
+    /// make its change (and write it), and note what the file looks like afterwards. The in-process lock is taken
+    /// first, then the file's, always in that order.
+    fn transact<T>(&self, change: impl FnOnce(&mut State) -> Result<T, GrantError>) -> Result<T, GrantError> {
+        let mut state = self.lock();
+        let _held = match state.path.as_deref() {
+            Some(path) => Some(FileLock::acquire(path)?),
+            None => None,
+        };
+        state.reload();
+        state.writable()?;
+        let result = change(&mut state);
+        state.stamp = state.path.as_deref().and_then(stamp_of);
+        result
+    }
+
     /// Issue a grant for the request, returning it with its secret.
     pub fn issue(&self, request: GrantRequest) -> Result<IssuedGrant, GrantError> {
         validate(&request)?;
-        let mut state = self.lock();
-        state.refresh();
-        state.writable()?;
+        self.transact(|state| Self::issue_in(state, request))
+    }
+
+    fn issue_in(state: &mut State, request: GrantRequest) -> Result<IssuedGrant, GrantError> {
         if state.grants.len() >= MAX_GRANTS {
             return Err(GrantError::Full);
         }
@@ -378,43 +444,37 @@ impl GrantStore {
         let grant =
             Grant { terms: terms.clone(), delegating: state.owner.clone(), revoked: false, secret_sha256: Sha256::digest(secret.as_bytes()).into() };
         state.grants.push(grant);
-        if let Err(e) = persist(&state) {
+        if let Err(e) = persist(state) {
             state.grants.pop();
             return Err(e);
         }
-        state.stamp = state.path.as_deref().and_then(stamp_of);
         Ok(IssuedGrant { terms, secret })
     }
 
     /// Withdraw a grant. Every service and every operation holding this store sees it at once.
     pub fn revoke(&self, id: &GrantId) -> Result<(), GrantError> {
-        let mut state = self.lock();
-        state.refresh();
-        state.writable()?;
-        let grant = state.grants.iter_mut().find(|g| &g.terms.id == id).ok_or(GrantError::NotFound)?;
-        if grant.revoked {
-            return Ok(());
-        }
-        grant.revoked = true;
-        // The revocation holds even if it could not be written: it stays in memory for this run, and the failure is reported.
-        let written = persist(&state);
-        state.stamp = state.path.as_deref().and_then(stamp_of);
-        written
+        self.transact(|state| {
+            let grant = state.grants.iter_mut().find(|g| &g.terms.id == id).ok_or(GrantError::NotFound)?;
+            if grant.revoked {
+                return Ok(());
+            }
+            grant.revoked = true;
+            // The revocation holds even if it could not be written: it stays in memory for this run, and the failure is reported.
+            persist(state)
+        })
     }
 
     /// Remove grants that are revoked or expired, freeing room.
     pub fn prune(&self) -> Result<usize, GrantError> {
-        let mut state = self.lock();
-        state.refresh();
-        state.writable()?;
-        let now = (state.clock)();
-        let before = state.grants.len();
-        let kept: Vec<Grant> = state.grants.iter().filter(|g| !g.revoked && g.terms.expires_at > now).cloned().collect();
-        let removed = before.saturating_sub(kept.len());
-        state.grants = kept;
-        persist(&state)?;
-        state.stamp = state.path.as_deref().and_then(stamp_of);
-        Ok(removed)
+        self.transact(|state| {
+            let now = (state.clock)();
+            let before = state.grants.len();
+            let kept: Vec<Grant> = state.grants.iter().filter(|g| !g.revoked && g.terms.expires_at > now).cloned().collect();
+            let removed = before.saturating_sub(kept.len());
+            state.grants = kept;
+            persist(state)?;
+            Ok(removed)
+        })
     }
 
     /// Every grant, without its secret hash.
@@ -924,6 +984,31 @@ mod tests {
         assert_eq!(running.check(&actor).unwrap_err(), GrantProblem::Revoked);
         assert_eq!(running.authenticate("later", issued.secret()).unwrap_err(), AuthError);
         assert!(running.list().iter().any(|(terms, revoked)| terms.id == issued.terms.id && *revoked));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_change_is_made_on_what_the_file_holds_now_even_when_it_looks_unchanged() {
+        let dir = private_dir("grants-stale-stamp");
+        let path = dir.join("grants.json");
+        let clock = TestClock::new();
+        let store = GrantStore::open(&path, owner()).expect("opens").with_clock(clock.reading());
+        let issued = store.issue(GrantRequest::read_only(client("aaaa"))).expect("issues");
+        let before = std::fs::metadata(&path).expect("metadata");
+
+        // Another process rewrites the file with a same-length change and puts the modification time back: by length and
+        // time the file is exactly as this store last saw it.
+        let edited = std::fs::read_to_string(&path).expect("reads").replace("\"client\": \"aaaa\"", "\"client\": \"bbbb\"");
+        std::fs::write(&path, &edited).expect("edits");
+        let file = std::fs::OpenOptions::new().write(true).open(&path).expect("opens the file");
+        file.set_modified(before.modified().expect("a time")).expect("restores the time");
+        drop(file);
+        assert_eq!(std::fs::metadata(&path).expect("metadata").len(), before.len());
+
+        // A change made now is made on the file's content, so the other process's edit is not written over.
+        store.revoke(&issued.terms.id).expect("revokes");
+        let now = std::fs::read_to_string(&path).expect("reads");
+        assert!(now.contains("\"client\": \"bbbb\""), "the other process's change was kept: {now}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
