@@ -7,6 +7,7 @@ pub mod confinement;
 pub mod desktop_theme;
 pub mod file_identity;
 pub mod framing;
+pub mod identity;
 pub mod persistence;
 pub mod private_files;
 pub mod staging;

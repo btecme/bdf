@@ -30,7 +30,7 @@ use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::file_identity::{Authority, check};
+use crate::file_identity::{Authority, Gate, check};
 use crate::persistence::{Committed, PersistError, Steps, write_replace_with};
 use crate::staging::{StagingName, staging_suffixes};
 
@@ -145,6 +145,18 @@ pub fn write_confined(root: &Path, path: &Path, bytes: &[u8], form: StagingName,
     write_confined_with(root, path, bytes, form, authority, staging_suffixes(), &Steps::real())
 }
 
+/// [`write_confined`], also refusing if `gate` says no at the moment of replacement.
+pub fn write_confined_gated(
+    root: &Path,
+    path: &Path,
+    bytes: &[u8],
+    form: StagingName,
+    authority: Option<Authority>,
+    gate: Gate,
+) -> Result<Committed, PersistError> {
+    write_confined_gated_with(root, path, bytes, form, authority, gate, staging_suffixes(), &Steps::real())
+}
+
 /// [`write_confined`], trying the staging names `suffixes` give and performing the operations `steps` give (its
 /// `guard` is replaced by this function's).
 pub fn write_confined_with(
@@ -156,9 +168,26 @@ pub fn write_confined_with(
     suffixes: impl IntoIterator<Item = u64>,
     steps: &Steps,
 ) -> Result<Committed, PersistError> {
+    write_confined_gated_with(root, path, bytes, form, authority, &|| Ok(()), suffixes, steps)
+}
+
+/// [`write_confined_with`] and the `gate` of [`write_confined_gated`]. At the commit the gate is asked first, then the
+/// folder is revalidated, then the authority is checked.
+#[allow(clippy::too_many_arguments)]
+pub fn write_confined_gated_with(
+    root: &Path,
+    path: &Path,
+    bytes: &[u8],
+    form: StagingName,
+    authority: Option<Authority>,
+    gate: Gate,
+    suffixes: impl IntoIterator<Item = u64>,
+    steps: &Steps,
+) -> Result<Committed, PersistError> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(root);
     let pinned = pin_creating(root, dir).map_err(|e| PersistError { stage: crate::persistence::Stage::Inspect, source: e, original_copy: None })?;
     let guard = |target: &Path| {
+        gate()?;
         pinned.revalidate(root)?;
         match authority {
             Some(a) => check(target, a),

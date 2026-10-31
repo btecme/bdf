@@ -81,11 +81,13 @@ pub struct OperationError {
     pub retryable: bool,
     pub conflict: Option<ConflictKind>,
     pub committed: Vec<Effect>,
+    /// For a refusal by the policy: the stable reason (`grant_revoked`, `capability_not_granted`, ...). The audit log records it.
+    pub reason: Option<&'static str>,
 }
 
 impl OperationError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), retryable: false, conflict: None, committed: Vec::new() }
+        Self { code, message: message.into(), retryable: false, conflict: None, committed: Vec::new(), reason: None }
     }
 
     pub fn invalid(message: impl Into<String>) -> Self {

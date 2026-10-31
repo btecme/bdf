@@ -3624,8 +3624,11 @@ dependencies = [
 name = "pdfcraft-app-service"
 version = "0.7.1"
 dependencies = [
+ "getrandom 0.4.3",
  "pdfcraft-engine",
  "pdfcraft-platform",
+ "serde_json",
+ "sha2",
  "tempfile",
 ]
 

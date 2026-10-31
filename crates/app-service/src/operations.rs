@@ -60,19 +60,32 @@ pub enum Capability {
     DocumentRead,
     DocumentEditPages,
     DocumentSave,
-    /// Undo and redo need the capability of the edit they revert, which depends on the step; the policy layer resolves
-    /// it from the history entry. Until it does, nothing grants this implicitly.
+    /// Closing a document drops its in-memory state, unsaved changes included, so it is not part of reading.
+    DocumentClose,
+    /// Undo and redo need the capability of the edit they revert, which depends on the step: the policy resolves it
+    /// from the document's history (the capability recorded when each change was made) and the actor must hold that one.
+    /// It is never a grant a client can hold: undo is not a way to get an effect the client was not granted.
     RevertedEdit,
 }
 
 impl Capability {
+    /// Every capability a grant can hold. `RevertedEdit` is not among them: it is resolved per history entry.
+    pub const GRANTABLE: [Capability; 4] =
+        [Capability::DocumentRead, Capability::DocumentEditPages, Capability::DocumentSave, Capability::DocumentClose];
+
     pub fn name(self) -> &'static str {
         match self {
             Capability::DocumentRead => "document.read",
             Capability::DocumentEditPages => "document.edit.pages",
             Capability::DocumentSave => "document.save",
+            Capability::DocumentClose => "document.close",
             Capability::RevertedEdit => "document.edit.reverted",
         }
+    }
+
+    /// The grantable capability named `name`.
+    pub fn parse(name: &str) -> Option<Capability> {
+        Capability::GRANTABLE.into_iter().find(|c| c.name() == name)
     }
 }
 
@@ -92,10 +105,15 @@ pub enum Access {
 /// Whether this release has the operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Release {
+    /// In the v1 desktop core.
     Core,
+    /// Not in v1; planned behind its own qualification. A core-only release refuses it even when the name is known.
+    Deferred,
+    /// Not in v1 and not planned, or unsafe by default.
+    Excluded,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct OperationDescriptor {
     pub id: OperationId,
     pub name: &'static str,
@@ -184,7 +202,7 @@ pub static DESCRIPTORS: [OperationDescriptor; 8] = [
         id: OperationId::DocumentClose,
         name: "document.close",
         summary: "Close a document, refusing to drop unsaved changes unless told to.",
-        capability: Capability::DocumentRead,
+        capability: Capability::DocumentClose,
         access: Access::Lifecycle,
         release: Release::Core,
         needs_document: true,

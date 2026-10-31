@@ -34,8 +34,13 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+/// The person at the keyboard.
+fn me() -> ActorContext {
+    ActorContext::local_user().expect("the current user")
+}
+
 fn ctx() -> RequestContext {
-    RequestContext::local(1)
+    RequestContext::new(1, me())
 }
 
 fn run(service: &mut Service, document: Option<DocumentKey>, operation: Operation) -> Result<OperationResult> {
@@ -64,7 +69,7 @@ fn rotate(service: &mut Service, key: DocumentKey, revision: u64, page: i64) -> 
 }
 
 fn rotations(service: &Service, key: DocumentKey) -> Vec<u16> {
-    service.document(key).expect("open").info().pages.iter().map(|p| p.rotation).collect()
+    service.document(&me(), key).expect("open").info().pages.iter().map(|p| p.rotation).collect()
 }
 
 fn save(service: &mut Service, key: DocumentKey, revision: u64, target: SaveTarget, overwrite: Overwrite) -> Result<OperationResult> {
@@ -132,7 +137,7 @@ fn the_schema_version_is_negotiated_before_anything_else() {
         assert_eq!(error.code, ErrorCode::UnsupportedSchema, "{version}");
         assert!(error.message.contains(&format!("{OLDEST_SCHEMA} to {SCHEMA_VERSION}")), "the answer carries the supported range: {}", error.message);
     }
-    assert!(service.documents().is_empty(), "a refused request had no effect");
+    assert!(service.documents(&me()).is_empty(), "a refused request had no effect");
     let (key, _) = open_bytes(&mut service, 1);
     // The schema is checked even for a request that would otherwise fail on its document.
     let mut request = OperationRequest::new(Some(key), Operation::History);
@@ -150,7 +155,7 @@ fn a_document_is_named_by_session_and_number() {
     assert_eq!(key_a.document, key_b.document, "the same small number in both sessions");
     // Only the session makes it an identity: a key from the other session reaches nothing.
     assert_eq!(run(&mut a, Some(key_b), Operation::Query).expect_err("another session").code, ErrorCode::NotFound);
-    assert_eq!(a.document(key_b).err().map(|e| e.code), Some(ErrorCode::NotFound));
+    assert_eq!(a.document(&me(), key_b).err().map(|e| e.code), Some(ErrorCode::NotFound));
     // A document operation without a document is a bad request, not a crash.
     assert_eq!(run(&mut a, None, Operation::Query).expect_err("no document").code, ErrorCode::InvalidArgument);
     let unknown = DocumentKey { session: a.session_id(), document: 9_999 };
@@ -194,7 +199,7 @@ fn a_stale_mutation_changes_nothing() {
         assert_eq!(error.conflict, Some(ConflictKind::StaleRevision { expected: stale, current: after.content_revision }), "{name}");
         assert!(error.committed.is_empty(), "{name}: nothing happened");
     }
-    let view = service.document(key).expect("still open");
+    let view = service.document(&me(), key).expect("still open");
     assert_eq!(view.version(), after, "the version is untouched");
     assert_eq!(rotations(&service, key), rotations_before, "the pages are untouched");
     assert_eq!(view.next_undo().as_deref(), Some("Rotate page"), "so is the history");
@@ -263,7 +268,7 @@ fn bad_arguments_are_refused_before_anything_changes() {
         assert_eq!(error.code, ErrorCode::InvalidArgument, "{what}");
         assert!(error.message.contains(expect), "{what}: {}", error.message);
     }
-    assert_eq!(service.document(key).expect("open").version(), v0, "none of them changed anything, not even the render generation");
+    assert_eq!(service.document(&me(), key).expect("open").version(), v0, "none of them changed anything, not even the render generation");
     assert_eq!(rotations(&service, key), [0, 0]);
     assert_eq!(
         run(&mut service, Some(key), Operation::Undo { expected_revision: at }).expect_err("nothing to undo").code,
@@ -295,10 +300,10 @@ fn close_refuses_to_drop_changes_nobody_chose_to_drop() {
     let error =
         run(&mut service, Some(key), Operation::Close { expected_revision: v1.content_revision, discard_changes: false }).expect_err("unsaved");
     assert_eq!((error.code, error.conflict), (ErrorCode::Conflict, Some(ConflictKind::UnsavedChanges)));
-    assert_eq!(service.documents(), [key], "still open");
+    assert_eq!(service.documents(&me()), [key], "still open");
     let done = run(&mut service, Some(key), Operation::Close { expected_revision: v1.content_revision, discard_changes: true }).expect("closes");
     assert_eq!((done.outcome, done.effects, done.version), (Outcome::Closed, vec![Effect::DocumentClosed], None));
-    assert!(service.documents().is_empty());
+    assert!(service.documents(&me()).is_empty());
     assert_eq!(run(&mut service, Some(key), Operation::Query).expect_err("closed").code, ErrorCode::NotFound);
 }
 
@@ -341,7 +346,7 @@ fn a_save_refuses_a_file_that_changed_and_both_versions_survive() {
     assert_eq!(disk, FileVersion::of_bytes(&theirs, None).fingerprint());
     assert!(!error.message.contains(dir.path().to_str().expect("utf-8")), "the message names the file, not the folders: {}", error.message);
     assert_eq!(std::fs::read(&path).expect("reads"), theirs, "their version is untouched");
-    let view = service.document(key).expect("open");
+    let view = service.document(&me(), key).expect("open");
     assert_eq!(view.version(), v1, "ours is untouched too");
     assert!(view.version().dirty());
 
@@ -405,7 +410,7 @@ fn a_late_save_result_does_not_overwrite_a_newer_document() {
     let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
 
     // A save is planned and written elsewhere (a worker); meanwhile the user edits again.
-    let plan = service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let plan = service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
     assert_eq!((plan.revision(), plan.document()), (v1.content_revision, key));
     let written = plan.write().expect("writes");
     assert!(service.is_current(key, v1.content_revision));
@@ -414,7 +419,7 @@ fn a_late_save_result_does_not_overwrite_a_newer_document() {
 
     let report = saved_report(service.finish_save(&written).expect("finishes"));
     assert!(report.edited_since && report.document_open);
-    let view = service.document(key).expect("open");
+    let view = service.document(&me(), key).expect("open");
     assert_eq!(view.version().content_revision, v2.content_revision, "the newer edit is still the content");
     assert!(view.version().dirty(), "and it is still unsaved");
     assert_eq!(rotations(&service, key), [90, 90]);
@@ -435,10 +440,10 @@ fn splitting_a_save_does_not_skip_the_revision_check() {
     let (key, v0) = open_file(&mut service, &path);
     let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
     let before = std::fs::read(&path).expect("reads");
-    let error = service.prepare_save(key, v0.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect_err("stale");
+    let error = service.prepare_save(&ctx(), key, v0.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect_err("stale");
     assert_eq!(error.conflict, Some(ConflictKind::StaleRevision { expected: v0.content_revision, current: v1.content_revision }));
     assert_eq!(std::fs::read(&path).expect("reads"), before);
-    let plan = service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let plan = service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
     let shown = format!("{plan:?}");
     assert!(shown.contains("doc.pdf") && !shown.contains("%PDF"), "a debug print names the file and never carries the document: {shown}");
 }
@@ -450,7 +455,7 @@ fn a_save_that_finishes_after_its_document_closed_leaves_the_file_and_nothing_el
     let mut service = Service::new();
     let (key, v0) = open_file(&mut service, &path);
     let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
-    let plan = service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let plan = service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
     let written = plan.write().expect("writes");
     run(&mut service, Some(key), Operation::Close { expected_revision: v1.content_revision, discard_changes: true }).expect("closes");
 
@@ -458,7 +463,7 @@ fn a_save_that_finishes_after_its_document_closed_leaves_the_file_and_nothing_el
     let Outcome::Saved(report) = &done.outcome else { panic!("saved") };
     assert!(!report.document_open);
     assert_eq!((done.version, done.effects.len()), (None, 1));
-    assert!(service.documents().is_empty(), "the closed document did not come back");
+    assert!(service.documents(&me()).is_empty(), "the closed document did not come back");
 }
 
 // ---- confinement ----
@@ -517,7 +522,7 @@ fn a_folder_replaced_by_a_link_out_of_the_root_is_not_written_through() {
     let error = save(&mut service, key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked).expect_err("refused");
     assert!(matches!(error.code, ErrorCode::InvalidArgument | ErrorCode::IoFailure | ErrorCode::Conflict), "{error}");
     assert_eq!(std::fs::read(outside.join("in.pdf")).expect("reads"), decoy, "nothing was written through the link");
-    assert!(service.document(key).expect("open").version().dirty(), "and the edit is still held");
+    assert!(service.document(&me(), key).expect("open").version().dirty(), "and the edit is still held");
 }
 
 /// A directory link `at` -> `to`: a symbolic link on Unix, a junction on Windows (which needs no privilege).
@@ -541,7 +546,7 @@ fn undoing_during_a_save_leaves_the_document_unsaved_because_the_file_holds_the_
     let (key, v0) = open_file(&mut service, &path);
     let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
 
-    let plan = service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let plan = service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
     let written = plan.write().expect("writes");
     // While the write is landing the user undoes the edit: back at the opened content, which is what the file held.
     let v2 = run(&mut service, Some(key), Operation::Undo { expected_revision: v1.content_revision }).expect("undo").version.expect("version");
@@ -549,7 +554,7 @@ fn undoing_during_a_save_leaves_the_document_unsaved_because_the_file_holds_the_
 
     let report = saved_report(service.finish_save(&written).expect("finishes"));
     assert!(report.edited_since);
-    let view = service.document(key).expect("open");
+    let view = service.document(&me(), key).expect("open");
     assert!(view.version().dirty(), "the file now holds the edit and the document shows the opened content: not clean");
     let refused =
         run(&mut service, Some(key), Operation::Close { expected_revision: v2.content_revision, discard_changes: false }).expect_err("unsaved");
@@ -573,20 +578,20 @@ fn a_save_that_was_overtaken_does_not_restore_its_older_destination() {
     let (a, b) = (dir.path().join("a.pdf"), dir.path().join("b.pdf"));
 
     // Two Save As, planned in this order; the second finishes first.
-    let plan_a = service.prepare_save(key, v1.content_revision, SaveTarget::Path(a.clone()), Overwrite::Tracked, None).expect("plans a");
-    let plan_b = service.prepare_save(key, v1.content_revision, SaveTarget::Path(b.clone()), Overwrite::Tracked, None).expect("plans b");
+    let plan_a = service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Path(a.clone()), Overwrite::Tracked, None).expect("plans a");
+    let plan_b = service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Path(b.clone()), Overwrite::Tracked, None).expect("plans b");
     let written_b = plan_b.write().expect("writes b");
     let done_b = service.finish_save(&written_b).expect("finishes b");
     let after_b = done_b.version.expect("version");
     assert!(!saved_report(done_b.clone()).superseded);
-    assert_eq!(service.document(key).expect("open").info().name, "b.pdf");
+    assert_eq!(service.document(&me(), key).expect("open").info().name, "b.pdf");
 
     let written_a = plan_a.write().expect("writes a");
     let done_a = service.finish_save(&written_a).expect("finishes a");
     let report_a = saved_report(done_a.clone());
     assert!(report_a.superseded && !report_a.edited_since, "the older save only wrote its file");
     assert_eq!(done_a.effects.len(), 1, "and says so");
-    let view = service.document(key).expect("open");
+    let view = service.document(&me(), key).expect("open");
     assert_eq!(view.info().name, "b.pdf", "the document did not go back to the older destination");
     assert_eq!(view.version(), after_b, "nor did its saved state change");
     assert!(a.exists(), "the older file was written all the same");
@@ -614,18 +619,18 @@ fn a_write_completion_finishes_its_own_save_and_no_other() {
     let b1 = rotate(&mut service, key_b, b0.content_revision, 1).expect("edit").version.expect("version");
     let on_disk_a = std::fs::read(&path_a).expect("reads");
 
-    let plan_a = service.prepare_save(key_a, a1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans a");
-    let plan_b = service.prepare_save(key_b, b1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans b");
+    let plan_a = service.prepare_save(&ctx(), key_a, a1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans a");
+    let plan_b = service.prepare_save(&ctx(), key_b, b1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans b");
     // Only B is written. Its completion is B's: it names B's document, and finishing it leaves A alone, unsaved and
     // unwritten (the completion has no way to be paired with A's plan, which is the point).
     let written_b = plan_b.write().expect("writes b");
     assert_eq!(written_b.document(), key_b);
     let done_b = service.finish_save(&written_b).expect("b finishes");
     assert_eq!(done_b.effects.len(), 1);
-    assert_eq!(service.document(key_a).expect("open").version(), a1, "A is exactly as it was: still unsaved");
-    assert!(service.document(key_a).expect("open").version().dirty());
+    assert_eq!(service.document(&me(), key_a).expect("open").version(), a1, "A is exactly as it was: still unsaved");
+    assert!(service.document(&me(), key_a).expect("open").version().dirty());
     assert_eq!(std::fs::read(&path_a).expect("reads"), on_disk_a, "A's file was never written");
-    assert!(!service.document(key_b).expect("open").version().dirty());
+    assert!(!service.document(&me(), key_b).expect("open").version().dirty());
     // A can still not be closed without discarding: it was never saved.
     let refused =
         run(&mut service, Some(key_a), Operation::Close { expected_revision: a1.content_revision, discard_changes: false }).expect_err("unsaved");
@@ -634,7 +639,7 @@ fn a_write_completion_finishes_its_own_save_and_no_other() {
     // A finishes with its own. A completion finishes once.
     let written_a = plan_a.write().expect("writes a");
     saved_report(service.finish_save(&written_a).expect("a finishes"));
-    assert!(!service.document(key_a).expect("open").version().dirty());
+    assert!(!service.document(&me(), key_a).expect("open").version().dirty());
     let again = service.finish_save(&written_a).expect_err("finished already");
     assert_eq!(again.code, ErrorCode::InvalidArgument);
     assert_eq!(again.committed.len(), 1, "the refusal still says what the write left on disk");
@@ -654,17 +659,17 @@ fn a_completion_from_another_service_is_refused_and_says_what_it_wrote() {
     let w1 = rotate(&mut second, other_key, w0.content_revision, 1).expect("edit").version.expect("version");
     // The second service has a save of its own in flight, with the same plan number as the first one's: a completion
     // from elsewhere must not be able to pass for it.
-    let own_plan = second.prepare_save(other_key, w1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let own_plan = second.prepare_save(&ctx(), other_key, w1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
 
-    let plan = first.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
+    let plan = first.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans");
     let written = plan.write().expect("writes");
     let error = second.finish_save(&written).expect_err("another service's completion");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(matches!(error.committed.as_slice(), [Effect::FileWritten { file, .. }] if file == "doc.pdf"), "{:?}", error.committed);
-    assert_eq!(second.document(other_key).expect("open").version(), w1, "the other service's document is untouched, still unsaved");
+    assert_eq!(second.document(&me(), other_key).expect("open").version(), w1, "the other service's document is untouched, still unsaved");
     // Its own service still finishes it, and the second service's own save is still waiting for its own write.
     saved_report(first.finish_save(&written).expect("finishes at home"));
-    assert!(!first.document(key).expect("open").version().dirty());
+    assert!(!first.document(&me(), key).expect("open").version().dirty());
     let own_written = own_plan.write().expect("writes");
     saved_report(second.finish_save(&own_written).expect("finishes its own"));
 }
@@ -678,12 +683,12 @@ fn planned_saves_are_bounded_and_can_be_given_up() {
     let v1 = rotate(&mut service, key, v0.content_revision, 1).expect("edit").version.expect("version");
     let mut plans = Vec::new();
     for _ in 0..MAX_SAVES_IN_FLIGHT {
-        plans.push(service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans"));
+        plans.push(service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("plans"));
     }
-    let error = service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect_err("too many");
+    let error = service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect_err("too many");
     assert_eq!(error.code, ErrorCode::ResourceLimit);
     service.abandon_save(&plans[0]);
-    service.prepare_save(key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("room again");
+    service.prepare_save(&ctx(), key, v1.content_revision, SaveTarget::Tracked, Overwrite::Tracked, None).expect("room again");
     // A save that fails to write gives its place back by itself.
     std::fs::write(&path, fixture(4)).expect("another program changes the file");
     for p in &plans[1..] {
@@ -716,12 +721,12 @@ fn a_confined_open_does_not_follow_a_file_link_out_of_the_root() {
     let error =
         run(&mut service, None, Operation::Open { source: OpenSource::File("in.pdf".into()), password: None }).expect_err("a link is not opened");
     assert!(matches!(error.code, ErrorCode::IoFailure | ErrorCode::InvalidArgument), "{error}");
-    assert!(service.documents().is_empty(), "nothing from outside was opened");
+    assert!(service.documents(&me()).is_empty(), "nothing from outside was opened");
     // An ordinary file in the root still opens, and an unconfined service still follows links as people expect.
     open_file(&mut service, Path::new("plain.pdf"));
     let mut free = Service::new();
     let (linked, _) = open_file(&mut free, &root.join("in.pdf"));
-    assert_eq!(free.document(linked).expect("open").page_count(), 3);
+    assert_eq!(free.document(&me(), linked).expect("open").page_count(), 3);
 }
 
 /// A file link `at` -> `to`; `false` if this machine will not make one.
@@ -748,7 +753,7 @@ fn the_open_size_limit_refuses_a_large_file_as_a_resource_limit_and_opens_one_at
             (true, Ok(_)) => {}
             (false, Err(error)) => {
                 assert_eq!(error.code, ErrorCode::ResourceLimit, "limit {limit}");
-                assert!(service.documents().is_empty());
+                assert!(service.documents(&me()).is_empty());
             }
             (expected, other) => panic!("limit {limit}: expected opens={expected}, got {other:?}"),
         }
@@ -758,5 +763,5 @@ fn the_open_size_limit_refuses_a_large_file_as_a_resource_limit_and_opens_one_at
     let error = run(&mut confined, None, Operation::Open { source: OpenSource::File("doc.pdf".into()), password: None }).expect_err("over");
     assert_eq!(error.code, ErrorCode::ResourceLimit);
     // A limit above the maximum is the maximum.
-    assert!(Service::new().with_open_limit(u64::MAX).documents().is_empty());
+    assert!(Service::new().with_open_limit(u64::MAX).documents(&me()).is_empty());
 }

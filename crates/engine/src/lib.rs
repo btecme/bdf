@@ -159,6 +159,8 @@ pub struct DocId(pub u64);
 
 /// Undo/redo depth. Snapshots share unchanged data, so this is memory-cheap.
 const MAX_UNDO: usize = 100;
+/// How many undo steps a document keeps (the oldest is dropped beyond this).
+pub const UNDO_LIMIT: usize = MAX_UNDO;
 
 /// The passwords that go with one state of a document (protection can change them).
 #[derive(Clone, Debug, Default, PartialEq)]
