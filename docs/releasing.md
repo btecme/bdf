@@ -86,7 +86,7 @@ pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUI
 embed its Japanese fonts and fail rather than ship without them (`AGENTS.md` §1.4). Bump the pin
 deliberately.
 
-**OCR models:** every desktop package ships the Scan & OCR models (#103). The packaging scripts call
+**OCR models:** the **BDF v1 core Windows package has none** (OCR is deferred from the core: `package.ps1` fetches nothing and the MSI and the portable zip carry no models folder; `test-msi.ps1` fails if any model payload is present and `install-test.ps1` fails if a models folder is installed). `package.ps1 -WithOcrModels` builds the variant that ships them, and the other platforms below still do. Model absence does not by itself block the deferred OCR operations at run time; that is the release policy's job. Until BDF ships its own models, no model host is relied on for the core package. What follows describes the variant that ships them: every desktop package ships the Scan & OCR models (#103). The packaging scripts call
 `stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to
 fetch every `kind = "model"` file in `ATTRIBUTION.toml` (verified by SHA-256) with its licence text
 and an `ATTRIBUTION.txt`, straight into the package, so packaging needs the network. They go where
