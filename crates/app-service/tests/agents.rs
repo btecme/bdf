@@ -224,7 +224,7 @@ fn a_grant_is_limited_to_its_documents_and_the_refusal_does_not_say_whether_one_
     let (first, _) = open_file(&mut service, &file_in(&dir, "a.pdf", 1));
     let (second, _) = open_file(&mut service, &file_in(&dir, "b.pdf", 3));
     let request = GrantRequest {
-        scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![first.document]) }],
+        scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![first]) }],
         ..GrantRequest::read_only(ClientId::parse("narrow").expect("a name"))
     };
     let issued = grants.issue(request).expect("issues");
@@ -243,6 +243,40 @@ fn a_grant_is_limited_to_its_documents_and_the_refusal_does_not_say_whether_one_
     assert_eq!(service.document(&narrow, second).err().map(|e| (e.code, e.reason)), Some((ErrorCode::NotAuthorized, Some("document_out_of_scope"))));
     // The person is told the truth.
     assert_eq!(refused(run(&mut service, &human(3), Some(missing), Operation::Query)).0, ErrorCode::NotFound);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_grant_for_one_documents_does_not_reach_the_same_number_in_another_session() {
+    let dir = private_dir("session-scope");
+    let grants = GrantStore::in_memory(owner());
+    let (mut mine, mut theirs) = (service_with(&grants), service_with(&grants));
+    let (mine_doc, mine_version) = open_file(&mut mine, &file_in(&dir, "mine.pdf", 2));
+    let (theirs_doc, theirs_version) = open_file(&mut theirs, &file_in(&dir, "theirs.pdf", 3));
+    assert_eq!(mine_doc.document, theirs_doc.document, "both sessions number their first document the same way");
+    assert_ne!(mine_doc.session, theirs_doc.session);
+
+    let request = GrantRequest {
+        scopes: [Capability::DocumentRead, Capability::DocumentEditPages]
+            .into_iter()
+            .map(|capability| Scope { capability, documents: DocumentScope::Only(vec![mine_doc]) })
+            .collect(),
+        ..GrantRequest::read_only(ClientId::parse("one-document").expect("a name"))
+    };
+    let issued = grants.issue(request).expect("issues");
+    let agent = grants.authenticate("one-document", issued.secret()).expect("authenticates");
+    let ctx = RequestContext::new(2, agent.clone());
+
+    // Its own document, yes.
+    assert!(run(&mut mine, &ctx, Some(mine_doc), Operation::Query).is_ok());
+    assert!(run(&mut mine, &ctx, Some(mine_doc), rotate(mine_version.content_revision)).is_ok());
+    // The other session's document with the same number: neither read nor edited, and nothing about it is revealed.
+    let denied = (ErrorCode::NotAuthorized, Some("document_out_of_scope"));
+    assert_eq!(refused(run(&mut theirs, &ctx, Some(theirs_doc), Operation::Query)), denied);
+    assert_eq!(refused(run(&mut theirs, &ctx, Some(theirs_doc), rotate(theirs_version.content_revision))), denied);
+    assert_eq!(theirs.documents(&agent), []);
+    assert_eq!(theirs.document(&agent, theirs_doc).err().map(|e| (e.code, e.reason)), Some(denied));
+    assert_eq!(rotations(&theirs, theirs_doc), [0, 0, 0], "the other session's document is untouched");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

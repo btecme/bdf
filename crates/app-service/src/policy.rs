@@ -29,6 +29,7 @@ use std::path::Path;
 use crate::actors::ActorContext;
 use crate::grants::{GrantProblem, GrantStore, GrantTerms};
 use crate::operations::{Capability, OperationDescriptor, OperationId, Release};
+use crate::version::DocumentKey;
 
 /// What this release contains. v1 is core-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,8 +130,8 @@ pub enum FileUse<'a> {
 /// What the request itself says, apart from who made it: the facts the decision needs.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Facts<'a> {
-    /// The document the operation is about (its number within the session).
-    pub document: Option<u64>,
+    /// The document the operation is about, by its full identity (session and number). Never the number alone.
+    pub document: Option<DocumentKey>,
     /// The file the operation reads or writes, already resolved.
     pub file: Option<FileUse<'a>>,
     /// For undo and redo: the capability of the change they would revert, from the document's history; `None` when the
@@ -185,7 +186,7 @@ impl Policy {
         };
         if descriptor.needs_document {
             match facts.document {
-                Some(document) if scope.documents.contains(document) => {}
+                Some(document) if scope.documents.contains(&document) => {}
                 _ => return Err(Denial::new(DenyReason::DocumentOutOfScope, "this client has not been granted that document")),
             }
         }
@@ -252,6 +253,7 @@ mod tests {
     use crate::actors::{ClientId, OsPrincipal};
     use crate::grants::{DocumentScope, FileAccess, GrantRequest, Scope};
     use crate::operations::{Access, DESCRIPTORS};
+    use crate::version::SessionId;
     use std::path::PathBuf;
 
     fn clock() -> i64 {
@@ -272,8 +274,12 @@ mod tests {
         id.descriptor()
     }
 
+    fn key(document: u64) -> DocumentKey {
+        DocumentKey { session: SessionId(1), document }
+    }
+
     fn facts_for(document: u64) -> Facts<'static> {
-        Facts { document: Some(document), ..Facts::default() }
+        Facts { document: Some(key(document)), ..Facts::default() }
     }
 
     fn client(name: &str) -> ClientId {
@@ -346,7 +352,7 @@ mod tests {
         let narrow = agent(
             &grants,
             GrantRequest {
-                scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![2]) }],
+                scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![key(2)]) }],
                 ..GrantRequest::read_only(client("narrow"))
             },
         );

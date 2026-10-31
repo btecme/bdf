@@ -232,9 +232,7 @@ impl Service {
             .iter()
             .map(|d| self.key_of(d.id))
             .filter(|key| {
-                self.policy
-                    .decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(key.document), ..Facts::default() })
-                    .is_ok()
+                self.policy.decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(*key), ..Facts::default() }).is_ok()
             })
             .collect()
     }
@@ -242,7 +240,7 @@ impl Service {
     /// A read-only view of one document, for an actor that may read it. It cannot change it.
     pub fn document(&self, actor: &ActorContext, key: DocumentKey) -> Result<DocumentView<'_>> {
         self.policy
-            .decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(key.document), ..Facts::default() })
+            .decide(actor, OperationId::DocumentQuery.descriptor(), &Facts { document: Some(key), ..Facts::default() })
             .map_err(|d| denied(&d))?;
         let doc = self.get(key)?;
         Ok(DocumentView { service: self, doc })
@@ -284,7 +282,7 @@ impl Service {
         }
         let file = self.file_for(&request)?;
         let facts = Facts {
-            document: request.document.filter(|k| k.session == self.id).map(|k| k.document),
+            document: request.document,
             file: file.as_ref().map(|(path, write)| if *write { FileUse::Write(path) } else { FileUse::Read(path) }),
             reverts: self.reverts_for(&request),
         };
@@ -402,7 +400,7 @@ impl Service {
     ) -> Result<PreparedSave> {
         let descriptor = OperationId::DocumentSave.descriptor();
         // Before anything about the document is revealed: may this actor save it at all?
-        self.policy.decide(actor, descriptor, &Facts { document: Some(key.document), ..Facts::default() }).map_err(|d| denied(&d))?;
+        self.policy.decide(actor, descriptor, &Facts { document: Some(key), ..Facts::default() }).map_err(|d| denied(&d))?;
         let doc = self.get(key)?;
         self.check_revision(doc.id, expected_revision)?;
         let path = match target {
@@ -413,7 +411,7 @@ impl Service {
             },
         };
         self.policy
-            .decide(actor, descriptor, &Facts { document: Some(key.document), file: Some(FileUse::Write(&path)), ..Facts::default() })
+            .decide(actor, descriptor, &Facts { document: Some(key), file: Some(FileUse::Write(&path)), ..Facts::default() })
             .map_err(|d| denied(&d))?;
         let same_file = doc.path.as_deref().is_some_and(|p| self.storage_path(Path::new(p)).is_ok_and(|stored| stored == path));
         let authority = match overwrite {
