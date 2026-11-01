@@ -241,6 +241,13 @@ struct State {
     stamp: Option<Stamp>,
     /// The grant file changed and could not be read (damaged, not private, deleted): no grant holds until it can be.
     unreadable: bool,
+    /// Grants this store revoked whose revocation could not be written. Every reload applies them again, so an older
+    /// copy of the file (which still shows the grant as live) cannot bring the grant back; the next change that does
+    /// get written carries the revocation to the file. Only grants that exist are added, so it is bounded by them.
+    revoked_here: HashSet<GrantId>,
+    /// Make every write fail, to test what the store does when the disk will not take a change.
+    #[cfg(test)]
+    write_fails: bool,
 }
 
 /// Enough of a file to notice that another process changed it: its length and modification time. Revoking a grant flips
@@ -274,7 +281,10 @@ impl State {
         let Some(path) = self.path.clone() else { return };
         let now = stamp_of(&path);
         match load(&path, &self.owner) {
-            Ok(grants) => {
+            Ok(mut grants) => {
+                for grant in &mut grants {
+                    grant.revoked |= self.revoked_here.contains(&grant.terms.id);
+                }
                 self.grants = grants;
                 self.unreadable = false;
             }
@@ -356,7 +366,17 @@ impl GrantStore {
     /// A store that lives in memory only, for `owner`.
     pub fn in_memory(owner: OsPrincipal) -> Self {
         Self {
-            state: Arc::new(Mutex::new(State { grants: Vec::new(), path: None, clock: Arc::new(system_now), owner, stamp: None, unreadable: false })),
+            state: Arc::new(Mutex::new(State {
+                grants: Vec::new(),
+                path: None,
+                clock: Arc::new(system_now),
+                owner,
+                stamp: None,
+                unreadable: false,
+                revoked_here: HashSet::new(),
+                #[cfg(test)]
+                write_fails: false,
+            })),
         }
     }
 
@@ -364,7 +384,17 @@ impl GrantStore {
     /// private to the current user, too large or damaged is an error: a grant file is never silently replaced.
     pub fn open(path: &Path, owner: OsPrincipal) -> Result<Self, GrantError> {
         let grants = load(path, &owner)?;
-        let state = State { grants, path: Some(path.to_path_buf()), clock: Arc::new(system_now), owner, stamp: stamp_of(path), unreadable: false };
+        let state = State {
+            grants,
+            path: Some(path.to_path_buf()),
+            clock: Arc::new(system_now),
+            owner,
+            stamp: stamp_of(path),
+            unreadable: false,
+            revoked_here: HashSet::new(),
+            #[cfg(test)]
+            write_fails: false,
+        };
         let store = Self { state: Arc::new(Mutex::new(state)) };
         // Creating the file is a change like any other: a second process starting at the same moment must not replace a
         // grant the first has already issued with an empty list.
@@ -439,8 +469,13 @@ impl GrantStore {
                 return Ok(());
             }
             grant.revoked = true;
-            // The revocation holds even if it could not be written: it stays in memory for this run, and the failure is reported.
-            persist(state)
+            // The revocation holds even if it could not be written: it is remembered for this run (across reloads of
+            // the file, see `revoked_here`), and the failure is reported.
+            let written = persist(state);
+            if written.is_err() {
+                state.revoked_here.insert(id.clone());
+            }
+            written
         })
     }
 
@@ -451,8 +486,12 @@ impl GrantStore {
             let before = state.grants.len();
             let kept: Vec<Grant> = state.grants.iter().filter(|g| !g.revoked && g.terms.expires_at > now).cloned().collect();
             let removed = before.saturating_sub(kept.len());
-            state.grants = kept;
-            persist(state)?;
+            let before_change = std::mem::replace(&mut state.grants, kept);
+            if let Err(e) = persist(state) {
+                // As with a grant that could not be stored: a change that could not be written is not kept.
+                state.grants = before_change;
+                return Err(e);
+            }
             Ok(removed)
         })
     }
@@ -549,6 +588,10 @@ fn validate(request: &GrantRequest) -> Result<(), GrantError> {
 
 fn persist(state: &State) -> Result<(), GrantError> {
     let Some(path) = &state.path else { return Ok(()) };
+    #[cfg(test)]
+    if state.write_fails {
+        return Err(GrantError::Storage("the disk would not take the change".into()));
+    }
     let grants: Vec<Value> = state.grants.iter().map(grant_json).collect();
     let bytes = serde_json::to_vec_pretty(&json!({ "version": 1, "grants": grants })).map_err(|e| GrantError::Storage(e.to_string()))?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_FILE_BYTES {
@@ -871,6 +914,67 @@ mod tests {
         let error = grants.issue(GrantRequest::read_only(client("second"))).unwrap_err();
         assert!(matches!(error, GrantError::Storage(_)), "{error}");
         assert_eq!(grants.list().len(), 1, "the grant that could not be stored was not kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An actor authenticated before the revocation, and the store that revoked it.
+    fn revoked_but_not_written(test: &str) -> (PathBuf, GrantStore, ActorContext, GrantId) {
+        let dir = private_dir(test);
+        let path = dir.join("grants.json");
+        let clock = TestClock::new();
+        let grants = GrantStore::open(&path, owner()).expect("creates").with_clock(clock.reading());
+        let issued = grants.issue(GrantRequest::read_only(client("agent"))).expect("issues");
+        let actor = grants.authenticate("agent", issued.secret()).expect("authenticates");
+        let id = issued.terms.id.clone();
+        grants.lock().write_fails = true;
+        assert!(matches!(grants.revoke(&id), Err(GrantError::Storage(_))), "the revocation could not be written");
+        assert!(grants.check(&actor).is_err(), "it holds in memory");
+        (dir, grants, actor, id)
+    }
+
+    #[test]
+    fn a_revocation_that_could_not_be_written_survives_the_next_changes_that_cannot_be_written_either() {
+        let (dir, grants, actor, id) = revoked_but_not_written("grants-failed-revoke");
+        // Unrelated changes reload the file, which still shows the grant live. Each one fails to write too.
+        assert!(grants.issue(GrantRequest::read_only(client("other"))).is_err());
+        assert!(grants.check(&actor).is_err(), "an unrelated issue did not bring the actor back");
+        assert!(grants.prune().is_err());
+        assert!(grants.check(&actor).is_err(), "nor did a prune");
+        assert!(grants.authenticate("agent", "any").is_err());
+        assert!(grants.list().iter().any(|(terms, revoked)| terms.id == id && *revoked), "the list says revoked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_revocation_that_could_not_be_written_is_written_by_the_next_change_that_can_be() {
+        let (dir, grants, actor, _) = revoked_but_not_written("grants-retried-revoke");
+        grants.lock().write_fails = false;
+        grants.issue(GrantRequest::read_only(client("other"))).expect("issues once the disk takes it");
+        assert!(grants.check(&actor).is_err());
+        // A fresh store, which has none of the first one's memory, now sees the revocation in the file.
+        let fresh = GrantStore::open(&dir.join("grants.json"), owner()).expect("opens");
+        assert!(fresh.check(&actor).is_err(), "the file now says revoked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_read_only_grant_file_does_not_let_a_revoked_actor_back_in() {
+        let dir = private_dir("grants-readonly");
+        let path = dir.join("grants.json");
+        let grants = GrantStore::open(&path, owner()).expect("creates");
+        let issued = grants.issue(GrantRequest::read_only(client("agent"))).expect("issues");
+        let actor = grants.authenticate("agent", issued.secret()).expect("authenticates");
+        let original = std::fs::metadata(&path).expect("metadata").permissions();
+        let mut read_only = original.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&path, read_only).expect("makes it read-only");
+        let revoked = grants.revoke(&issued.terms.id);
+        let issued_other = grants.issue(GrantRequest::read_only(client("other")));
+        let still_denied = grants.check(&actor).is_err();
+        std::fs::set_permissions(&path, original).expect("restores it");
+        assert!(revoked.is_err() && issued_other.is_err(), "both writes failed: {revoked:?} {issued_other:?}");
+        assert!(still_denied, "the actor was let back in by a change that failed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

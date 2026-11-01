@@ -111,10 +111,21 @@ Local results after the fixes (Windows 11 x64, Rust 1.99.0): service crate 37 un
 * **The audit chain is not a signature** and its clock is the machine's.
 * No Codex review yet. The Unix-specific code was not compiled locally; it compiled and ran in the hosted Ubuntu and FreeBSD jobs.
 
+## 8. B8-R5: a revocation that could not be written is no longer undone (2026-11-01)
+
+The [retest](BUILD-008-codex-retest.md) found that after `revoke` failed to write the grant file, the store refused the actor in memory, but the next change (an unrelated `issue` or `prune`, even one that also failed) reloaded the file, which still showed the grant live, and the actor was accepted again. Cause: `transact` reloads the file before every change, and the in-memory revocation was only a flag on the list that the reload replaced.
+
+Fix (`crates/app-service/src/grants.rs`, its own commit on the PR #14 branch): the store keeps the set of grants it revoked whose revocation could not be written (`revoked_here`). Every reload applies it again, so an older copy of the file cannot bring a grant back. The next change that does get written carries the revocation into the file, so a retry is not needed. A failed `prune` now also leaves the list as it was (a failed `issue` already did). The set only ever holds ids of grants that exist.
+
+Tests (all in the module's unit tests): after a revoke that cannot be written, an unrelated `issue` and a `prune` that also fail leave the already-authenticated actor refused, `authenticate` refusing, and `list` saying revoked; the next change that can be written writes the revocation, and a fresh store reading the file then refuses the actor; and, on Windows, the review's exact case with a real read-only grant file. Seen to fail with the defect restored: not re-applying on reload, or not remembering the failed revocation, each fail all three.
+
+**Not claimed.** A revocation that cannot be written is still only in this process's memory: other processes (a running `mcp --client` server, a later `pdfcraft-cli` run) read the file, which still shows the grant live, until a write succeeds. The failure is reported to the person who ran `grant revoke`, who has to retry. Closing that needs a durable record that a revocation is pending, which is a design decision beyond this correction. Not hosted, not retested by Codex.
+
 ## Revision history
 
 | Date | Change |
 |---|---|
+| 2026-11-01 | B8-R5 corrected: a revocation that could not be written is remembered across reloads and written by the next change that can be; regressions seen to fail with the defect restored. |
 | 2026-10-31 | PR #11 merged to main on the owner's instruction (not yet retested by Codex); #12 retargeted. |
 | 2026-10-31 | Review round 1: session-qualified document grants, the failed-audit safeguard on every client path, per-grant confinement against links, honest scope wording. |
 | 2026-10-27 | Application part: state folder, grant and activity commands, cross-process revocation (section 5a). |
