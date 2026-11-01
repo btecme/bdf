@@ -66,6 +66,37 @@ fn private_dir(test: &str) -> PathBuf {
     dir
 }
 
+/// Two pages. Page 1 carries a web link and a link to page 2; the outline has two top-level bookmarks, one for each page.
+fn fixture_with_links_and_bookmarks() -> Vec<u8> {
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R >>",
+        "<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [9 0 R 10 0 R] >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Outlines /First 11 0 R /Last 12 0 R /Count 2 >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 80 30] /A << /S /URI /URI (https://example.com/) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 40 80 60] /Dest [6 0 R /Fit] >>",
+        "<< /Title (Intro) /Parent 8 0 R /Dest [4 0 R /Fit] /Next 12 0 R >>",
+        "<< /Title (Second) /Parent 8 0 R /Dest [6 0 R /Fit] /Prev 11 0 R >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 fn owner() -> OsPrincipal {
     OsPrincipal::current().expect("the current user")
 }
@@ -186,7 +217,7 @@ fn a_read_only_grant_opens_inside_its_folder_and_is_refused_every_change() {
     let f = Fixture::new("read-only");
     let path = f.file(&f.work, "a.pdf", 3);
     let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
-    assert_eq!(tool_names(&mut server).len(), 9, "help and the eight operations");
+    assert_eq!(tool_names(&mut server).len(), 12, "help and the eleven operations");
 
     let opened = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
     assert_eq!(opened["pages"].as_array().expect("pages").len(), 3);
@@ -351,6 +382,86 @@ fn a_message_over_the_bound_is_refused_and_the_next_one_is_served() {
     assert_eq!(lines[0]["error"]["code"], -32600);
     assert_eq!(lines[1]["id"], 2);
     assert!(lines[1].get("result").is_some());
+}
+
+#[test]
+fn a_read_only_grant_lists_documents_links_and_bookmarks() {
+    let f = Fixture::new("read-lists");
+    let path = f.work.join("links.pdf");
+    std::fs::write(&path, fixture_with_links_and_bookmarks()).expect("writes the fixture");
+    let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
+    assert_eq!(ok(&mut server, "doc_list", json!({}))["documents"], json!([]), "nothing is open yet");
+    let opened = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
+    let (doc, revision) = (opened["doc"].as_u64().expect("doc"), opened["revision"].as_u64().expect("revision"));
+
+    let listed = ok(&mut server, "doc_list", json!({}));
+    assert_eq!(listed["documents"].as_array().expect("documents").len(), 1);
+    assert_eq!(listed["documents"][0]["doc"], doc);
+    assert_eq!(listed["documents"][0]["name"], "links.pdf");
+
+    let links = ok(&mut server, "link_list", json!({ "doc": doc }));
+    assert_eq!(links["count"], 2);
+    assert_eq!(links["links"][0]["url"], "https://example.com/");
+    assert_eq!(links["links"][1]["to_page"], 2);
+    assert!(links.get("truncated").is_none());
+
+    let all = ok(&mut server, "bookmark_list", json!({ "doc": doc }));
+    assert_eq!(all["bookmarks"].as_array().expect("bookmarks").len(), 2);
+    assert_eq!(all["bookmarks"][0]["title"], "Intro");
+    assert_eq!(all["bookmarks"][0]["path"], json!([1]));
+    assert_eq!(all["bookmarks"][1]["page"], 2);
+    assert_eq!(all["next"], Value::Null);
+    let first = ok(&mut server, "bookmark_list", json!({ "doc": doc, "limit": 1 }));
+    assert_eq!(first["bookmarks"].as_array().expect("bookmarks").len(), 1);
+    assert_eq!(first["next"], 1);
+    let rest = ok(&mut server, "bookmark_list", json!({ "doc": doc, "offset": 1, "limit": 1 }));
+    assert_eq!(rest["bookmarks"][0]["title"], "Second");
+
+    // Strict arguments, and the service's own bound; none of it changes the document.
+    for args in [
+        json!({ "doc": doc, "limit": 0 }),
+        json!({ "doc": doc, "limit": 5000 }),
+        json!({ "doc": doc, "offset": -1 }),
+        json!({ "doc": doc, "limit": "9" }),
+    ] {
+        let (body, is_error) = call(&mut server, "bookmark_list", args.clone());
+        assert!(is_error, "{args} should be refused");
+        assert_eq!(error_code(&body), "invalid_argument", "{args}: {body}");
+    }
+    assert_eq!(ok(&mut server, "doc_info", json!({ "doc": doc }))["revision"], revision);
+}
+
+#[test]
+fn the_client_tools_answer_as_the_automation_tools_do() {
+    let f = Fixture::new("read-parity");
+    let path = f.work.join("links.pdf");
+    std::fs::write(&path, fixture_with_links_and_bookmarks()).expect("writes the fixture");
+    let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
+    let doc = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }))["doc"].as_u64().expect("doc");
+
+    let mut tools = pdfcraft_automation::Automation::new();
+    let first = tools.call("doc_open", &json!({ "path": path.to_string_lossy() })).expect("opens");
+    let tool_doc = match &first[0] {
+        pdfcraft_automation::Content::Json(v) => v["doc"].as_u64().expect("doc"),
+        other => panic!("expected JSON, got {other:?}"),
+    };
+    let tool_json = |tools: &mut pdfcraft_automation::Automation, name: &str, args: Value| match tools.call(name, &args).expect("runs").remove(0) {
+        pdfcraft_automation::Content::Json(v) => v,
+        other => panic!("{name}: expected JSON, got {other:?}"),
+    };
+    // The client server adds the revision to every reply about a document; nothing else differs.
+    let without_revision = |mut body: Value| {
+        body.as_object_mut().expect("an object").remove("revision");
+        body
+    };
+    assert_eq!(without_revision(ok(&mut server, "link_list", json!({ "doc": doc }))), tool_json(&mut tools, "link_list", json!({ "doc": tool_doc })));
+    for args in [json!({}), json!({ "limit": 1 }), json!({ "offset": 1, "limit": 1 }), json!({ "offset": 7 })] {
+        let mut mine = args.clone();
+        let mut theirs = args;
+        mine["doc"] = json!(doc);
+        theirs["doc"] = json!(tool_doc);
+        assert_eq!(without_revision(ok(&mut server, "bookmark_list", mine.clone())), tool_json(&mut tools, "bookmark_list", theirs), "{mine}");
+    }
 }
 
 #[test]

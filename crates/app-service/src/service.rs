@@ -5,7 +5,7 @@ use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{DocId, Document, Edit, EditError, OpenError, SaveToken, Saved, Session, UNDO_LIMIT};
+use pdfcraft_engine::{DocId, Document, Edit, EditError, LinkAction, OpenError, SaveToken, Saved, Session, UNDO_LIMIT};
 use pdfcraft_platform::confinement::{pin_existing, write_confined_gated};
 use pdfcraft_platform::file_identity::{
     Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_regular_with_version, read_with_version_limited, write_guarded_gated,
@@ -19,10 +19,14 @@ use crate::effects::Effect;
 use crate::errors::{ConflictKind, ErrorCode, OperationError, Result};
 use crate::grants::system_now;
 use crate::operations::{
-    Access, Capability, OLDEST_SCHEMA, OpenSource, Operation, OperationId, OperationRequest, Overwrite, PageSelection, SCHEMA_VERSION, SaveTarget,
+    Access, Capability, MAX_BOOKMARK_PAGE, OLDEST_SCHEMA, OpenSource, Operation, OperationId, OperationRequest, Overwrite, PageSelection,
+    SCHEMA_VERSION, SaveTarget,
 };
 use crate::policy::{Denial, DenyReason, Facts, FileUse, Policy, Watch};
-use crate::results::{DocumentInfo, History, OperationResult, Outcome, PageSummary, SaveReport};
+use crate::results::{
+    BookmarkEntry, BookmarkList, DocumentInfo, History, LinkList, LinkSummary, LinkTarget, MAX_LINKS, OperationResult, Outcome, PageSummary,
+    SaveReport,
+};
 use crate::version::{DocumentKey, DocumentVersion, SavedSnapshot, SessionId};
 
 /// The largest file `document.open` reads. An interim admission limit, checked before the file is read; the budgets for
@@ -339,6 +343,9 @@ impl Service {
                 self.finish_save_inner(&written)?
             }
             Operation::Close { discard_changes, .. } => self.close(self.need(doc_id)?, discard_changes)?,
+            Operation::List => self.list(actor),
+            Operation::Links => self.links(self.need(doc_id)?)?,
+            Operation::Bookmarks { offset, limit } => self.bookmarks(self.need(doc_id)?, offset, limit)?,
         };
         #[cfg(test)]
         if let Some(hook) = &self.hooks.before_delivery {
@@ -628,6 +635,63 @@ impl Service {
             warnings: Vec::new(),
             effects: Vec::new(),
         })
+    }
+
+    /// The open documents `actor` may read. A client sees only the documents of its grant; the rest are not mentioned.
+    fn list(&self, actor: &ActorContext) -> OperationResult {
+        let documents = self.documents(actor).into_iter().filter_map(|key| self.get(key).ok().map(|doc| info_of(key, doc))).collect();
+        OperationResult { outcome: Outcome::Documents(documents), version: None, warnings: Vec::new(), effects: Vec::new() }
+    }
+
+    fn links(&self, id: DocId) -> Result<OperationResult> {
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        let links = doc
+            .links
+            .iter()
+            .filter_map(|link| {
+                // A link whose page is not in the document cannot be placed; the parser only produces links on pages it
+                // found, so this is not expected, and `total` still counts it.
+                let page = doc.info.pages.get(link.page)?;
+                let (a, b) =
+                    (page.user_to_view(link.rect[0] as f32, link.rect[1] as f32), page.user_to_view(link.rect[2] as f32, link.rect[3] as f32));
+                let rect = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])].map(|x| (x * 100.0).round() / 100.0);
+                let target = match &link.action {
+                    LinkAction::Page(p) => LinkTarget::Page(p.saturating_add(1)),
+                    LinkAction::Uri(uri) => LinkTarget::Uri(uri.clone()),
+                    LinkAction::Other(other) => LinkTarget::Other(other.clone()),
+                };
+                Some(LinkSummary {
+                    page: link.page.saturating_add(1),
+                    index: link.index.saturating_add(1),
+                    rect,
+                    visible: link.style.visible,
+                    target,
+                })
+            })
+            .take(MAX_LINKS)
+            .collect();
+        let list = LinkList { links, total: doc.links.len() };
+        Ok(OperationResult { outcome: Outcome::Links(list), version: Some(version_of(doc)), warnings: Vec::new(), effects: Vec::new() })
+    }
+
+    fn bookmarks(&self, id: DocId, offset: usize, limit: usize) -> Result<OperationResult> {
+        if !(1..=MAX_BOOKMARK_PAGE).contains(&limit) {
+            return Err(OperationError::invalid(format!("limit must be from 1 to {MAX_BOOKMARK_PAGE}")));
+        }
+        let page = self.session.bookmark_page(id, offset, limit).ok_or_else(OperationError::not_found)?;
+        let rows = page
+            .rows
+            .into_iter()
+            .map(|row| BookmarkEntry {
+                path: row.path.iter().map(|p| p.saturating_add(1)).collect(),
+                title: row.title,
+                page: row.page.map(|p| p.saturating_add(1)),
+                open: row.open,
+            })
+            .collect();
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        let list = BookmarkList { rows, next: page.next, truncated: page.truncated };
+        Ok(OperationResult { outcome: Outcome::Bookmarks(list), version: Some(version_of(doc)), warnings: Vec::new(), effects: Vec::new() })
     }
 
     fn rotate(&mut self, id: DocId, pages: PageSelection, degrees: i64) -> Result<OperationResult> {

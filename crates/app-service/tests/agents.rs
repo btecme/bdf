@@ -33,6 +33,37 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+/// Two pages. Page 1 carries a web link and a link to page 2; the outline has two top-level bookmarks, one for each page.
+fn fixture_with_links_and_bookmarks() -> Vec<u8> {
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R >>",
+        "<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [9 0 R 10 0 R] >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Outlines /First 11 0 R /Last 12 0 R /Count 2 >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 80 30] /A << /S /URI /URI (https://example.com/) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 40 80 60] /Dest [6 0 R /Fit] >>",
+        "<< /Title (Intro) /Parent 8 0 R /Dest [4 0 R /Fit] /Next 12 0 R >>",
+        "<< /Title (Second) /Parent 8 0 R /Dest [6 0 R /Fit] /Prev 11 0 R >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 /// A new empty folder only the current user can use (see the crate's own test helper for why).
 fn private_dir(test: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("pdfcraft-agents-{}-{test}", std::process::id()));
@@ -244,6 +275,95 @@ fn a_grant_is_limited_to_its_documents_and_the_refusal_does_not_say_whether_one_
     // The person is told the truth.
     assert_eq!(refused(run(&mut service, &human(3), Some(missing), Operation::Query)).0, ErrorCode::NotFound);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn open_links(service: &mut Service) -> DocumentKey {
+    let source = OpenSource::Bytes { name: "links.pdf".into(), bytes: Arc::new(fixture_with_links_and_bookmarks()) };
+    match run(service, &human(1), None, Operation::Open { source, password: None }).expect("opens").outcome {
+        Outcome::Opened { document, .. } => document,
+        other => panic!("opened, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_client_lists_reads_links_and_bookmarks_only_of_the_documents_it_was_granted() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let first = open_links(&mut service);
+    let second = open_links(&mut service);
+    let request = GrantRequest {
+        scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![first]) }],
+        ..GrantRequest::read_only(ClientId::parse("narrow").expect("a name"))
+    };
+    let issued = grants.issue(request).expect("issues");
+    let narrow = grants.authenticate("narrow", issued.secret()).expect("authenticates");
+    let ctx = RequestContext::new(2, narrow);
+
+    // The list names the granted document and does not mention the other.
+    match run(&mut service, &ctx, None, Operation::List).expect("lists").outcome {
+        Outcome::Documents(documents) => assert_eq!(documents.iter().map(|d| d.document).collect::<Vec<_>>(), [first]),
+        other => panic!("documents, got {other:?}"),
+    }
+    assert!(matches!(run(&mut service, &ctx, Some(first), Operation::Links).expect("links").outcome, Outcome::Links(ref l) if l.total == 2));
+    assert!(matches!(
+        run(&mut service, &ctx, Some(first), Operation::Bookmarks { offset: 0, limit: 10 }).expect("bookmarks").outcome,
+        Outcome::Bookmarks(ref b) if b.rows.len() == 2
+    ));
+    // The other document, one that does not exist and one of another session all get the one answer.
+    let missing = DocumentKey { session: service.session_id(), document: 9_999 };
+    let foreign = DocumentKey { session: Service::new().session_id(), document: first.document };
+    for operation in [Operation::Links, Operation::Bookmarks { offset: 0, limit: 10 }] {
+        for key in [second, missing, foreign] {
+            assert_eq!(refused(run(&mut service, &ctx, Some(key), operation.clone())), (ErrorCode::NotAuthorized, Some("document_out_of_scope")));
+        }
+    }
+    // The person still sees both.
+    match run(&mut service, &human(3), None, Operation::List).expect("lists").outcome {
+        Outcome::Documents(documents) => assert_eq!(documents.len(), 2),
+        other => panic!("documents, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_client_that_was_not_granted_reading_gets_no_list_links_or_bookmarks() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let key = open_links(&mut service);
+    let (editor, _) = grant(&grants, "editor", &[Capability::DocumentEditPages], FileAccess::default());
+    let ctx = RequestContext::new(2, editor);
+    for operation in [Operation::List, Operation::Links, Operation::Bookmarks { offset: 0, limit: 10 }] {
+        let document = if matches!(operation, Operation::List) { None } else { Some(key) };
+        assert_eq!(refused(run(&mut service, &ctx, document, operation)), (ErrorCode::NotAuthorized, Some("capability_not_granted")));
+    }
+}
+
+#[test]
+fn reading_links_and_bookmarks_is_audited_without_what_was_read() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let key = open_links(&mut service);
+    let reader = read_only(&grants, "reader");
+    let ctx = RequestContext::new(2, reader);
+    run(&mut service, &ctx, None, Operation::List).expect("lists");
+    run(&mut service, &ctx, Some(key), Operation::Links).expect("links");
+    run(&mut service, &ctx, Some(key), Operation::Bookmarks { offset: 0, limit: 10 }).expect("bookmarks");
+    run(&mut service, &ctx, Some(key), Operation::Bookmarks { offset: 0, limit: 0 }).expect_err("a bad bound");
+    let records = service.recent_audit();
+    let by_agent: Vec<(&str, &AuditOutcome)> =
+        records.iter().filter(|r| r.entry.actor.as_str() == "agent").map(|r| (r.entry.operation.as_str(), &r.entry.outcome)).collect();
+    assert_eq!(
+        by_agent,
+        [
+            ("document.list", &AuditOutcome::Ok),
+            ("document.links", &AuditOutcome::Ok),
+            ("document.bookmarks", &AuditOutcome::Ok),
+            ("document.bookmarks", &AuditOutcome::Failed("invalid_argument".into())),
+        ]
+    );
+    let everything = format!("{records:?}");
+    for read in ["Intro", "Second", "example.com", "links.pdf"] {
+        assert!(!everything.contains(read), "the record does not hold {read:?}");
+    }
 }
 
 #[test]

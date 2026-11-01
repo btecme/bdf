@@ -46,12 +46,13 @@ takes no `--root` or `--compact`: a client's folders are in its grant, and its t
 * **Without a valid grant** (no secret, a wrong secret, an unknown client, a revoked or expired grant, all answered the same)
   it lists one tool, `bdf_help`, which returns the version and the service's operations. It lists no files and returns no
   document content; every other tool is refused with `not_authorized`.
-* **With a grant** the tools are `doc_open`, `doc_info`, `page_rotate`, `edit_undo`, `edit_redo`, `edit_history`, `doc_save`
-  and `doc_close`, one per service operation, with the automation tools' names where there is one. What the grant allows is the
+* **With a grant** the tools are `doc_open`, `doc_info`, `doc_list`, `link_list`, `bookmark_list`, `page_rotate`, `edit_undo`,
+  `edit_redo`, `edit_history`, `doc_save` and `doc_close`, one per service operation, with the automation tools' names where there is one. What the grant allows is the
   policy's decision: a read-only grant lists the same tools and is refused at the call, with the reason. A revocation from
   another process stops the next call.
 * A tool that changes or discards content takes `revision` (from the last reply); a stale one is a `conflict` that names both
   revisions and changes nothing. Page numbers are 1-based. Every document-tool call is recorded in the activity log (`pdfcraft-cli activity show`), including one refused for its arguments (unknown name, wrong type, missing value, a negative revision): the client, the grant, the operation, the outcome and the error's code, never what the client sent. `bdf_help`, the protocol's own messages, an unknown tool name and a call without a grant are not recorded. Several servers may run at once against one state folder; they take turns writing the log.
+* `doc_list` names only the documents the grant may read; `link_list` lists at most 10,000 links and says `truncated` and the `total` when there are more; `bookmark_list` takes `offset` and `limit` (1 to 1,000, default 100) and gives `next` when there is another page. Their answers are the automation tools' (plus `revision`). Text, rendering and the rest of the read tools are not on this server yet.
 * Results are in `structuredContent`. A failure has `isError: true` and `{"error": {"code", "message", "retryable", "reason"?,
   "conflict"?, "committed"?}}`; the codes are the service's (`invalid_argument`, `not_authorized`, `not_found`, `conflict`, ...).
 

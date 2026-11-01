@@ -29,6 +29,10 @@ pub enum Outcome {
     History(History),
     Saved(SaveReport),
     Closed,
+    /// The documents the caller may read.
+    Documents(Vec<DocumentInfo>),
+    Links(LinkList),
+    Bookmarks(BookmarkList),
 }
 
 /// A document as a caller may see it. Pages are numbered from 1 and sized in points as displayed (after rotation).
@@ -78,4 +82,55 @@ pub struct SaveReport {
     pub superseded: bool,
     /// The document was closed (or replaced) before the save finished; the file is written and nothing else changed.
     pub document_open: bool,
+}
+
+/// The links of a document. At most [`MAX_LINKS`] are listed; `total` says how many there are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkList {
+    pub links: Vec<LinkSummary>,
+    pub total: usize,
+}
+
+/// The most links one `document.links` request lists. Past it the list says how many were left out.
+pub const MAX_LINKS: usize = 10_000;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkSummary {
+    /// 1-based.
+    pub page: usize,
+    /// 1-based position among the page's annotations, as the link tools take it.
+    pub index: usize,
+    /// Points from the top-left of the displayed page: left, top, right, bottom.
+    pub rect: [f32; 4],
+    pub visible: bool,
+    pub target: LinkTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// A page of this document, 1-based.
+    Page(usize),
+    Uri(String),
+    /// Something else (a named destination, a script, a file): described, not followed.
+    Other(String),
+}
+
+/// One page of bookmarks, in outline order, flat: the nesting is in each row's `path`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkList {
+    pub rows: Vec<BookmarkEntry>,
+    /// Where the next page starts, or `None` at the end.
+    pub next: Option<usize>,
+    /// The structure could not be read for editing, so the listing is the viewer's shorter copy.
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BookmarkEntry {
+    /// 1-based child positions from the top level.
+    pub path: Vec<usize>,
+    pub title: String,
+    /// 1-based page it goes to.
+    pub page: Option<usize>,
+    pub open: bool,
 }

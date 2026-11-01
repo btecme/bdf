@@ -14,6 +14,10 @@ use crate::version::DocumentKey;
 pub const SCHEMA_VERSION: u32 = 1;
 pub const OLDEST_SCHEMA: u32 = 1;
 
+/// The most bookmarks one `document.bookmarks` request returns, and how many it returns when `limit` is not given.
+pub const MAX_BOOKMARK_PAGE: usize = 1000;
+pub const DEFAULT_BOOKMARK_PAGE: usize = 100;
+
 /// A stable operation id. The spelling ([`OperationId::name`]) is the contract; the variants are not ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OperationId {
@@ -25,10 +29,13 @@ pub enum OperationId {
     EditHistory,
     DocumentSave,
     DocumentClose,
+    DocumentList,
+    DocumentLinks,
+    DocumentBookmarks,
 }
 
 impl OperationId {
-    pub const ALL: [OperationId; 8] = [
+    pub const ALL: [OperationId; 11] = [
         OperationId::DocumentOpen,
         OperationId::DocumentQuery,
         OperationId::PageRotate,
@@ -37,6 +44,9 @@ impl OperationId {
         OperationId::EditHistory,
         OperationId::DocumentSave,
         OperationId::DocumentClose,
+        OperationId::DocumentList,
+        OperationId::DocumentLinks,
+        OperationId::DocumentBookmarks,
     ];
 
     pub fn name(self) -> &'static str {
@@ -127,7 +137,7 @@ pub struct OperationDescriptor {
     pub needs_revision: bool,
 }
 
-pub static DESCRIPTORS: [OperationDescriptor; 8] = [
+pub static DESCRIPTORS: [OperationDescriptor; 11] = [
     OperationDescriptor {
         id: OperationId::DocumentOpen,
         name: "document.open",
@@ -208,6 +218,36 @@ pub static DESCRIPTORS: [OperationDescriptor; 8] = [
         needs_document: true,
         needs_revision: true,
     },
+    OperationDescriptor {
+        id: OperationId::DocumentList,
+        name: "document.list",
+        summary: "The open documents this caller may read, with their pages and whether they can be edited.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: false,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::DocumentLinks,
+        name: "document.links",
+        summary: "The links of a document: page, position, and where each goes.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::DocumentBookmarks,
+        name: "document.bookmarks",
+        summary: "One page of a document's bookmarks, in outline order.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
 ];
 
 /// One request. `schema_version` is checked before anything else.
@@ -229,14 +269,40 @@ impl OperationRequest {
 /// made against as a field, so it cannot be built without one.
 #[derive(Clone, Debug)]
 pub enum Operation {
-    Open { source: OpenSource, password: Option<String> },
+    Open {
+        source: OpenSource,
+        password: Option<String>,
+    },
     Query,
-    Rotate { expected_revision: u64, pages: PageSelection, degrees: i64 },
-    Undo { expected_revision: u64 },
-    Redo { expected_revision: u64 },
+    Rotate {
+        expected_revision: u64,
+        pages: PageSelection,
+        degrees: i64,
+    },
+    Undo {
+        expected_revision: u64,
+    },
+    Redo {
+        expected_revision: u64,
+    },
     History,
-    Save { expected_revision: u64, target: SaveTarget, overwrite: Overwrite, full: Option<bool> },
-    Close { expected_revision: u64, discard_changes: bool },
+    Save {
+        expected_revision: u64,
+        target: SaveTarget,
+        overwrite: Overwrite,
+        full: Option<bool>,
+    },
+    Close {
+        expected_revision: u64,
+        discard_changes: bool,
+    },
+    List,
+    Links,
+    /// `offset` from 0; `limit` from 1 to [`MAX_BOOKMARK_PAGE`].
+    Bookmarks {
+        offset: usize,
+        limit: usize,
+    },
 }
 
 impl Operation {
@@ -250,6 +316,9 @@ impl Operation {
             Operation::History => OperationId::EditHistory,
             Operation::Save { .. } => OperationId::DocumentSave,
             Operation::Close { .. } => OperationId::DocumentClose,
+            Operation::List => OperationId::DocumentList,
+            Operation::Links => OperationId::DocumentLinks,
+            Operation::Bookmarks { .. } => OperationId::DocumentBookmarks,
         }
     }
 
@@ -261,7 +330,7 @@ impl Operation {
             | Operation::Redo { expected_revision }
             | Operation::Save { expected_revision, .. }
             | Operation::Close { expected_revision, .. } => Some(*expected_revision),
-            Operation::Open { .. } | Operation::Query | Operation::History => None,
+            Operation::Open { .. } | Operation::Query | Operation::History | Operation::List | Operation::Links | Operation::Bookmarks { .. } => None,
         }
     }
 }

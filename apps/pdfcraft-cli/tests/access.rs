@@ -441,7 +441,7 @@ mod mcp_client {
         let secret = grant_with_folder(&state, &work, "document.read,document.edit.pages,document.save,document.close");
 
         let mut session = Session::start(&state, "agent", Some(&secret));
-        assert_eq!(session.tool_names().len(), 9);
+        assert_eq!(session.tool_names().len(), 12);
         let (opened, error) = session.tool("doc_open", json!({ "path": file.to_string_lossy() }));
         assert!(!error, "{opened}");
         let (doc, revision) = (opened["doc"].as_u64().expect("doc"), opened["revision"].as_u64().expect("revision"));
@@ -531,8 +531,8 @@ mod mcp_client {
         // Both servers are up, and have opened the log, before either of them does anything.
         let mut alpha = Session::start(&state, "alpha", Some(&alpha_secret));
         let mut beta = Session::start(&state, "beta", Some(&beta_secret));
-        assert_eq!(alpha.tool_names().len(), 9);
-        assert_eq!(beta.tool_names().len(), 9);
+        assert_eq!(alpha.tool_names().len(), 12);
+        assert_eq!(beta.tool_names().len(), 12);
 
         let (opened, error) = alpha.tool("doc_open", json!({ "path": first_file.to_string_lossy() }));
         assert!(!error, "{opened}");

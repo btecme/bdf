@@ -50,7 +50,7 @@ Moving only the six slice operations is not enough on its own, because documents
 
 ## 6. Not done, and not claimed
 
-* **Only the eight operations exist for a client.** The other 28 Core tools (section 2) have no service operation yet, so a grant-authenticated client cannot extract text, render pages, edit comments or forms, combine, split, delete or move pages, or print. This is the interim cost of option A for the MCP surface, and it is the product behaviour until the groups land: nothing is hidden by accident, the tool list is the truth.
+* **Only eleven operations exist for a client** (the eight of the first slice and `document.list`, `document.links`, `document.bookmarks`, section 8). The other Core tools (section 2) that are not among them have no service operation yet, so a grant-authenticated client cannot extract or find text, render pages, inspect a document in full, edit comments or forms, combine, split, delete or move pages, or print. This is the interim cost of option A for the MCP surface, and it is the product behaviour until the groups land: nothing is hidden by accident, the tool list is the truth.
 * **Not migrated:** the desktop (about 440 engine references across 40 files), the plain CLI subcommands, CLI `run`/`batch`, the UI control channel, and `pdfcraft-cli mcp` without `--client`. Each still bypasses the service and its policy. Until they move, the grant policy does not protect them and agent access through the whole product is **not released**.
 * **MCP resources and compact/meta tools** are not on the client server (no resources are listed; there is no `tool_search`/`tool_call`). The work item asks for them to go through the service: not done.
 * The client server was not exercised by a real agent client, only by the tests above. Hosted CI has not run on this branch. Codex has not reviewed it. The 10-second grant-lock timeout path and a lock file made by another account remain untested (BUILD-008 section 7).
@@ -80,10 +80,27 @@ Fix (`crates/app-service/src/audit.rs`, `file_lock.rs`):
 
 **Still not done or not claimed.** The ten-second lock wait timing out is not tested (it is a failed record by construction, the same as a failed write, which is tested). A lock file or segment created by another account is not tested. **B8-R5** (a revocation that could not be written is undone in memory by a later transaction that reloads the older file) is a separate finding in the merged BUILD-008 grant store; it is corrected in its own commit on this branch (see [BUILD-008](BUILD-008.md), section 8). Hosted CI, a Codex retest and the owner's acceptance are still to come, and the migration limits in section 6 are unchanged.
 
+## 8. Slice 2a: the first read-only operations (2026-11-01)
+
+The read-only group is done in three steps, each its own commit on `feat/build-009-read-only-tools` (stacked on PR #14, which it needs for the client server). This is the first: the three that are plain reads of what the engine already holds.
+
+* `document.list` (tool `doc_list`): the open documents the caller may read. For a client it is filtered by its grant, so a document outside the grant is not mentioned (the other tools' "granted nobody" answer does not apply here because nothing is named).
+* `document.links` (`link_list`): page, 1-based index, rectangle in points from the top-left of the displayed page, whether it is visible and where it goes. A request lists at most `MAX_LINKS` (10,000); the result says `total` and the adapter says `truncated`. A link whose page is not in the document cannot be placed and is counted in `total` only (the parser is not expected to produce one). The automation tool had no bound and indexed the page directly.
+* `document.bookmarks` (`bookmark_list`): one page, `offset` from 0 and `limit` from 1 to `MAX_BOOKMARK_PAGE` (1,000; 100 when not given), flat in the service and nested by the adapter with the same code the automation tool uses (`nest_rows`, now shared).
+
+All three are `Core`, `Access::Read`, need `document.read` and change nothing (`list` names no document; the others name one and are scoped like `document.query`). Each is one audit record without what was read.
+
+**Tests (local, Windows 11 x64, Rust 1.99.0, two jobs).** `crates/app-service/tests/service.rs` (+7): links with their place, page and target; none in a plain document; bookmarks in order a page at a time, an offset past the end an empty page; the bound on a page and that a bad bound changes nothing (including `usize::MAX`); `list` names what is open and moves nothing; a closed, unknown or other-session document is `not_found`; a list of 10,005 links is capped at 10,000 with the total. `tests/agents.rs` (+3): a grant limited to one document lists, reads links and bookmarks of that one only and gets one answer for another, a missing and a foreign document; a grant without `document.read` is refused all three; each is audited and the record holds none of the titles, URLs or the file name. `crates/automation/tests/client_mcp.rs` (+2): a read-only grant uses all three tools end to end with strict arguments; **the client tools answer exactly as the automation tools do** for links and for four bookmark pages (only `revision` is added). The table-pinning tests (descriptor order, typed request against descriptor, the read-only allow-list) were updated to eleven operations.
+
+**Seen to fail with the thing broken:** `list` ignoring who is asking fails the scoped-client test; no check of the bookmark limit fails the bound test; no cap on links fails the cap test; a 0-based link page and a 0-based bookmark path each fail their listing test.
+
+**Not done in this step:** `doc_inspect` and the full `doc_info` document (metadata, annotations, form fields, layers, attachments, fonts, security), text extraction and search, `page_render` and `render_preview`. The client server's `doc_info` is still the small description of the first slice. Not hosted, not reviewed by Codex, and the desktop, CLI subcommands, `run`/`batch` and the older MCP server are unchanged.
+
 ## Revision history
 
 | Date | Change |
 |---|---|
 | 2026-10-31 | First version: inventory of the entry points that bypass the service and the migration options. |
 | 2026-10-31 | Owner chose option A; first slice: the grant-gated MCP server over the service, with tests and mutation proofs. |
+| 2026-11-01 | Slice 2a (stacked on PR #14): `document.list`, `document.links`, `document.bookmarks` through the service and the client MCP server, with parity against the automation tools and mutation proofs; not hosted or reviewed. |
 | 2026-11-01 | Corrections for the PR #14 review: shared audit log written under a cross-process lock and re-read when another writer moved it (R14-1); adapter-level refusals recorded through `Service::reject` (R14-2); regressions seen to fail with each defect restored. |

@@ -33,10 +33,13 @@ pub use effects::Effect;
 pub use errors::{ConflictKind, ErrorCode, OperationError, Result};
 pub use grants::{AuthError, DocumentScope, FileAccess, GrantError, GrantRequest, GrantStore, GrantTerms, IssuedGrant, Scope};
 pub use operations::{
-    Access, Capability, DESCRIPTORS, OLDEST_SCHEMA, OpenSource, Operation, OperationDescriptor, OperationId, OperationRequest, Overwrite,
-    PageSelection, Release, SCHEMA_VERSION, SaveTarget,
+    Access, Capability, DEFAULT_BOOKMARK_PAGE, DESCRIPTORS, MAX_BOOKMARK_PAGE, OLDEST_SCHEMA, OpenSource, Operation, OperationDescriptor,
+    OperationId, OperationRequest, Overwrite, PageSelection, Release, SCHEMA_VERSION, SaveTarget,
 };
 pub use policy::{Denial, DenyReason, Facts, FileUse, Policy, ReleaseProfile, Watch};
-pub use results::{DocumentInfo, History, OperationResult, Outcome, PageSummary, SaveReport};
+pub use results::{
+    BookmarkEntry, BookmarkList, DocumentInfo, History, LinkList, LinkSummary, LinkTarget, MAX_LINKS, OperationResult, Outcome, PageSummary,
+    SaveReport,
+};
 pub use service::{DocumentView, MAX_OPEN_BYTES, MAX_SAVES_IN_FLIGHT, PreparedSave, RequestContext, SchemaRange, ScriptTrust, Service, WrittenSave};
 pub use version::{DocumentKey, DocumentVersion, SavedSnapshot, SessionId};

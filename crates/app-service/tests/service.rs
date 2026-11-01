@@ -34,6 +34,37 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+/// Two pages. Page 1 carries a web link and a link to page 2; the outline has two top-level bookmarks, one for each page.
+fn fixture_with_links_and_bookmarks() -> Vec<u8> {
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R >>",
+        "<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [9 0 R 10 0 R] >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Outlines /First 11 0 R /Last 12 0 R /Count 2 >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 80 30] /A << /S /URI /URI (https://example.com/) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 40 80 60] /Dest [6 0 R /Fit] >>",
+        "<< /Title (Intro) /Parent 8 0 R /Dest [4 0 R /Fit] /Next 12 0 R >>",
+        "<< /Title (Second) /Parent 8 0 R /Dest [6 0 R /Fit] /Prev 11 0 R >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 /// The person at the keyboard.
 fn me() -> ActorContext {
     ActorContext::local_user().expect("the current user")
@@ -109,6 +140,9 @@ fn every_operation_has_one_descriptor_and_the_descriptor_matches_the_typed_reque
         Operation::History,
         Operation::Save { expected_revision: 0, target: SaveTarget::Tracked, overwrite: Overwrite::Tracked, full: None },
         Operation::Close { expected_revision: 0, discard_changes: false },
+        Operation::List,
+        Operation::Links,
+        Operation::Bookmarks { offset: 0, limit: DEFAULT_BOOKMARK_PAGE },
     ];
     assert_eq!(samples.len(), OperationId::ALL.len());
     for op in samples {
@@ -764,4 +798,155 @@ fn the_open_size_limit_refuses_a_large_file_as_a_resource_limit_and_opens_one_at
     assert_eq!(error.code, ErrorCode::ResourceLimit);
     // A limit above the maximum is the maximum.
     assert!(Service::new().with_open_limit(u64::MAX).documents(&me()).is_empty());
+}
+
+// ---- reading: list, links, bookmarks ----
+
+fn open_links_fixture(service: &mut Service) -> (DocumentKey, DocumentVersion) {
+    let source = OpenSource::Bytes { name: "links.pdf".into(), bytes: Arc::new(fixture_with_links_and_bookmarks()) };
+    let done = run(service, None, Operation::Open { source, password: None }).expect("opens");
+    match done.outcome {
+        Outcome::Opened { document, .. } => (document, done.version.expect("a version")),
+        other => panic!("opened a document, got {other:?}"),
+    }
+}
+
+fn links_of(service: &mut Service, key: DocumentKey) -> LinkList {
+    match run(service, Some(key), Operation::Links).expect("lists links").outcome {
+        Outcome::Links(list) => list,
+        other => panic!("links, got {other:?}"),
+    }
+}
+
+fn bookmarks_of(service: &mut Service, key: DocumentKey, offset: usize, limit: usize) -> Result<BookmarkList> {
+    run(service, Some(key), Operation::Bookmarks { offset, limit }).map(|done| match done.outcome {
+        Outcome::Bookmarks(list) => list,
+        other => panic!("bookmarks, got {other:?}"),
+    })
+}
+
+#[test]
+fn links_are_listed_with_their_place_and_where_they_go() {
+    let mut service = Service::new();
+    let (key, _) = open_links_fixture(&mut service);
+    let list = links_of(&mut service, key);
+    assert_eq!(list.total, 2);
+    assert_eq!(list.links.len(), 2);
+    // The web link: page 1, the first annotation, in points from the top-left of the displayed page (the page is 300 high).
+    let web = &list.links[0];
+    assert_eq!((web.page, web.index), (1, 1));
+    assert_eq!(web.rect, [10.0, 270.0, 80.0, 290.0]);
+    assert_eq!(web.target, LinkTarget::Uri("https://example.com/".into()));
+    // The internal link names page 2, 1-based.
+    let internal = &list.links[1];
+    assert_eq!((internal.page, internal.index), (1, 2));
+    assert_eq!(internal.rect, [10.0, 240.0, 80.0, 260.0]);
+    assert_eq!(internal.target, LinkTarget::Page(2));
+}
+
+#[test]
+fn a_document_without_links_or_bookmarks_lists_none() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 2);
+    let list = links_of(&mut service, key);
+    assert_eq!((list.total, list.links.len()), (0, 0));
+    let bookmarks = bookmarks_of(&mut service, key, 0, 10).expect("lists");
+    assert_eq!((bookmarks.rows.len(), bookmarks.next), (0, None));
+}
+
+#[test]
+fn bookmarks_come_in_outline_order_a_page_at_a_time() {
+    let mut service = Service::new();
+    let (key, _) = open_links_fixture(&mut service);
+    let first = bookmarks_of(&mut service, key, 0, 1).expect("lists");
+    assert_eq!(first.rows, [BookmarkEntry { path: vec![1], title: "Intro".into(), page: Some(1), open: false }]);
+    assert_eq!(first.next, Some(1), "there is more");
+    let rest = bookmarks_of(&mut service, key, first.next.expect("a next page"), 1).expect("lists");
+    assert_eq!(rest.rows, [BookmarkEntry { path: vec![2], title: "Second".into(), page: Some(2), open: false }]);
+    assert_eq!(rest.next, None, "that was the last");
+    // Everything in one page is the same two rows, and an offset past the end is an empty page, not an error.
+    assert_eq!(bookmarks_of(&mut service, key, 0, DEFAULT_BOOKMARK_PAGE).expect("lists").rows.len(), 2);
+    assert!(bookmarks_of(&mut service, key, 50, 10).expect("lists").rows.is_empty());
+}
+
+#[test]
+fn a_bookmark_page_is_bounded_and_a_bad_bound_changes_nothing() {
+    let mut service = Service::new();
+    let (key, before) = open_links_fixture(&mut service);
+    for limit in [0, MAX_BOOKMARK_PAGE + 1, usize::MAX] {
+        let error = bookmarks_of(&mut service, key, 0, limit).expect_err("refused");
+        assert_eq!(error.code, ErrorCode::InvalidArgument, "limit {limit}");
+    }
+    assert!(bookmarks_of(&mut service, key, 0, MAX_BOOKMARK_PAGE).is_ok(), "the bound itself is allowed");
+    assert!(bookmarks_of(&mut service, key, usize::MAX, 10).expect("an offset past the end").rows.is_empty());
+    assert_eq!(service.document(&me(), key).expect("open").version(), before);
+}
+
+#[test]
+fn listing_names_the_open_documents_and_changes_nothing() {
+    let mut service = Service::new();
+    let listed = |service: &mut Service| match run(service, None, Operation::List).expect("lists").outcome {
+        Outcome::Documents(documents) => documents,
+        other => panic!("documents, got {other:?}"),
+    };
+    assert!(listed(&mut service).is_empty());
+    let (first, v1) = open_bytes(&mut service, 1);
+    let (second, _) = open_links_fixture(&mut service);
+    let documents = listed(&mut service);
+    assert_eq!(documents.iter().map(|d| d.document).collect::<Vec<_>>(), [first, second]);
+    assert_eq!(documents.iter().map(|d| d.pages.len()).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(service.document(&me(), first).expect("open").version(), v1, "reading moved nothing");
+    run(&mut service, Some(first), Operation::Close { expected_revision: v1.content_revision, discard_changes: false }).expect("closes");
+    assert_eq!(listed(&mut service).iter().map(|d| d.document).collect::<Vec<_>>(), [second]);
+}
+
+#[test]
+fn reading_links_and_bookmarks_of_a_closed_or_unknown_document_is_not_found() {
+    let mut service = Service::new();
+    let (key, v) = open_links_fixture(&mut service);
+    let other_session = DocumentKey { session: Service::new().session_id(), document: key.document };
+    let unknown = DocumentKey { session: service.session_id(), document: 9_999 };
+    run(&mut service, Some(key), Operation::Close { expected_revision: v.content_revision, discard_changes: false }).expect("closes");
+    for gone in [key, other_session, unknown] {
+        assert_eq!(run(&mut service, Some(gone), Operation::Links).expect_err("refused").code, ErrorCode::NotFound);
+        assert_eq!(run(&mut service, Some(gone), Operation::Bookmarks { offset: 0, limit: 10 }).expect_err("refused").code, ErrorCode::NotFound);
+    }
+}
+
+#[test]
+fn a_list_of_links_is_capped_and_says_how_many_there_are() {
+    // One page with more links than a request lists.
+    let count = MAX_LINKS + 5;
+    let annots: Vec<String> = (0..count).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [{}] >>", annots.join(" ")),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    objs.extend((0..count).map(|_| "<< /Type /Annot /Subtype /Link /Rect [10 10 80 30] /A << /S /URI /URI (https://example.com/) >> >>".to_string()));
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut service = Service::new();
+    let source = OpenSource::Bytes { name: "many.pdf".into(), bytes: Arc::new(bytes) };
+    let key = match run(&mut service, None, Operation::Open { source, password: None }).expect("opens").outcome {
+        Outcome::Opened { document, .. } => document,
+        other => panic!("opened, got {other:?}"),
+    };
+    let list = links_of(&mut service, key);
+    assert_eq!(list.total, count);
+    assert_eq!(list.links.len(), MAX_LINKS);
+    assert_eq!(list.links[MAX_LINKS - 1].index, MAX_LINKS, "the first ones, in order");
 }

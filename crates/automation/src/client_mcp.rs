@@ -9,8 +9,8 @@
 //!   this build is and which operations it has. It lists no files and returns no document content (the specification's
 //!   rule for an MCP invocation that has no grant); every other tool call is refused.
 //! * **With a grant** the tools are the service's operations, under the names the automation tools already use where
-//!   there is one: `doc_open`, `doc_info`, `page_rotate`, `edit_undo`, `edit_redo`, `edit_history`, `doc_save` and
-//!   `doc_close`. What the grant allows is the policy's decision, not this module's: a read-only grant lists the same
+//!   there is one: `doc_open`, `doc_info`, `doc_list`, `link_list`, `bookmark_list`, `page_rotate`, `edit_undo`,
+//!   `edit_redo`, `edit_history`, `doc_save` and `doc_close`. What the grant allows is the policy's decision, not this module's: a read-only grant lists the same
 //!   tools and is refused at the call.
 //! * A tool that changes or discards content names the revision it was made against (`revision`, from the last reply).
 //!
@@ -20,14 +20,17 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use pdfcraft_app_service::{
-    ActorContext, ConflictKind, DESCRIPTORS, DocumentInfo, DocumentKey, Effect, ErrorCode, History, OpenSource, Operation, OperationError,
-    OperationId, OperationRequest, OperationResult, Outcome, Overwrite, PageSelection, RequestContext, SaveReport, SaveTarget, Service,
+    ActorContext, BookmarkList, ConflictKind, DEFAULT_BOOKMARK_PAGE, DESCRIPTORS, DocumentInfo, DocumentKey, Effect, ErrorCode, History, LinkList,
+    LinkTarget, OpenSource, Operation, OperationError, OperationId, OperationRequest, OperationResult, Outcome, Overwrite, PageSelection,
+    RequestContext, SaveReport, SaveTarget, Service,
 };
 use serde_json::{Map, Value, json};
 
 use crate::mcp::{
     DEFAULT_MAX_MESSAGE, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, PROTOCOL_VERSIONS, check_keys, error, serve_lines,
 };
+
+use crate::{BookmarkView, nest_rows};
 
 /// The one tool a caller without a grant can use.
 const HELP: &str = "bdf_help";
@@ -220,7 +223,7 @@ struct Spec {
     build: Build,
 }
 
-static SPECS: [Spec; 8] = [
+static SPECS: [Spec; 11] = [
     Spec {
         name: "doc_open",
         operation: OperationId::DocumentOpen,
@@ -332,6 +335,43 @@ static SPECS: [Spec; 8] = [
             ))
         },
     },
+    Spec {
+        name: "doc_list",
+        operation: OperationId::DocumentList,
+        title: "List open documents",
+        description: "The open documents this client may read, each with its id, pages and whether it can be edited.",
+        args: &[],
+        read_only: true,
+        destructive: false,
+        build: |_| Ok((None, Operation::List)),
+    },
+    Spec {
+        name: "link_list",
+        operation: OperationId::DocumentLinks,
+        title: "List links",
+        description: "Every link: page, 1-based index, rect (points from the top-left of the page), and where it goes (url, to_page or other).",
+        args: &[("doc", "integer", true)],
+        read_only: true,
+        destructive: false,
+        build: |a| Ok((Some(a.doc()?), Operation::Links)),
+    },
+    Spec {
+        name: "bookmark_list",
+        operation: OperationId::DocumentBookmarks,
+        title: "List bookmarks",
+        description: "One page of the bookmarks, nested as the outline is. `next` is the offset of the following page, when there is one.",
+        args: &[("doc", "integer", true), ("offset", "integer", false), ("limit", "integer", false)],
+        read_only: true,
+        destructive: false,
+        build: |a| {
+            let offset = a.opt_uint("offset")?.unwrap_or(0);
+            let limit = a.opt_uint("limit")?.unwrap_or(DEFAULT_BOOKMARK_PAGE as u64);
+            // A value too large for this machine is as out of range as one the service would refuse.
+            let offset = usize::try_from(offset).map_err(|_| "offset is too large".to_string())?;
+            let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+            Ok((Some(a.doc()?), Operation::Bookmarks { offset, limit }))
+        },
+    },
 ];
 
 fn document_tools() -> Vec<Value> {
@@ -399,6 +439,13 @@ impl Args<'_> {
         match self.get(key) {
             None => Err(format!("{key} is required")),
             Some(v) => v.as_u64().ok_or_else(|| format!("{key} must be a whole number, 0 or more")),
+        }
+    }
+
+    fn opt_uint(&self, key: &str) -> Result<Option<u64>, String> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(v) => v.as_u64().map(Some).ok_or_else(|| format!("{key} must be a whole number, 0 or more")),
         }
     }
 
@@ -475,6 +522,9 @@ fn success(result: &OperationResult) -> Value {
         Outcome::History(h) => history_json(h),
         Outcome::Saved(report) => saved_json(report),
         Outcome::Closed => json!({ "closed": true }),
+        Outcome::Documents(documents) => json!({ "documents": documents.iter().map(info_json).collect::<Vec<_>>() }),
+        Outcome::Links(list) => links_json(list),
+        Outcome::Bookmarks(list) => bookmarks_json(list),
     };
     if let Some(version) = &result.version {
         body["revision"] = json!(version.content_revision);
@@ -499,6 +549,33 @@ fn info_json(info: &DocumentInfo) -> Value {
         "encrypted": info.encrypted,
         "has_file": info.has_file,
     })
+}
+
+fn links_json(list: &LinkList) -> Value {
+    let links: Vec<Value> = list
+        .links
+        .iter()
+        .map(|l| {
+            let mut link = json!({ "page": l.page, "index": l.index, "rect": l.rect, "visible": l.visible });
+            match &l.target {
+                LinkTarget::Page(page) => link["to_page"] = json!(page),
+                LinkTarget::Uri(url) => link["url"] = json!(url),
+                LinkTarget::Other(other) => link["other"] = json!(other),
+            }
+            link
+        })
+        .collect();
+    let mut body = json!({ "count": links.len(), "links": links });
+    if list.total > links.len() {
+        body["total"] = json!(list.total);
+        body["truncated"] = json!(true);
+    }
+    body
+}
+
+fn bookmarks_json(list: &BookmarkList) -> Value {
+    let rows = list.rows.iter().map(|r| BookmarkView { path: r.path.clone(), title: &r.title, page: r.page, open: r.open });
+    json!({ "bookmarks": nest_rows(rows), "next": list.next, "truncated": list.truncated })
 }
 
 fn history_json(h: &History) -> Value {

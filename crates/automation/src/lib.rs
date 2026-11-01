@@ -881,7 +881,13 @@ impl Automation {
             .session
             .bookmark_page(id, offset, limit)
             .ok_or_else(|| ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)))?;
-        Ok(json!({ "bookmarks": nest_rows(&page.rows), "next": page.next, "truncated": page.truncated }))
+        let rows = page.rows.iter().map(|row| BookmarkView {
+            path: row.path.iter().map(|p| p.saturating_add(1)).collect(),
+            title: &row.title,
+            page: row.page.map(|p| p.saturating_add(1)),
+            open: row.open,
+        });
+        Ok(json!({ "bookmarks": nest_rows(rows), "next": page.next, "truncated": page.truncated }))
     }
 
     fn doc(&self, a: &Args) -> Result<&Document> {
@@ -2182,7 +2188,16 @@ impl Args<'_> {
 
 /// Bookmark rows in listing order as JSON: a row holds the rows that follow it on the page at the
 /// next level down in `children`, and paths and pages are 1-based.
-fn nest_rows(rows: &[pdfcraft_engine::BookmarkRow]) -> Vec<Value> {
+/// A bookmark as a tool shows it: the path and the page are 1-based.
+pub(crate) struct BookmarkView<'a> {
+    pub(crate) path: Vec<usize>,
+    pub(crate) title: &'a str,
+    pub(crate) page: Option<usize>,
+    pub(crate) open: bool,
+}
+
+/// Bookmarks in outline order, nested by the depth of their paths. Shared by the automation tool and the client server.
+pub(crate) fn nest_rows<'a>(rows: impl IntoIterator<Item = BookmarkView<'a>>) -> Vec<Value> {
     // The open rows, outermost first, with their depth and the children gathered so far.
     let mut open: Vec<(usize, Value, Vec<Value>)> = Vec::new();
     let mut roots = Vec::new();
@@ -2191,8 +2206,7 @@ fn nest_rows(rows: &[pdfcraft_engine::BookmarkRow]) -> Vec<Value> {
         while open.last().is_some_and(|(d, _, _)| *d >= depth) {
             close_row(&mut open, &mut roots);
         }
-        let path: Vec<usize> = row.path.iter().map(|p| p.saturating_add(1)).collect();
-        let fields = json!({ "path": path, "title": row.title, "page": row.page.map(|p| p.saturating_add(1)), "open": row.open });
+        let fields = json!({ "path": row.path, "title": row.title, "page": row.page, "open": row.open });
         open.push((depth, fields, Vec::new()));
     }
     while !open.is_empty() {
