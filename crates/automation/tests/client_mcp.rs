@@ -3,8 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
+use pdfcraft_app_service::audit::AuditError;
 use pdfcraft_app_service::{
-    ActorContext, Capability, ClientId, DESCRIPTORS, DocumentScope, FileAccess, GrantRequest, GrantStore, OsPrincipal, Policy, Scope, Service,
+    ActorContext, AuditEntry, AuditRecord, AuditSink, Capability, ClientId, DESCRIPTORS, DocumentScope, FileAccess, FileAudit, GrantRequest,
+    GrantStore, OsPrincipal, Policy, Scope, Service,
 };
 use pdfcraft_automation::client_mcp::ClientMcpServer;
 use serde_json::{Value, json};
@@ -357,4 +359,86 @@ fn every_service_operation_has_exactly_one_tool() {
     let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
     // help plus one tool per descriptor: a new operation without a tool (or the reverse) fails here.
     assert_eq!(tool_names(&mut server).len(), DESCRIPTORS.len() + 1);
+}
+
+// ---- the record of a call the adapter refuses -----------------------------------------------------------------------
+
+/// A server whose service records to the file log in `log`.
+fn audited(f: &Fixture, actor: ActorContext, log: &Path) -> ClientMcpServer {
+    let audit = FileAudit::open(log).expect("opens the log");
+    ClientMcpServer::new(Service::new().with_policy(Policy::with_grants(f.grants.clone())).with_audit(Box::new(audit)), Some(actor))
+}
+
+/// The records in `log`, oldest first.
+fn recorded(log: &Path) -> Vec<Value> {
+    pdfcraft_app_service::audit::recent_lines(log, 1000)
+        .expect("reads the log")
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("a JSON record"))
+        .collect()
+}
+
+#[test]
+fn a_call_refused_for_its_arguments_is_recorded_with_who_asked_and_nothing_they_sent() {
+    let f = Fixture::new("refused-recorded");
+    let log = f.dir.join("log");
+    let path = f.file(&f.work, "a.pdf", 2);
+    let mut server = audited(&f, f.issue("agent", &[Capability::DocumentRead, Capability::DocumentEditPages]), &log);
+    let opened = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
+    let doc = opened["doc"].as_u64().expect("doc");
+    assert_eq!(recorded(&log).len(), 1, "the open");
+
+    let hidden = "hunter2-not-for-the-log";
+    let hidden_path = f.elsewhere.join("never-for-the-log.pdf").to_string_lossy().into_owned();
+    // Each is refused before it is an operation: a negative revision, a name the tool does not have, a value of the wrong
+    // type, a missing argument, and arguments that are not an object.
+    let refused: [(&str, Value, &str); 5] = [
+        ("page_rotate", json!({ "doc": doc, "revision": -1, "degrees": 90 }), "page.rotate"),
+        ("page_rotate", json!({ "doc": doc, "revision": 0, "degrees": 90, "bogus": hidden }), "page.rotate"),
+        ("doc_open", json!({ "path": hidden_path, "password": 5 }), "document.open"),
+        ("doc_save", json!({ "doc": doc, "path": hidden_path }), "document.save"),
+        ("edit_undo", json!(hidden), "edit.undo"),
+    ];
+    for (n, (tool, args, operation)) in refused.iter().enumerate() {
+        let reply = rpc(&mut server, 10, "tools/call", json!({ "name": tool, "arguments": args }));
+        let shown = reply.to_string();
+        assert!(reply.get("error").is_some() || reply["result"]["isError"] == true, "{tool} {args}: {shown}");
+        let records = recorded(&log);
+        assert_eq!(records.len(), 2 + n, "{tool} {args}: one record for the refusal");
+        let last = records.last().expect("a record");
+        assert_eq!(last["op"], *operation, "{tool}");
+        assert_eq!(last["outcome"], "failed", "{tool}");
+        assert_eq!(last["reason"], "invalid_argument", "{tool}");
+        assert_eq!(last["client"], "agent");
+        assert!(last["grant"].as_str().is_some_and(|g| g.starts_with("g-")), "{last}");
+    }
+    let everything = std::fs::read_to_string(log.join("audit-000001.jsonl")).expect("reads the log");
+    for forbidden in [hidden, "never-for-the-log", "hunter2", "bogus"] {
+        assert!(!everything.contains(forbidden), "{forbidden} reached the log: {everything}");
+    }
+    // The refusals do not stop the client, and the log is whole.
+    assert_eq!(ok(&mut server, "doc_info", json!({ "doc": doc }))["name"], "a.pdf");
+    let report = pdfcraft_app_service::audit::verify(&log).expect("verifies");
+    assert_eq!((report.records, report.first_bad), (7, None));
+}
+
+#[test]
+fn a_refusal_that_cannot_be_recorded_stops_the_next_call_like_any_other_failed_record() {
+    struct Broken;
+    impl AuditSink for Broken {
+        fn record(&mut self, _: AuditEntry) -> Result<AuditRecord, AuditError> {
+            Err(AuditError("the disk is full".into()))
+        }
+    }
+    let f = Fixture::new("refused-unrecorded");
+    let path = f.file(&f.work, "a.pdf", 1);
+    let actor = f.issue("agent", &[Capability::DocumentRead]);
+    let mut server =
+        ClientMcpServer::new(Service::new().with_policy(Policy::with_grants(f.grants.clone())).with_audit(Box::new(Broken)), Some(actor));
+    // The only thing this client has done is send a malformed request, and that could not be recorded.
+    let (_, is_error) = call(&mut server, "doc_open", json!({ "path": 7 }));
+    assert!(is_error);
+    let (body, is_error) = call(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
+    assert!(is_error, "{body}");
+    assert_eq!(body["error"]["reason"], "audit_unavailable", "{body}");
 }

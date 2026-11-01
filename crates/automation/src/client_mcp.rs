@@ -20,8 +20,8 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use pdfcraft_app_service::{
-    ActorContext, ConflictKind, DESCRIPTORS, DocumentInfo, DocumentKey, Effect, History, OpenSource, Operation, OperationError, OperationRequest,
-    OperationResult, Outcome, Overwrite, PageSelection, RequestContext, SaveReport, SaveTarget, Service,
+    ActorContext, ConflictKind, DESCRIPTORS, DocumentInfo, DocumentKey, Effect, ErrorCode, History, OpenSource, Operation, OperationError,
+    OperationId, OperationRequest, OperationResult, Outcome, Overwrite, PageSelection, RequestContext, SaveReport, SaveTarget, Service,
 };
 use serde_json::{Map, Value, json};
 
@@ -110,12 +110,7 @@ impl ClientMcpServer {
             "tools/list" => Ok(json!({ "tools": self.tool_list() })),
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "tools/call needs a tool name".to_string()))?;
-                let args = match params.get("arguments") {
-                    None | Some(Value::Null) => Map::new(),
-                    Some(Value::Object(o)) => o.clone(),
-                    Some(_) => return Err((INVALID_PARAMS, "arguments must be an object".into())),
-                };
-                self.call(name, &args)
+                self.call(name, params.get("arguments"))
             }
             "resources/list" => Ok(json!({ "resources": [] })),
             "resources/templates/list" => Ok(json!({ "resourceTemplates": [] })),
@@ -138,9 +133,15 @@ impl ClientMcpServer {
         tools
     }
 
-    fn call(&mut self, name: &str, args: &Map<String, Value>) -> Result<Value, (i64, String)> {
+    fn call(&mut self, name: &str, arguments: Option<&Value>) -> Result<Value, (i64, String)> {
+        let args = match arguments {
+            None | Some(Value::Null) => Some(Map::new()),
+            Some(Value::Object(o)) => Some(o.clone()),
+            Some(_) => None,
+        };
         if name == HELP {
-            check_keys(name, &Value::Object(args.clone()), &[]).map_err(|e| (INVALID_PARAMS, e))?;
+            let args = args.ok_or((INVALID_PARAMS, "arguments must be an object".to_string()))?;
+            check_keys(name, &Value::Object(args), &[]).map_err(|e| (INVALID_PARAMS, e))?;
             return Ok(self.help());
         }
         let Some(spec) = SPECS.iter().find(|s| s.name == name) else {
@@ -149,13 +150,35 @@ impl ClientMcpServer {
         if self.actor.is_none() {
             return Ok(refusal("not_authorized", "this server was started without a valid grant; call bdf_help, or ask the person to issue a grant"));
         }
+        // From here a client with a grant is asking for a document operation, so whatever is wrong with the request is
+        // recorded, as every other outcome is.
+        let Some(args) = args else {
+            return self.refuse_protocol(spec, "arguments must be an object".into());
+        };
         let allowed: Vec<&str> = spec.args.iter().map(|a| a.0).collect();
-        check_keys(name, &Value::Object(args.clone()), &allowed).map_err(|e| (INVALID_PARAMS, e))?;
-        let (document, operation) = match (spec.build)(&Args { map: args, session: self.service.session_id() }) {
+        if let Err(message) = check_keys(name, &Value::Object(args.clone()), &allowed) {
+            return self.refuse_protocol(spec, message);
+        }
+        let (document, operation) = match (spec.build)(&Args { map: &args, session: self.service.session_id() }) {
             Ok(pair) => pair,
-            Err(message) => return Ok(refusal("invalid_argument", &message)),
+            Err(message) => return Ok(failure(&self.reject(spec, message))),
         };
         Ok(self.run(document, operation))
+    }
+
+    /// Record a request for `spec` that was refused for its arguments, and return the error to show: the service's, so a
+    /// log that cannot be written stops the next call, as it does for a call that reached the service.
+    fn reject(&mut self, spec: &Spec, message: String) -> OperationError {
+        let Some(actor) = self.actor.clone() else { return OperationError::invalid(message) };
+        self.next_request = self.next_request.saturating_add(1);
+        self.service.reject(&RequestContext::new(self.next_request, actor), spec.operation, OperationError::invalid(message))
+    }
+
+    /// A malformed request is a JSON-RPC error; it is recorded all the same, and shown as the service's refusal instead if
+    /// the service is not serving clients.
+    fn refuse_protocol(&mut self, spec: &Spec, message: String) -> Result<Value, (i64, String)> {
+        let error = self.reject(spec, message);
+        if error.code == ErrorCode::InvalidArgument { Err((INVALID_PARAMS, error.message)) } else { Ok(failure(&error)) }
     }
 
     fn run(&mut self, document: Option<DocumentKey>, operation: Operation) -> Value {
@@ -186,6 +209,8 @@ type Build = fn(&Args<'_>) -> Result<(Option<DocumentKey>, Operation), String>;
 
 struct Spec {
     name: &'static str,
+    /// The service operation the tool is, for the record of a call that is refused before it becomes one.
+    operation: OperationId,
     title: &'static str,
     description: &'static str,
     /// Argument name, JSON type, and whether it is required.
@@ -198,6 +223,7 @@ struct Spec {
 static SPECS: [Spec; 8] = [
     Spec {
         name: "doc_open",
+        operation: OperationId::DocumentOpen,
         title: "Open a PDF",
         description: "Open a PDF file and return its document id, revision, pages and whether it can be edited.",
         args: &[("path", "string", true), ("password", "string", false)],
@@ -207,6 +233,7 @@ static SPECS: [Spec; 8] = [
     },
     Spec {
         name: "doc_info",
+        operation: OperationId::DocumentQuery,
         title: "Describe a document",
         description: "Pages (1-based, as displayed), whether the document can be edited and its current revision.",
         args: &[("doc", "integer", true)],
@@ -216,6 +243,7 @@ static SPECS: [Spec; 8] = [
     },
     Spec {
         name: "page_rotate",
+        operation: OperationId::PageRotate,
         title: "Rotate pages",
         description: "Rotate pages by a multiple of 90 degrees (positive is clockwise): the listed pages, or all. Undoable.",
         args: &[("doc", "integer", true), ("revision", "integer", true), ("pages", "array", false), ("degrees", "integer", true)],
@@ -231,6 +259,7 @@ static SPECS: [Spec; 8] = [
     },
     Spec {
         name: "edit_undo",
+        operation: OperationId::EditUndo,
         title: "Undo",
         description: "Undo the last change. Needs the capability of the change it undoes.",
         args: &[("doc", "integer", true), ("revision", "integer", true)],
@@ -240,6 +269,7 @@ static SPECS: [Spec; 8] = [
     },
     Spec {
         name: "edit_redo",
+        operation: OperationId::EditRedo,
         title: "Redo",
         description: "Redo the last undone change. Needs the capability of the change it redoes.",
         args: &[("doc", "integer", true), ("revision", "integer", true)],
@@ -249,6 +279,7 @@ static SPECS: [Spec; 8] = [
     },
     Spec {
         name: "edit_history",
+        operation: OperationId::EditHistory,
         title: "What undo and redo would do",
         description: "The next undo and redo steps and whether anything is unsaved.",
         args: &[("doc", "integer", true)],
@@ -258,6 +289,7 @@ static SPECS: [Spec; 8] = [
     },
     Spec {
         name: "doc_save",
+        operation: OperationId::DocumentSave,
         title: "Save",
         description: "Write the document to its file, or to `path`. It replaces only the version of the file this session read or wrote: \
 `replace_version` names another (a 64-digit fingerprint you have inspected), `create_only` requires that no file exists.",
@@ -287,6 +319,7 @@ static SPECS: [Spec; 8] = [
     },
     Spec {
         name: "doc_close",
+        operation: OperationId::DocumentClose,
         title: "Close a document",
         description: "Close a document. It refuses to drop unsaved changes unless `discard_changes` is true.",
         args: &[("doc", "integer", true), ("revision", "integer", true), ("discard_changes", "boolean", false)],

@@ -417,8 +417,12 @@ mod mcp_client {
     }
 
     fn grant_with_folder(state: &Path, folder: &Path, allow: &str) -> String {
+        grant_for(state, "agent", folder, allow)
+    }
+
+    fn grant_for(state: &Path, client: &str, folder: &Path, allow: &str) -> String {
         let folder = folder.to_string_lossy().into_owned();
-        let issued = json(&run(state, &["grant", "issue", "--client", "agent", "--allow", allow, "--read", &folder, "--write", &folder]));
+        let issued = json(&run(state, &["grant", "issue", "--client", client, "--allow", allow, "--read", &folder, "--write", &folder]));
         issued["secret"].as_str().expect("a secret").to_owned()
     }
 
@@ -512,6 +516,50 @@ mod mcp_client {
             let message = text(&result.stderr);
             assert!(message.contains("--client") || message.contains("--compact"), "{message}");
         }
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn two_clients_running_at_once_keep_both_histories_and_a_refused_call_is_recorded_too() {
+        let state = private_dir("mcp-two-clients");
+        let (work, first_file) = work_folder(&state);
+        let second_file = work.join("b.pdf");
+        std::fs::write(&second_file, pdf()).expect("writes");
+        let allow = "document.read,document.edit.pages,document.save,document.close";
+        let (alpha_secret, beta_secret) = (grant_for(&state, "alpha", &work, allow), grant_for(&state, "beta", &work, allow));
+
+        // Both servers are up, and have opened the log, before either of them does anything.
+        let mut alpha = Session::start(&state, "alpha", Some(&alpha_secret));
+        let mut beta = Session::start(&state, "beta", Some(&beta_secret));
+        assert_eq!(alpha.tool_names().len(), 9);
+        assert_eq!(beta.tool_names().len(), 9);
+
+        let (opened, error) = alpha.tool("doc_open", json!({ "path": first_file.to_string_lossy() }));
+        assert!(!error, "{opened}");
+        let (doc, revision) = (opened["doc"].as_u64().expect("doc"), opened["revision"].as_u64().expect("revision"));
+        let (opened_b, error) = beta.tool("doc_open", json!({ "path": second_file.to_string_lossy() }));
+        assert!(!error, "{opened_b}");
+        let (rotated, error) = alpha.tool("page_rotate", json!({ "doc": doc, "revision": revision, "pages": [1], "degrees": 90 }));
+        assert!(!error, "{rotated}");
+        let out = work.join("out.pdf");
+        let (saved, error) =
+            alpha.tool("doc_save", json!({ "doc": doc, "revision": rotated["revision"], "path": out.to_string_lossy(), "create_only": true }));
+        assert!(!error, "{saved}");
+        let (body, error) = beta.tool("page_rotate", json!({ "doc": opened_b["doc"], "revision": -1, "degrees": 90 }));
+        assert!(error && body["error"]["code"] == "invalid_argument", "{body}");
+        alpha.finish();
+        beta.finish();
+        assert!(out.exists(), "the save happened");
+
+        // Five records (three by alpha, two by beta, one of them a refusal), in one log that verifies.
+        let verified = run(&state, &["activity", "verify"]);
+        assert!(verified.status.success(), "{}", text(&verified.stderr));
+        let report = json(&verified);
+        assert_eq!((report["records"].clone(), report["intact"].clone(), report["last_seq"].clone()), (5.into(), true.into(), 5.into()));
+        let shown = text(&run(&state, &["activity", "show"]).stdout);
+        let by = |client: &str| shown.lines().filter(|l| l.contains(&format!("\"client\":\"{client}\""))).count();
+        assert_eq!((by("alpha"), by("beta")), (3, 2), "{shown}");
+        assert!(shown.contains("document.save"), "{shown}");
         let _ = std::fs::remove_dir_all(&state);
     }
 }

@@ -2,7 +2,7 @@
 # Evidence must name the actual reviewed commit and real commands/artifacts.
 schema_version = 1
 spec_version = "0.1"
-updated = "2026-10-31"
+updated = "2026-11-01"
 target = "Windows 11 x64 desktop"
 spec = "docs/bdf-build-spec.md"
 kickoff = "docs/bdf-claude-kickoff.md"
@@ -197,11 +197,11 @@ id = "BUILD-008"
 title = "Implement local principals, grants, release policy and audit"
 status = "changes_requested"
 evidence = "docs/bdf-evidence/BUILD-008.md"
-codex_review = "docs/bdf-evidence/BUILD-008-codex-review.md"
+codex_review = "docs/bdf-evidence/BUILD-008-codex-retest.md"
 review_status = "changes_requested"
-reviewed_heads = ["be477d71ddc70c164fd507792b640b02e2014a22", "586a00d665f3e04f80511a7c2f72537089d70aef"]
-review_result = "Four P1 findings reproduced with five public-API probes on the stacked #12 tree; all five safety assertions fail. R1/R2/R3 affect unchanged #11 code; R4 defeats the second slice cross-process revocation contract. Existing tests pass but miss these counterexamples. Both heads have red ARM64 model packaging. No production fix, commit, push or merge by Codex."
-status_note = "First two slices are implemented in draft PRs #11 and #12: service actors/grants/policy/audit/script trust; CLI grant/activity commands and cross-process refresh. Independent Codex review on 2026-10-31 requests four P1 corrections: actual I/O escapes folder grants through links; document-only grants lose session identity; public direct saves/reads bypass the failed-audit gate; overlapping grant writers resurrect a revoked secret. Current-head CI and FreeBSD pass, but ARM64 packaging fails fetching a deferred OCR model (HTTP 403), so overall checks are not green. Owner-confirmed BDF branding requires a BDF-specific state folder (already in the spec). Apply existing core-only scope by omitting deferred OCR models; #11 precedes retargeted #12 after corrections and green checks. No adapter uses the new policy yet; inherited opt-in adapters still use their existing engine until BUILD-009. No agent access release or overall verification claimed."
+reviewed_heads = ["be477d71ddc70c164fd507792b640b02e2014a22", "586a00d665f3e04f80511a7c2f72537089d70aef", "633cfd2c4567dc603307ab2f30ff35c73445fc38"]
+review_result = "2026-11-01 retest on PR #14 head 633cfd2c (BUILD-008 source unchanged from merged base): original R1-R4 correction cases pass, including real concurrent issue/revoke. New P1 B8-R5: a revoke that fails persistence initially denies the actor in memory, but an unrelated transaction reloads the older disk state and reactivates it even when that transaction also fails. This prevents overall acceptance; no production fix or merge by Codex."
+status_note = "First two slices merged through PRs #11/#12. Original folder, document identity, audit-gate and successful-writer-race fixes pass independent retest. B8-R5 failed-revocation handling remains changes_requested. BDF state naming and model-free core packaging are present; current-head ARM64 packaging/native install pass. The new MCP adapter is reviewed separately in BUILD-009/PR #14 and also needs audit corrections. Legacy routes remain unmigrated; no whole-product grant enforcement or agent-access release is accepted."
 priority = "P0"
 depends_on = ["BUILD-005", "BUILD-007"]
 prd_milestone = "BDF-04"
@@ -215,8 +215,13 @@ stop_conditions = ["Unauthenticated same-user impersonation route or scope escal
 [[work_item]]
 id = "BUILD-009"
 title = "Migrate and qualify the first vertical slice across adapters"
-status = "pending"
-status_note = "Started 2026-10-31 on feat/build-009-adapter-migration. Owner chose option A (migrate every Core tool to the service in groups). First slice implemented and locally tested: pdfcraft-cli mcp --client NAME serves a grant-authenticated client over MCP through the service (8 tools; help only without a valid grant). Not migrated: the desktop, the CLI subcommands, CLI run/batch, the UI control channel and the older mcp server (no --client); 28 of 34 Core tools have no service operation yet. Not hosted, not reviewed. See docs/bdf-evidence/BUILD-009.md."
+status = "changes_requested"
+evidence = "docs/bdf-evidence/BUILD-009.md"
+codex_review = "docs/bdf-evidence/PR-014-codex-review.md"
+review_status = "first_slice_changes_requested"
+reviewed_heads = ["633cfd2c4567dc603307ab2f30ff35c73445fc38"]
+review_result = "PR #14 first slice: one P1 (concurrent MCP clients silently replace shared audit history) and one P2 (adapter-level document-tool refusals bypass auditing). Two real CLI/MCP processes perform four successful operations including a save, but activity verify reports intact=true with only the second client record. Existing scoped suites pass 386 tests; current-head CI/FreeBSD/ARM64 pass, fuzz skipped. Separate merged dependency finding B8-R5 remains open."
+status_note = "Inventory and the grant-authenticated MCP adapter are implemented; the desktop, plain CLI, run/batch, control channel and legacy MCP remain unmigrated. Correct the audit findings before further adapter expansion; do not claim whole-product authorization or release. Product migration direction stays the documented grouped Core-tool approach. 2026-11-01: corrections for both PR #14 findings (shared audit log under a cross-process lock; adapter-level refusals recorded) are implemented with regressions seen to fail with each defect restored; not yet hosted or retested by Codex. B8-R5 in the BUILD-008 grant store is untouched and open."
 priority = "P0"
 depends_on = ["BUILD-008"]
 prd_milestone = "BDF-03"

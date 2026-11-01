@@ -1,6 +1,6 @@
 # BUILD-008 — independent review of the first two slices
 
-Status: **changes requested: four P1 access-control findings; packaging is also red.**
+Status: **historical review of the first two slices.** The [2026-11-01 retest](BUILD-008-codex-retest.md) closes original R1–R4 and confirms model-free ARM64 packaging passes. One new P1, B8-R5 (failed revocation lost on reload), remains. The original evidence below is preserved.
 
 Reviewed 2026-10-31:
 

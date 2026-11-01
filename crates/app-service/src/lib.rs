@@ -17,6 +17,7 @@ pub mod actors;
 pub mod audit;
 pub mod effects;
 pub mod errors;
+mod file_lock;
 pub mod grants;
 pub mod operations;
 pub mod policy;

@@ -289,42 +289,22 @@ impl State {
 /// that change the grants at once take turns instead of one writing over the other's change (which would bring back a
 /// grant the other had just revoked).
 struct FileLock {
-    _file: std::fs::File,
+    _held: crate::file_lock::FileLock,
 }
 
 /// How long a change waits for another process that is changing the grants. A change takes milliseconds.
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[cfg(not(target_arch = "wasm32"))]
 impl FileLock {
     fn acquire(grants: &Path) -> Result<Self, GrantError> {
-        let storage = |e: io::Error| GrantError::Storage(e.to_string());
+        use crate::file_lock::LockError;
         let mut name = grants.as_os_str().to_owned();
         name.push(".lock");
-        let path = PathBuf::from(name);
-        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(storage)?;
+        match crate::file_lock::FileLock::acquire(&PathBuf::from(name), LOCK_WAIT) {
+            Ok(held) => Ok(Self { _held: held }),
+            Err(LockError::Busy) => Err(GrantError::Storage("another process is changing the grants; try again".into())),
+            Err(LockError::Io(e)) => Err(GrantError::Storage(e.to_string())),
         }
-        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(storage)?;
-        let deadline = std::time::Instant::now() + LOCK_WAIT;
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(Self { _file: file }),
-                Err(std::fs::TryLockError::WouldBlock) => {}
-                Err(std::fs::TryLockError::Error(e)) => return Err(storage(e)),
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(GrantError::Storage("another process is changing the grants; try again".into()));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl FileLock {
-    fn acquire(_grants: &Path) -> Result<Self, GrantError> {
-        Err(GrantError::Storage("grant files are not available in the browser build".into()))
     }
 }
 

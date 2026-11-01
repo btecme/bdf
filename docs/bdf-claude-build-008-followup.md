@@ -1,5 +1,11 @@
 # Claude Code follow-up: finish BUILD-008 without reopening settled choices
 
+**2026-11-01 review update:** original R1–R4 are corrected; do not redo them. The
+[BUILD-008 retest](bdf-evidence/BUILD-008-codex-retest.md) records the additional
+failed-revocation defect B8-R5. The [PR #14 review](bdf-evidence/PR-014-codex-review.md)
+records the new MCP audit corrections. The product/packaging direction below stays
+settled; follow those current findings rather than the historical four-finding list.
+
 Continue in the same local BDF repository. Read `AGENTS.md`, `CLAUDE.md`,
 `docs/bdf-build-spec.md` and `docs/bdf-evidence/BUILD-008-codex-review.md`.
 Complete the corrections in that review before expanding the feature set. Keep

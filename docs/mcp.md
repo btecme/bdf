@@ -51,7 +51,7 @@ takes no `--root` or `--compact`: a client's folders are in its grant, and its t
   policy's decision: a read-only grant lists the same tools and is refused at the call, with the reason. A revocation from
   another process stops the next call.
 * A tool that changes or discards content takes `revision` (from the last reply); a stale one is a `conflict` that names both
-  revisions and changes nothing. Page numbers are 1-based. Every call is recorded in the activity log (`pdfcraft-cli activity show`).
+  revisions and changes nothing. Page numbers are 1-based. Every document-tool call is recorded in the activity log (`pdfcraft-cli activity show`), including one refused for its arguments (unknown name, wrong type, missing value, a negative revision): the client, the grant, the operation, the outcome and the error's code, never what the client sent. `bdf_help`, the protocol's own messages, an unknown tool name and a call without a grant are not recorded. Several servers may run at once against one state folder; they take turns writing the log.
 * Results are in `structuredContent`. A failure has `isError: true` and `{"error": {"code", "message", "retryable", "reason"?,
   "conflict"?, "committed"?}}`; the codes are the service's (`invalid_argument`, `not_authorized`, `not_found`, `conflict`, ...).
 
