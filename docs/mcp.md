@@ -37,6 +37,27 @@ serving. A failed batch includes per-step errors and is marked `isError: true`.
 Exports complete synchronously. A call's `progressToken` and cancellation notifications are
 harmlessly ignored; the server does not provide background export progress or cancellation.
 
+## A server limited by a grant (`mcp --client`)
+
+`pdfcraft-cli mcp --client NAME [--state-dir DIR]` is the MCP server over the application service (BUILD-009). The client's
+secret is read from the environment variable `BDF_CLIENT_SECRET`, never from an argument, which other processes can read. It
+takes no `--root` or `--compact`: a client's folders are in its grant, and its tool list is the service's.
+
+* **Without a valid grant** (no secret, a wrong secret, an unknown client, a revoked or expired grant, all answered the same)
+  it lists one tool, `bdf_help`, which returns the version and the service's operations. It lists no files and returns no
+  document content; every other tool is refused with `not_authorized`.
+* **With a grant** the tools are `doc_open`, `doc_info`, `page_rotate`, `edit_undo`, `edit_redo`, `edit_history`, `doc_save`
+  and `doc_close`, one per service operation, with the automation tools' names where there is one. What the grant allows is the
+  policy's decision: a read-only grant lists the same tools and is refused at the call, with the reason. A revocation from
+  another process stops the next call.
+* A tool that changes or discards content takes `revision` (from the last reply); a stale one is a `conflict` that names both
+  revisions and changes nothing. Page numbers are 1-based. Every call is recorded in the activity log (`pdfcraft-cli activity show`).
+* Results are in `structuredContent`. A failure has `isError: true` and `{"error": {"code", "message", "retryable", "reason"?,
+  "conflict"?, "committed"?}}`; the codes are the service's (`invalid_argument`, `not_authorized`, `not_found`, `conflict`, ...).
+
+The server without `--client` is the older one described above: it is **not** limited by a grant and has the tool set of the
+automation engine. It stays until the tools it offers are available through the service; see `docs/bdf-evidence/BUILD-009.md`.
+
 ## Resources and protocol versions
 
 `pdfcraft://document` returns the session's document information (as `doc_inspect` without

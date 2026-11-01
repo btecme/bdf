@@ -10,6 +10,9 @@
 //! * `grant revoke` withdraws one. A running service notices the next time anything asks, because the grant file is checked
 //!   for changes (`pdfcraft_app_service::GrantStore`), so no restart is needed.
 //! * `activity` verifies and shows the record of what clients did. It holds no document content, secret or full path.
+//! * `mcp --client NAME` (BUILD-009) serves one client over MCP through the application service: the secret comes from the
+//!   environment (`BDF_CLIENT_SECRET`, never an argument, which other processes can read), and a grant that is not accepted
+//!   gives a server that can only say what this build is, without saying why it was not accepted.
 
 use std::path::{Path, PathBuf};
 
@@ -221,6 +224,39 @@ fn parse_ttl(text: &str) -> Result<i64, CliError> {
         _ => return Err(bad()),
     };
     n.checked_mul(factor).ok_or_else(bad)
+}
+
+/// The environment variable that holds a client's secret for `mcp --client`.
+#[cfg(feature = "mcp")]
+const SECRET_VARIABLE: &str = "BDF_CLIENT_SECRET";
+
+/// `mcp --client NAME [--state-dir DIR]`: the MCP server over the service, for the client a grant names.
+#[cfg(feature = "mcp")]
+pub fn mcp_client(args: &[String]) -> Result<(), CliError> {
+    use std::io::Write as _;
+
+    use pdfcraft_app_service::{FileAudit, Policy, Service};
+    use pdfcraft_automation::client_mcp::ClientMcpServer;
+
+    let Some(client) = flag(args, "--client").filter(|c| !c.is_empty() && !c.starts_with("--")) else {
+        return Err("mcp: --client needs the client's name".into());
+    };
+    if args.iter().any(|a| a == "--root" || a == "--compact") {
+        return Err("mcp: --root and --compact belong to the server that is not limited by a grant; a client's folders are in its grant".into());
+    }
+    let dir = state_dir(args)?;
+    let store = open_store(args)?;
+    // Every failure to authenticate is the same here and in the reply: what was wrong is not for the client to learn.
+    let actor = std::env::var(SECRET_VARIABLE).ok().and_then(|secret| store.authenticate(client, &secret).ok());
+    let audit = FileAudit::open(&dir.join("activity")).map_err(|e| CliError::from(format!("mcp: the activity log can't be opened: {e}")))?;
+    let service = Service::new().with_policy(Policy::with_grants(store)).with_audit(Box::new(audit));
+    let mut server = ClientMcpServer::new(service, actor);
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "pdfcraft-cli: MCP server for a client on stdio ({}); close stdin to stop",
+        if server.is_authorized() { "grant accepted" } else { "no valid grant: help only" }
+    );
+    server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| CliError::Message(e.to_string()))
 }
 
 #[cfg(test)]

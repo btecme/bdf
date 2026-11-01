@@ -14,6 +14,8 @@
 mod a11y;
 mod batch;
 pub mod capability;
+#[cfg(feature = "mcp")]
+pub mod client_mcp;
 mod comments;
 mod content;
 mod conventions;
