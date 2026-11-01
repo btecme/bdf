@@ -163,6 +163,12 @@ fn bounded(mut entry: AuditEntry) -> AuditEntry {
 }
 
 /// The log on disk: JSON lines in a private folder, bounded, chained.
+///
+/// Several processes may write the same folder (each `mcp --client` server is one). They take turns: a record is written
+/// while a lock on a file in the folder is held, and what this value remembers of the log (the next number, the sum of the
+/// last line, the segment it appends to) is only used if the folder still looks as this process left it. If another
+/// process has written since, the log is read again first, so no process numbers a record from a stale picture, chains it
+/// to a line that is no longer last, or starts a segment that is already there.
 pub struct FileAudit {
     dir: PathBuf,
     next_seq: u64,
@@ -178,27 +184,63 @@ struct Segment {
     file: File,
 }
 
+/// How long a record waits for another process that is writing the log. A record takes milliseconds.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The lock file beside the segments. Its name is not a segment's, so [`segments`] and [`verify`] never read it.
+const LOCK_FILE: &str = "audit.lock";
+
 impl FileAudit {
     /// Open the log in `dir`, creating the folder if needed. The existing log is verified; if it is damaged the damage is
     /// kept (see [`FileAudit::chain_was_broken`]) and new records start a new chain in a new segment.
     pub fn open(dir: &Path) -> Result<Self, AuditError> {
         std::fs::create_dir_all(dir).map_err(|e| AuditError(e.to_string()))?;
-        let report = verify(dir).map_err(|e| AuditError(e.to_string()))?;
-        let broken = report.first_bad.is_some();
-        let last_sum = if broken { "restart".to_owned() } else { report.last_sum.clone().unwrap_or_else(|| "start".to_owned()) };
-        let mut audit =
-            Self { dir: dir.to_path_buf(), next_seq: report.last_seq.saturating_add(1), last_sum, segment: None, chain_was_broken: broken };
-        if broken {
-            // Never append to a segment that is already damaged.
-            audit.start_segment(report.last_segment.saturating_add(1))?;
-        } else if let Some(index) = report.last_segment_index() {
-            audit.reopen_segment(index)?;
-        }
+        let mut audit = Self { dir: dir.to_path_buf(), next_seq: 1, last_sum: "start".to_owned(), segment: None, chain_was_broken: false };
+        let _held = audit.lock()?;
+        audit.sync()?;
         Ok(audit)
     }
 
     pub fn chain_was_broken(&self) -> bool {
         self.chain_was_broken
+    }
+
+    /// The right to write the log, taken for one record (or for opening it).
+    fn lock(&self) -> Result<crate::file_lock::FileLock, AuditError> {
+        use crate::file_lock::{FileLock, LockError};
+        FileLock::acquire(&self.dir.join(LOCK_FILE), LOCK_WAIT).map_err(|e| match e {
+            LockError::Busy => AuditError("another process is writing the log; try again".into()),
+            LockError::Io(e) => AuditError(e.to_string()),
+        })
+    }
+
+    /// Take what is remembered of the log from the folder. The caller holds the lock. A last segment with a damaged line
+    /// is never appended to: a new segment starts a new chain.
+    fn sync(&mut self) -> Result<(), AuditError> {
+        let report = verify(&self.dir).map_err(|e| AuditError(e.to_string()))?;
+        self.chain_was_broken |= report.first_bad.is_some();
+        self.next_seq = report.last_seq.saturating_add(1);
+        self.segment = None;
+        if report.tail_damaged {
+            self.last_sum = "restart".to_owned();
+            self.start_segment(report.last_segment.saturating_add(1))?;
+        } else {
+            self.last_sum = report.last_sum.clone().unwrap_or_else(|| "start".to_owned());
+            if let Some(index) = report.last_segment_index() {
+                self.reopen_segment(index)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the folder is as this process left it: nothing has been written to the log, or a segment added, since.
+    fn is_current(&self) -> bool {
+        let Ok(found) = segments(&self.dir) else { return false };
+        match (&self.segment, found.last()) {
+            (None, None) => true,
+            (Some(ours), Some(&last)) if ours.index == last => std::fs::metadata(self.segment_path(last)).is_ok_and(|meta| meta.len() == ours.bytes),
+            _ => false,
+        }
     }
 
     fn segment_path(&self, index: u32) -> PathBuf {
@@ -237,6 +279,10 @@ impl FileAudit {
 
 impl AuditSink for FileAudit {
     fn record(&mut self, entry: AuditEntry) -> Result<AuditRecord, AuditError> {
+        let _held = self.lock()?;
+        if !self.is_current() {
+            self.sync()?;
+        }
         let record = AuditRecord { seq: self.next_seq, entry: bounded(entry) };
         let line = encode(&record, &self.last_sum);
         let sum = line_sum(&line).ok_or_else(|| AuditError("a record could not be encoded".into()))?;
@@ -362,6 +408,10 @@ pub struct VerifyReport {
     pub last_segment: u32,
     /// The first place the chain does not hold: the segment number and the line number (from 1) in it.
     pub first_bad: Option<(u32, usize)>,
+    /// The last segment has a line that is damaged (its sum is wrong, or it does not follow the line before it in the
+    /// same segment), so nothing is appended to it. The first line of a segment may start a new chain on purpose and is
+    /// not counted. Damage in an older segment is in `first_bad` only.
+    pub tail_damaged: bool,
 }
 
 impl VerifyReport {
@@ -378,6 +428,7 @@ pub fn verify(dir: &Path) -> io::Result<VerifyReport> {
     let mut seq: Option<u64> = None;
     for &index in &report.segments.clone() {
         report.last_segment = index;
+        report.tail_damaged = false;
         let path = dir.join(format!("audit-{index:06}.jsonl"));
         // A segment is bounded; reading it is bounded too (twice the limit leaves room for the last line).
         let (bytes, _) = pdfcraft_platform::file_identity::read_regular_with_version(&path, MAX_SEGMENT_BYTES * 2)?;
@@ -386,6 +437,7 @@ pub fn verify(dir: &Path) -> io::Result<VerifyReport> {
             let line_number = number.saturating_add(1);
             let Some(sum) = line_sum(line) else {
                 report.first_bad.get_or_insert((index, line_number));
+                report.tail_damaged = true;
                 continue;
             };
             let map: Option<Map<String, Value>> = serde_json::from_str(line).ok();
@@ -403,6 +455,7 @@ pub fn verify(dir: &Path) -> io::Result<VerifyReport> {
             };
             if !(links && in_order) {
                 report.first_bad.get_or_insert((index, line_number));
+                report.tail_damaged |= line_number > 1;
             }
             report.records = report.records.saturating_add(1);
             prev = Some(sum.clone());
@@ -518,6 +571,105 @@ mod tests {
         assert_eq!(report.first_bad, None, "the oldest segments were deleted and the rest still verifies");
         assert_eq!(report.last_seq, 1100);
         assert!(found.first().is_some_and(|first| *first > 1), "the oldest were pruned: {found:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The request numbers in the log, in the order the lines are, and the sequence numbers beside them.
+    fn written(d: &Path) -> Vec<(u64, u64)> {
+        recent_lines(d, 10_000)
+            .expect("reads")
+            .iter()
+            .map(|line| {
+                let v: Value = serde_json::from_str(line).expect("a record");
+                (v["seq"].as_u64().expect("seq"), v["request"].as_u64().expect("request"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn two_writers_opened_before_either_records_keep_every_record() {
+        let d = dir("two-writers");
+        // Neither has written when the other opens: each believes the log has no segment, which used to make the second
+        // one's first record replace the first one's segment.
+        let mut first = FileAudit::open(&d).expect("opens");
+        let mut second = FileAudit::open(&d).expect("opens");
+        first.record(entry(0)).expect("records");
+        second.record(entry(1)).expect("records");
+        first.record(entry(2)).expect("records");
+        first.record(entry(3)).expect("records");
+        second.record(entry(4)).expect("records");
+        let report = verify(&d).expect("verifies");
+        assert_eq!((report.records, report.last_seq, report.first_bad, report.tail_damaged), (5, 5, None, false));
+        assert_eq!(written(&d), [(1, 0), (2, 1), (3, 2), (4, 3), (5, 4)], "in the order they were written, numbered once each");
+        assert_eq!(segments(&d).expect("lists"), [1]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn writers_that_record_at_the_same_time_lose_nothing() {
+        let d = dir("racing-writers");
+        let writers: Vec<FileAudit> = (0..3).map(|_| FileAudit::open(&d).expect("opens")).collect();
+        let handles: Vec<_> = writers
+            .into_iter()
+            .enumerate()
+            .map(|(w, mut log)| {
+                std::thread::spawn(move || {
+                    for n in 0..30 {
+                        log.record(entry(w as u64 * 1000 + n)).expect("records");
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("a writer finished");
+        }
+        let report = verify(&d).expect("verifies");
+        assert_eq!((report.records, report.last_seq, report.first_bad), (90, 90, None));
+        let mut requests: Vec<u64> = written(&d).iter().map(|(_, r)| *r).collect();
+        requests.sort_unstable();
+        let expected: Vec<u64> = (0..3).flat_map(|w| (0..30).map(move |n| w * 1000 + n)).collect();
+        assert_eq!(requests, expected, "every record of every writer is there once");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_new_segment_started_by_one_writer_is_not_written_around_by_the_other() {
+        let d = dir("shared-rolling");
+        let mut first = FileAudit::open(&d).expect("opens");
+        let mut second = FileAudit::open(&d).expect("opens");
+        let mut big = entry(0);
+        big.effects =
+            (0..8).map(|i| AuditEffect { kind: "file_written".into(), file: Some(format!("{i}{}", "x".repeat(250))), bytes: Some(i) }).collect();
+        // About 110 of these fill a segment; alternating writers cross two boundaries.
+        for n in 0..260 {
+            big.request_id = n;
+            if n % 2 == 0 { &mut first } else { &mut second }.record(big.clone()).expect("records");
+        }
+        assert!(segments(&d).expect("lists").len() >= 3);
+        let report = verify(&d).expect("verifies");
+        assert_eq!((report.records, report.last_seq, report.first_bad), (260, 260, None));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn writers_sharing_a_log_whose_older_segment_is_damaged_do_not_start_a_segment_per_record() {
+        let d = dir("shared-damaged");
+        let mut log = FileAudit::open(&d).expect("opens");
+        for n in 0..3 {
+            log.record(entry(n)).expect("records");
+        }
+        let path = d.join("audit-000001.jsonl");
+        let text = std::fs::read_to_string(&path).expect("reads");
+        std::fs::write(&path, text.replacen("\"rev_after\":4", "\"rev_after\":9", 1)).expect("writes");
+        // Opening the damaged log starts segment 2; two writers then share it.
+        let mut first = FileAudit::open(&d).expect("opens");
+        let mut second = FileAudit::open(&d).expect("opens");
+        assert!(first.chain_was_broken() && second.chain_was_broken());
+        for n in 10..20 {
+            if n % 2 == 0 { &mut first } else { &mut second }.record(entry(n)).expect("records");
+        }
+        assert_eq!(segments(&d).expect("lists"), [1, 2], "the damage is in segment 1 and appending to segment 2 is safe");
+        assert_eq!(written(&d).iter().filter(|(_, request)| *request >= 10).count(), 10);
         let _ = std::fs::remove_dir_all(&d);
     }
 

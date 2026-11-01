@@ -330,3 +330,236 @@ fn the_commands_are_listed_in_the_usage_and_the_person_is_not_an_actor_they_can_
     // And the person's own context is still read from the system, not from anything given here.
     assert!(ActorContext::local_user().is_ok());
 }
+
+// ---- `mcp --client` (BUILD-009) ---------------------------------------------------------------------------------
+
+#[cfg(feature = "mcp")]
+mod mcp_client {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+
+    use serde_json::{Value, json};
+
+    /// A one-page PDF.
+    fn pdf() -> Vec<u8> {
+        let objs: [&[u8]; 4] = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            b"<< /Type /Page /Parent 2 0 R >>",
+            b"<< /Producer (test) >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    struct Session {
+        child: Child,
+        stdin: Option<ChildStdin>,
+        stdout: BufReader<ChildStdout>,
+        next_id: u64,
+    }
+
+    impl Session {
+        fn start(state: &Path, client: &str, secret: Option<&str>) -> Self {
+            let mut command = Command::new(BIN);
+            command.args(["mcp", "--client", client, "--state-dir"]).arg(state);
+            command.env_remove("BDF_CLIENT_SECRET");
+            if let Some(secret) = secret {
+                command.env("BDF_CLIENT_SECRET", secret);
+            }
+            let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().expect("starts the server");
+            let stdin = child.stdin.take();
+            let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+            Self { child, stdin, stdout, next_id: 0 }
+        }
+
+        fn rpc(&mut self, method: &str, params: Value) -> Value {
+            self.next_id += 1;
+            let line = json!({ "jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params });
+            let stdin = self.stdin.as_mut().expect("stdin is open");
+            writeln!(stdin, "{line}").expect("writes the request");
+            stdin.flush().expect("flushes");
+            let mut reply = String::new();
+            self.stdout.read_line(&mut reply).expect("reads the reply");
+            serde_json::from_str(&reply).unwrap_or_else(|e| panic!("not JSON ({e}): {reply:?}"))
+        }
+
+        /// A tool call's structured result and whether it was an error.
+        fn tool(&mut self, name: &str, args: Value) -> (Value, bool) {
+            let reply = self.rpc("tools/call", json!({ "name": name, "arguments": args }));
+            let result = reply.get("result").unwrap_or_else(|| panic!("a result, got {reply}")).clone();
+            (result["structuredContent"].clone(), result["isError"].as_bool().expect("isError"))
+        }
+
+        fn tool_names(&mut self) -> Vec<String> {
+            let reply = self.rpc("tools/list", Value::Null);
+            reply["result"]["tools"].as_array().expect("tools").iter().map(|t| t["name"].as_str().expect("name").to_owned()).collect()
+        }
+
+        fn finish(mut self) {
+            drop(self.stdin.take());
+            let _ = self.child.wait();
+        }
+    }
+
+    fn grant_with_folder(state: &Path, folder: &Path, allow: &str) -> String {
+        grant_for(state, "agent", folder, allow)
+    }
+
+    fn grant_for(state: &Path, client: &str, folder: &Path, allow: &str) -> String {
+        let folder = folder.to_string_lossy().into_owned();
+        let issued = json(&run(state, &["grant", "issue", "--client", client, "--allow", allow, "--read", &folder, "--write", &folder]));
+        issued["secret"].as_str().expect("a secret").to_owned()
+    }
+
+    fn work_folder(state: &Path) -> (PathBuf, PathBuf) {
+        let work = state.join("work");
+        std::fs::create_dir_all(&work).expect("work folder");
+        let file = work.join("a.pdf");
+        std::fs::write(&file, pdf()).expect("writes");
+        (work, file)
+    }
+
+    #[test]
+    fn a_client_with_a_grant_works_on_a_file_in_its_folder_and_the_activity_is_recorded() {
+        let state = private_dir("mcp-client");
+        let (work, file) = work_folder(&state);
+        let secret = grant_with_folder(&state, &work, "document.read,document.edit.pages,document.save,document.close");
+
+        let mut session = Session::start(&state, "agent", Some(&secret));
+        assert_eq!(session.tool_names().len(), 9);
+        let (opened, error) = session.tool("doc_open", json!({ "path": file.to_string_lossy() }));
+        assert!(!error, "{opened}");
+        let (doc, revision) = (opened["doc"].as_u64().expect("doc"), opened["revision"].as_u64().expect("revision"));
+        let (rotated, error) = session.tool("page_rotate", json!({ "doc": doc, "revision": revision, "pages": [1], "degrees": 90 }));
+        assert!(!error, "{rotated}");
+        let revision = rotated["revision"].as_u64().expect("revision");
+        let (saved, error) = session.tool("doc_save", json!({ "doc": doc, "revision": revision }));
+        assert!(!error, "{saved}");
+        session.finish();
+        assert_ne!(std::fs::read(&file).expect("reads"), pdf(), "the file was saved with the rotation");
+
+        // The person can see what the client did, and the record verifies.
+        let shown = text(&run(&state, &["activity", "show"]).stdout);
+        assert!(shown.contains("page.rotate") && shown.contains("document.save"), "{shown}");
+        assert!(!shown.contains(&secret), "the secret is never recorded");
+        assert!(run(&state, &["activity", "verify"]).status.success());
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_secret_that_is_wrong_or_missing_gets_help_only_and_the_same_answer() {
+        let state = private_dir("mcp-no-grant");
+        let (work, file) = work_folder(&state);
+        let secret = grant_with_folder(&state, &work, "document.read");
+
+        let mut replies = Vec::new();
+        for (client, given) in [("agent", Some("not-the-secret")), ("agent", None), ("nobody", Some(secret.as_str()))] {
+            let mut session = Session::start(&state, client, given);
+            assert_eq!(session.tool_names(), ["bdf_help"], "{client} {given:?}");
+            let (body, error) = session.tool("doc_open", json!({ "path": file.to_string_lossy() }));
+            assert!(error);
+            replies.push(body);
+            session.finish();
+        }
+        assert!(replies.iter().all(|r| r == &replies[0]), "the three refusals are the same: {replies:?}");
+        assert_eq!(replies[0]["error"]["code"], "not_authorized");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_grant_revoked_from_another_process_stops_a_running_client() {
+        let state = private_dir("mcp-revoke");
+        let (work, file) = work_folder(&state);
+        let secret = grant_with_folder(&state, &work, "document.read");
+        let listed = json(&run(&state, &["grant", "list"]));
+        let id = listed["grants"][0]["grant"].as_str().unwrap_or_else(|| panic!("a grant id in {listed}")).to_owned();
+
+        let mut session = Session::start(&state, "agent", Some(&secret));
+        let (opened, error) = session.tool("doc_open", json!({ "path": file.to_string_lossy() }));
+        assert!(!error, "{opened}");
+        let doc = opened["doc"].as_u64().expect("doc");
+        assert!(run(&state, &["grant", "revoke", &id]).status.success());
+        let (body, error) = session.tool("doc_info", json!({ "doc": doc }));
+        assert!(error);
+        assert_eq!(body["error"]["reason"], "grant_revoked");
+        session.finish();
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn the_options_of_the_two_servers_are_not_mixed() {
+        let state = private_dir("mcp-options");
+        let dir = state.to_string_lossy().into_owned();
+        let cases: [Vec<&str>; 3] = [
+            vec!["mcp", "--client", "a", "--compact", "--state-dir", &dir],
+            vec!["mcp", "--client", "a", "--root", &dir, "--state-dir", &dir],
+            vec!["mcp", "--state-dir", &dir],
+        ];
+        for args in cases {
+            let result = Command::new(BIN).args(&args).stdin(Stdio::null()).output().expect("runs");
+            assert!(!result.status.success(), "{args:?}");
+            let message = text(&result.stderr);
+            assert!(message.contains("--client") || message.contains("--compact"), "{message}");
+        }
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn two_clients_running_at_once_keep_both_histories_and_a_refused_call_is_recorded_too() {
+        let state = private_dir("mcp-two-clients");
+        let (work, first_file) = work_folder(&state);
+        let second_file = work.join("b.pdf");
+        std::fs::write(&second_file, pdf()).expect("writes");
+        let allow = "document.read,document.edit.pages,document.save,document.close";
+        let (alpha_secret, beta_secret) = (grant_for(&state, "alpha", &work, allow), grant_for(&state, "beta", &work, allow));
+
+        // Both servers are up, and have opened the log, before either of them does anything.
+        let mut alpha = Session::start(&state, "alpha", Some(&alpha_secret));
+        let mut beta = Session::start(&state, "beta", Some(&beta_secret));
+        assert_eq!(alpha.tool_names().len(), 9);
+        assert_eq!(beta.tool_names().len(), 9);
+
+        let (opened, error) = alpha.tool("doc_open", json!({ "path": first_file.to_string_lossy() }));
+        assert!(!error, "{opened}");
+        let (doc, revision) = (opened["doc"].as_u64().expect("doc"), opened["revision"].as_u64().expect("revision"));
+        let (opened_b, error) = beta.tool("doc_open", json!({ "path": second_file.to_string_lossy() }));
+        assert!(!error, "{opened_b}");
+        let (rotated, error) = alpha.tool("page_rotate", json!({ "doc": doc, "revision": revision, "pages": [1], "degrees": 90 }));
+        assert!(!error, "{rotated}");
+        let out = work.join("out.pdf");
+        let (saved, error) =
+            alpha.tool("doc_save", json!({ "doc": doc, "revision": rotated["revision"], "path": out.to_string_lossy(), "create_only": true }));
+        assert!(!error, "{saved}");
+        let (body, error) = beta.tool("page_rotate", json!({ "doc": opened_b["doc"], "revision": -1, "degrees": 90 }));
+        assert!(error && body["error"]["code"] == "invalid_argument", "{body}");
+        alpha.finish();
+        beta.finish();
+        assert!(out.exists(), "the save happened");
+
+        // Five records (three by alpha, two by beta, one of them a refusal), in one log that verifies.
+        let verified = run(&state, &["activity", "verify"]);
+        assert!(verified.status.success(), "{}", text(&verified.stderr));
+        let report = json(&verified);
+        assert_eq!((report["records"].clone(), report["intact"].clone(), report["last_seq"].clone()), (5.into(), true.into(), 5.into()));
+        let shown = text(&run(&state, &["activity", "show"]).stdout);
+        let by = |client: &str| shown.lines().filter(|l| l.contains(&format!("\"client\":\"{client}\""))).count();
+        assert_eq!((by("alpha"), by("beta")), (3, 2), "{shown}");
+        assert!(shown.contains("document.save"), "{shown}");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+}

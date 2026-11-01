@@ -274,6 +274,18 @@ impl Service {
         result
     }
 
+    /// Record a request an adapter refused because its arguments were not well formed, so it never became an
+    /// [`OperationRequest`]: the actor, the operation the caller named and the error's stable code are recorded, and
+    /// nothing the caller sent (no argument, path, password or content). It goes through the same audit path and the same
+    /// health check as [`Service::execute`], so a log that cannot take the record stops the service serving clients, and
+    /// the error handed back is the one to show the caller: `error`, or the refusal a service that is not serving clients
+    /// gives instead.
+    pub fn reject(&mut self, context: &RequestContext, operation: OperationId, error: OperationError) -> OperationError {
+        let error = self.health.admit(context.actor()).err().unwrap_or(error);
+        self.audit_result(context.actor(), context.request_id, operation.name(), None, None, &Err(error.clone()));
+        error
+    }
+
     fn run(&mut self, context: &RequestContext, request: OperationRequest) -> Result<OperationResult> {
         let actor = context.actor();
         negotiate(request.schema_version)?;

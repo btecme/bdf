@@ -1,0 +1,89 @@
+# BUILD-009: migration inventory and first MCP adapter evidence
+
+Status: **first slice requires corrections after independent review (2026-11-01).** [PR #14 review](PR-014-codex-review.md) at `633cfd2c`: one P1 in concurrent shared-audit handling and one P2 in auditing adapter-level refusals. Existing scoped suites pass 386 tests and current-head CI/FreeBSD/ARM64 pass; new counterexamples fail. BUILD-009 is `changes_requested`; legacy adapters and later Core-tool groups remain unmigrated. The [BUILD-008 retest](BUILD-008-codex-retest.md) closes original R1–R4 but finds B8-R5 in persistence-failure handling.
+
+Author submission before that review: **started 2026-10-31; first slice implemented and locally tested (section 5), not hosted, not reviewed.** One adapter, the grant-gated MCP server, runs on the service; the desktop, the CLI subcommands and the older MCP server do not. The work item stays `pending`. Branch `feat/build-009-adapter-migration`, from `main` at `c1c38b07` (BUILD-008's two slices are merged there, not yet independently accepted by Codex). This file is where the inventory, the decisions and the per-surface results go.
+
+## 1. What the work item asks
+
+Open, view, rotate, undo, redo, save and close must dispatch through the application service from the desktop, the CLI and the MCP server (including its compact/meta tools, command dispatch, batches, resources and the UI control channel), with no direct-session or policy bypass; a per-surface allowed/denied/conflict/fault matrix; and the superseded duplicate orchestration deleted. Stop condition: any production alternate entry point that bypasses service policy means finishing the migration before adding features.
+
+## 2. Inventory of what bypasses the service today
+
+Read from the tree at `c1c38b07`; counts are of source lines that name the thing, not of call paths.
+
+| Surface | How it reaches a document today | Slice operations it performs itself |
+|---|---|---|
+| Desktop (`crates/ui-egui`) | The app owns an engine `Session` (`lib.rs:871`) and `apply_edit`, `undo`, `redo`, `save_bytes` and `close` are called on it from `editing.rs`, `commands.rs`, `canvas.rs`, `files.rs`, `sign_ui.rs` and others (about 440 mentions of the engine across 40-odd files). | all six |
+| Plain CLI subcommands (`apps/pdfcraft-cli/src/main.rs`) | Each subcommand builds its own engine `Session` (`:299`, `:357`, `:453`, `:511`, `:527`, and `Session::new().combine` at `:502`). | open, rotate, save |
+| CLI `run` / `batch` / MCP (`crates/automation`) | `Automation` owns a `Session` and 163 tools (`lib.rs` 2,900 lines, `tools.rs` 1,300, `mcp.rs` 580); `doc_open`, `page_rotate`, `edit_undo`, `edit_redo`, `doc_save`, `doc_close` run on it directly. | all six |
+| Grant commands (`apps/pdfcraft-cli/src/access.rs`) | Issue grants and show activity; they do not open documents. | none |
+| The service (`crates/app-service`) | Owns a private `Session`; eight operations (`document.open/query/save/close`, `page.rotate`, `edit.undo/redo/history`); used by tests only. | all six, with policy |
+
+The release profile (`crates/automation/src/capability.rs`) lists **163 tools: 34 Core, 121 Deferred, 6 Excluded, 2 Gated.** The service has eight operations. So 28 of the 34 Core tools have no service operation yet: `doc_info`, `doc_list`, `doc_inspect`, `doc_combine`, `doc_split`, `doc_print`, `page_delete`, `page_move`, `page_extract`, `page_insert_blank`, `page_insert_file`, `page_render`, `render_preview`, `text_extract`, `text_find`, `link_list`, `bookmark_list`, `comment_*` (six), `form_fields`, `form_fill`, `command_list`, `printers`, `printer_options`.
+
+## 3. The decision this forces
+
+Moving only the six slice operations is not enough on its own, because documents live in exactly one session: a document opened through the service cannot be seen by the other 28 Core tools, which run on the automation session. Two sources of truth for open documents is what the work item forbids. There are three ways out:
+
+* **A. Service is the only owner; migrate every Core tool as an operation, in groups.** The adapters keep working throughout (a tool not yet migrated is refused with "not available in this build" for clients, and keeps running only for the person on the old path **until its group lands**, which is the interim bypass this item exists to remove). Largest change; ends with one source of truth and no regression for the person.
+* **B. Shrink the shipped surface to what the service has, until the rest is migrated.** The v1 release profile for the CLI, MCP and UI would be the eight operations; the other 28 Core tools are hidden and refused everywhere (the profile and the server agree). No bypass at any point; **a visible regression** in the shipped product (page delete/move/extract, text extraction, rendering, comments, forms, combine/split, print) until each group is migrated.
+* **C. Give the service a general "run this engine edit" operation** that wraps the existing tool implementations behind the same policy, capability and audit checks. Fastest, but it moves the policy surface from a closed list of typed operations to a wide pass-through, which weakens exactly what BUILD-007 and BUILD-008 built (typed requests, per-operation capabilities, the journal that ties undo to the capability of the change reverted).
+
+## 4. Recommendation (adopted: option A, see section 5)
+
+**A, in this order:** (1) the read-only operations the other tools need first (`doc_info`, `doc_list`, `doc_inspect`, `page_render`, `render_preview`, `text_extract`, `text_find`, `link_list`, `bookmark_list`), because they carry no write risk and unblock the viewing slice; (2) the page edits (`page_delete/move/extract/insert_*`, `doc_combine/split`); (3) comments and forms; (4) printing; each group with its own capability and the per-surface matrix. Adapters move onto the service in the same step as the group they use, never ahead of it. Interim state, stated plainly: until a group lands, its tools stay on the old path for the person only and are **not available to any grant-authenticated client**; the grant policy is already not applied to the opt-in CLI/MCP (BUILD-008 section 6), and this plan does not widen that.
+
+## 5. Decision, and the first slice
+
+**Decision (owner, 2026-10-31): option A**, migrate every Core tool in groups. One refinement follows from the specification (section 5: an MCP invocation without a valid grant "yields only public version/capability help ... do not grandfather unrestricted MCP filesystem access"): the **MCP server is an agent surface, so it moves to the service as a grant-only server**, while the desktop and the CLI subcommands (the person's own surfaces) stay on the old path until their groups land. The older `pdfcraft-cli mcp` (no `--client`) therefore remains, unchanged except for a stderr notice that it is not limited by a grant, **only until the groups cover its tools; removing it is part of this work item, not optional** (stop condition).
+
+**Slice 1: `pdfcraft-cli mcp --client NAME` over the service.**
+
+* `crates/automation/src/client_mcp.rs`: `ClientMcpServer` holds a `Service` and no engine session. Eight tools, one per service operation (`doc_open`, `doc_info`, `page_rotate`, `edit_undo`, `edit_redo`, `edit_history`, `doc_save`, `doc_close`), plus `bdf_help` for a caller without a grant. Arguments are read strictly (no coercion, unknown names refused), and a changing tool must name its `revision`. The line reader and its message bound are shared with the older server (`mcp::serve_lines`), not copied.
+* `apps/pdfcraft-cli/src/access.rs` (`mcp_client`): the secret comes from `BDF_CLIENT_SECRET`; a grant that is not accepted gives help only, and every way of not being accepted gives the same answer; the activity log (`<state>/activity`) is attached, so every document-tool call is recorded (a refusal for malformed arguments included since the review corrections, section 7).
+* `pdfcraft-automation` now depends on `pdfcraft-app-service` (it was a dev-dependency); the edge was already allowed by `cargo xtask layers`.
+
+**Tests (local, Windows 11 x64, Rust 1.99.0, two jobs).** `crates/automation/tests/client_mcp.rs` (8): help only without a grant; a read-only grant opens inside its folder and is refused every change with a reason, leaving the file and the document as they were; an editing grant rotates, undoes, redoes, saves and closes against the revisions it was given, a stale revision is a conflict that changes nothing, closing with unsaved changes is refused, and what was saved reopens as edited; a file outside the granted folder is refused for reading and for saving and nothing is written there; a grant revoked while the server runs stops the next call; arguments are read strictly; an over-long message is refused and the next one served; one tool per service operation. `apps/pdfcraft-cli/tests/access.rs` (4 more, through the real binary): the full flow with the activity record shown and verified and the secret absent from it; a wrong, a missing and an unknown-client secret get the same help-only answer; a revocation from another process stops a running client; the two servers' options are not mixed. The whole automation and CLI suites pass (automation 40 + 163 + 8 + 8 + 4 + 2 + 3, CLI all), as do `cargo fmt --check`, clippy with `-D warnings` for the three crates, `cargo xtask layers` and `cargo xtask assets`.
+
+**Tests seen to fail with the thing they test broken:** listing the document tools without a grant fails the no-grant test; skipping the argument-name check fails the strictness test; letting a negative revision wrap to a number fails the strictness test; leaving the audit log off fails the activity test.
+
+## 6. Not done, and not claimed
+
+* **Only the eight operations exist for a client.** The other 28 Core tools (section 2) have no service operation yet, so a grant-authenticated client cannot extract text, render pages, edit comments or forms, combine, split, delete or move pages, or print. This is the interim cost of option A for the MCP surface, and it is the product behaviour until the groups land: nothing is hidden by accident, the tool list is the truth.
+* **Not migrated:** the desktop (about 440 engine references across 40 files), the plain CLI subcommands, CLI `run`/`batch`, the UI control channel, and `pdfcraft-cli mcp` without `--client`. Each still bypasses the service and its policy. Until they move, the grant policy does not protect them and agent access through the whole product is **not released**.
+* **MCP resources and compact/meta tools** are not on the client server (no resources are listed; there is no `tool_search`/`tool_call`). The work item asks for them to go through the service: not done.
+* The client server was not exercised by a real agent client, only by the tests above. Hosted CI has not run on this branch. Codex has not reviewed it. The 10-second grant-lock timeout path and a lock file made by another account remain untested (BUILD-008 section 7).
+* `BDF_CLIENT_SECRET` is visible to the account's own processes that can read the environment of this one; it is not on the command line. Whether that is enough for the release is a question for the release profile, not settled here.
+* BUILD-008's fixes are merged but not yet retested by Codex, and this work builds on them.
+
+## 7. Corrections after the Codex review of PR #14 (2026-11-01)
+
+The [review](PR-014-codex-review.md) at `633cfd2c` found two defects in this slice. Both are corrected in the working tree; **not yet hosted, not yet retested by Codex.**
+
+**R14-1 (P1), concurrent MCP clients erased each other's audit history.** Cause: each `mcp --client` process held its own `FileAudit`, which remembered the next number, the sum of the last line and the segment it appends to, and nothing coordinated the processes. Two servers opened before either recorded both believed there was no segment; each one's first record then created `audit-000001.jsonl` through `write_private_file`, which replaces the file, so the second silently removed the first's history, and `verify` reported the remaining one-record log as intact. The same stale picture also let a writer number a record twice, chain it to a line that was no longer last, or append to a segment the other had rolled past.
+
+Fix (`crates/app-service/src/audit.rs`, `file_lock.rs`):
+* A record is written while an exclusive lock on `<log>/audit.lock` is held (the lock the grant store already used, now one shared implementation, `file_lock.rs`; the grant store's behaviour and messages are unchanged). Opening the log takes it too. The lock file's name is not a segment's, so `verify` never reads it.
+* Under the lock, what the process remembers is used only if the folder is as it left it (the newest segment is its own and has the length it wrote). Otherwise the log is read again (`sync`) before numbering, chaining or choosing a segment. A segment is therefore never started over an existing one, and a roll is decided on the real last segment.
+* The rule for damage is narrower and more exact: a new segment is started only when the **last** segment has a damaged line (`VerifyReport::tail_damaged`: a bad sum, or a line that does not follow the one before it in the same segment; the first line of a segment may start a new chain on purpose and is not counted). Before, any damage anywhere made every opener start a new segment, which with several writers would have started one per contention and pruned the history. `chain_was_broken` still reports damage anywhere.
+* The failed-audit safeguard is unchanged: a record that cannot be written (including a lock that another process holds for ten seconds) is a failed record and stops the service serving clients. The sink stays private and bounded.
+
+**R14-2 (P2), document-tool calls refused by the adapter were not recorded.** Cause: unknown argument names and argument-builder errors returned before `Service::execute`. Fix: `Service::reject(context, OperationId, error)` records a request an adapter refused before it was an operation, through the same `audit_result` and health check as `execute` (so a failed record stops the next call, and a service that is not serving clients answers with that refusal). The client server calls it for unknown names, wrong types, missing values, a negative revision, a conflicting save option and a non-object `arguments`, each with the tool's own operation id. What is recorded is the client, the grant, the operation name and the error code; never an argument, path, password or content. The wire replies are unchanged (JSON-RPC `-32602` for unknown names and a non-object `arguments`, an `invalid_argument` tool error for the rest). **Not recorded, by design:** `bdf_help`, protocol messages (`initialize`, `ping`, `tools/list`), an unknown tool name, and a call by a caller with no valid grant (there is no actor to attribute it to).
+
+**Tests.**
+* `crates/app-service/src/audit.rs`: two writers opened before either records keep all five records in order, numbered once each; three writers recording from three threads lose nothing (90 of 90); two alternating writers cross two segment boundaries with an intact chain (260 of 260); writers sharing a log whose older segment is damaged do not start a segment per record.
+* `crates/automation/tests/client_mcp.rs`: five kinds of malformed call (negative revision; an unknown name carrying a secret-looking value; a wrong type with a path; a bad save argument; a non-object `arguments`) each add exactly one record with the right operation, `failed` and `invalid_argument`, the client and a grant id, and none of the sent values appear in the log, which then verifies (7 records); a sink that cannot record a refusal stops the next call with `audit_unavailable`.
+* `apps/pdfcraft-cli/tests/access.rs`: **the review's scenario through the real binary**: two `mcp --client` processes started and initialised before either calls a tool; one opens, rotates and saves, the other opens and sends a malformed call; the log verifies with five records (three and two by client) and the save is in it.
+
+**Seen to fail with the defect restored** (each reverted, the test run, the fix put back): skipping the re-read of a changed log fails the three two-writer tests and, through the real binary, leaves `records=2, intact=true` where five were written (the review's symptom); removing the lock fails the threaded test on each of three runs; the old any-damage rule fails the damaged-log test; skipping the record in the adapter or in `Service::reject` fails both new client tests.
+
+**Still not done or not claimed.** The ten-second lock wait timing out is not tested (it is a failed record by construction, the same as a failed write, which is tested). A lock file or segment created by another account is not tested. **B8-R5** (a revocation that could not be written is undone in memory by a later transaction that reloads the older file) is a separate finding in the merged BUILD-008 grant store; it is corrected in its own commit on this branch (see [BUILD-008](BUILD-008.md), section 8). Hosted CI, a Codex retest and the owner's acceptance are still to come, and the migration limits in section 6 are unchanged.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-10-31 | First version: inventory of the entry points that bypass the service and the migration options. |
+| 2026-10-31 | Owner chose option A; first slice: the grant-gated MCP server over the service, with tests and mutation proofs. |
+| 2026-11-01 | Corrections for the PR #14 review: shared audit log written under a cross-process lock and re-read when another writer moved it (R14-1); adapter-level refusals recorded through `Service::reject` (R14-2); regressions seen to fail with each defect restored. |
