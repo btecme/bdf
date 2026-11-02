@@ -5,7 +5,9 @@ use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{DocId, Document, Edit, EditError, LinkAction, OpenError, SaveToken, Saved, Session, UNDO_LIMIT};
+use pdfcraft_engine::{
+    DocId, Document, Edit, EditError, LinkAction, OpenError, PageTexts, SaveToken, Saved, Session, TextCache, UNDO_LIMIT, extract_pages,
+};
 use pdfcraft_platform::confinement::{pin_existing, write_confined_gated};
 use pdfcraft_platform::file_identity::{
     Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_regular_with_version, read_with_version_limited, write_guarded_gated,
@@ -19,13 +21,13 @@ use crate::effects::Effect;
 use crate::errors::{ConflictKind, ErrorCode, OperationError, Result};
 use crate::grants::system_now;
 use crate::operations::{
-    Access, Capability, MAX_BOOKMARK_PAGE, OLDEST_SCHEMA, OpenSource, Operation, OperationId, OperationRequest, Overwrite, PageSelection,
-    SCHEMA_VERSION, SaveTarget,
+    Access, Capability, MAX_BOOKMARK_PAGE, MAX_FIND_MATCHES, MAX_FIND_PAGES, MAX_QUERY_CHARS, MAX_TEXT_BYTES, MAX_TEXT_PAGE_LIST, OLDEST_SCHEMA,
+    OpenSource, Operation, OperationId, OperationRequest, Overwrite, PageSelection, SCHEMA_VERSION, SaveTarget,
 };
 use crate::policy::{Denial, DenyReason, Facts, FileUse, Policy, Watch};
 use crate::results::{
-    BookmarkEntry, BookmarkList, DocumentInfo, History, LinkList, LinkSummary, LinkTarget, MAX_LINKS, OperationResult, Outcome, PageSummary,
-    SaveReport,
+    BookmarkEntry, BookmarkList, DocumentInfo, FindNext, FindReport, FoundMatch, History, LinkList, LinkSummary, LinkTarget, MAX_FIND_WARNINGS,
+    MAX_LINKS, MAX_WARNING_BYTES, OperationResult, Outcome, PageSummary, PageTextEntry, PageWarning, SaveReport, TextPages,
 };
 use crate::version::{DocumentKey, DocumentVersion, SavedSnapshot, SessionId};
 
@@ -36,6 +38,11 @@ pub const MAX_OPEN_BYTES: u64 = 512 * 1024 * 1024;
 /// How many planned saves may be waiting to be finished at once. A plan that is never finished (its worker died)
 /// would otherwise stay registered for ever; [`Service::abandon_save`] drops one, and this bounds the rest.
 pub const MAX_SAVES_IN_FLIGHT: usize = 16;
+
+/// Text is read this many pages first, doubling each batch up to [`MAX_BATCH`], so a short request does not read the
+/// pages after the ones it needs (#971).
+const FIRST_BATCH: usize = 8;
+const MAX_BATCH: usize = 128;
 
 /// How many audit records the default in-memory log keeps.
 pub const DEFAULT_AUDIT_RECORDS: usize = 1024;
@@ -104,6 +111,9 @@ pub struct Service {
     journals: HashMap<u64, Journal>,
     /// Seconds since the Unix epoch, for audit records.
     clock: fn() -> i64,
+    /// The text of pages already read, under one memory budget across the session's documents. Whoever reads a page,
+    /// the document is checked first: the cache is never asked about a document the caller may not read.
+    texts: TextCache,
     /// Test seams, each run at the moment its name says, so a test can withdraw a grant exactly there.
     #[cfg(test)]
     hooks: Hooks,
@@ -160,6 +170,7 @@ impl Service {
             health: AuditHealth::default(),
             journals: HashMap::new(),
             clock: system_now,
+            texts: TextCache::default(),
             #[cfg(test)]
             hooks: Hooks::default(),
         }
@@ -346,6 +357,10 @@ impl Service {
             Operation::List => self.list(actor),
             Operation::Links => self.links(self.need(doc_id)?)?,
             Operation::Bookmarks { offset, limit } => self.bookmarks(self.need(doc_id)?, offset, limit)?,
+            Operation::TextExtract { pages, rect } => self.text(self.need(doc_id)?, pages, rect, MAX_TEXT_BYTES, &mut extract_pages)?,
+            Operation::TextFind { query, limit, start_page, skip } => {
+                self.find(self.need(doc_id)?, query, limit, start_page, skip, &mut extract_pages)?
+            }
         };
         #[cfg(test)]
         if let Some(hook) = &self.hooks.before_delivery {
@@ -694,6 +709,178 @@ impl Service {
         Ok(OperationResult { outcome: Outcome::Bookmarks(list), version: Some(version_of(doc)), warnings: Vec::new(), effects: Vec::new() })
     }
 
+    /// The text of `pages` (0-based): from the cache, or read now. A page that cannot be read is a failure here and an
+    /// entry in the answer there; the caller chooses. The batch owns its results, so a cache that evicts while it fills
+    /// cannot lose one the caller asked for, and a worker that returns nothing for a page is an error for that page.
+    fn page_texts(
+        &mut self,
+        id: DocId,
+        pages: &[usize],
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<PageTexts> {
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        let (bytes, count) = (doc.bytes.clone(), doc.info.pages.len());
+        let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
+        // A new revision has new bytes: what was read from the old ones is dropped here.
+        self.texts.prepare(id, &bytes);
+        let mut results = HashMap::new();
+        let mut missing = Vec::new();
+        for &p in pages {
+            if p >= count {
+                results.insert(p, Err("page is out of range".to_owned()));
+            } else if let Some(text) = self.texts.get(id, p) {
+                results.insert(p, Ok(text));
+            } else {
+                missing.push(p);
+            }
+        }
+        missing.sort_unstable();
+        missing.dedup();
+        if !missing.is_empty() {
+            for (p, text) in extract(&bytes, password, &missing) {
+                if let Ok(text) = &text {
+                    self.texts.insert(id, p, &bytes, text.clone());
+                }
+                results.insert(p, text);
+            }
+        }
+        Ok(pages.iter().map(|p| (*p, results.get(p).cloned().unwrap_or_else(|| Err("text extraction returned no result".into())))).collect())
+    }
+
+    fn text(
+        &mut self,
+        id: DocId,
+        pages: PageSelection,
+        rect: Option<[f64; 4]>,
+        max_bytes: usize,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<OperationResult> {
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        let count = doc.info.pages.len();
+        let list: Vec<usize> = match pages {
+            PageSelection::All => (0..count).collect(),
+            PageSelection::Numbers(list) if list.is_empty() => return Err(OperationError::invalid("pages must list at least one page")),
+            PageSelection::Numbers(list) if list.len() > MAX_TEXT_PAGE_LIST => {
+                return Err(OperationError::new(ErrorCode::ResourceLimit, format!("pages may list at most {MAX_TEXT_PAGE_LIST} pages")));
+            }
+            PageSelection::Numbers(list) => list.iter().map(|p| zero_based(*p, count)).collect::<Result<Vec<_>>>()?,
+        };
+        let rect = match rect {
+            None => None,
+            Some(r) => {
+                let r = r.map(|v| v as f32);
+                if !r.iter().all(|v| v.is_finite()) {
+                    return Err(OperationError::invalid("rect must be four finite numbers: left, top, right, bottom in points"));
+                }
+                Some(r)
+            }
+        };
+        let mut out: Vec<PageTextEntry> = Vec::new();
+        let mut bytes = 0usize;
+        let (mut first, mut batch) = (0usize, FIRST_BATCH);
+        'batches: while first < list.len() {
+            let end = first.saturating_add(batch).min(list.len());
+            let slice = list.get(first..end).unwrap_or_default();
+            for (p, text) in self.page_texts(id, slice, extract)? {
+                let text = text.map_err(|e| OperationError::new(ErrorCode::WorkerFailure, format!("page {}: {e}", p.saturating_add(1))))?;
+                let text = match rect {
+                    Some(r) => text.column_text(&text.glyphs_in(r)),
+                    None => text.plain_text(),
+                };
+                if !out.is_empty() && bytes.saturating_add(text.len()) > max_bytes {
+                    break 'batches;
+                }
+                bytes = bytes.saturating_add(text.len());
+                out.push(PageTextEntry { page: p.saturating_add(1), text });
+            }
+            first = end;
+            batch = batch.saturating_mul(2).min(MAX_BATCH);
+        }
+        let omitted_pages = list.len().saturating_sub(out.len());
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        Ok(OperationResult {
+            outcome: Outcome::Text(TextPages { pages: out, omitted_pages }),
+            version: Some(version_of(doc)),
+            warnings: Vec::new(),
+            effects: Vec::new(),
+        })
+    }
+
+    /// Matches in page order, reading page text in growing batches and stopping as soon as `limit` is reached, so a
+    /// bounded search does not read (and cache) the whole document. One match past the limit proves there is more and
+    /// gives the place to go on from; so does reaching [`MAX_FIND_PAGES`]. A page that fails is reported and does not
+    /// discard the matches on the others.
+    fn find(
+        &mut self,
+        id: DocId,
+        query: String,
+        limit: usize,
+        start_page: i64,
+        skip: usize,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<OperationResult> {
+        let count = self.session.get(id).ok_or_else(OperationError::not_found)?.info.pages.len();
+        if !(1..=MAX_FIND_MATCHES).contains(&limit) {
+            return Err(OperationError::invalid(format!("limit must be from 1 to {MAX_FIND_MATCHES}")));
+        }
+        if query.chars().take(MAX_QUERY_CHARS + 1).count() > MAX_QUERY_CHARS {
+            return Err(OperationError::invalid(format!("the query may be at most {MAX_QUERY_CHARS} characters")));
+        }
+        let start = match usize::try_from(start_page) {
+            Ok(p) if p >= 1 && p <= count.max(1) => p - 1,
+            _ => return Err(OperationError::invalid(format!("start_page {start_page} is out of range: the document has {count} pages"))),
+        };
+        let mut matches = Vec::new();
+        let mut next = None;
+        let mut warnings = Vec::new();
+        let mut warning_count = 0usize;
+        let (mut first, mut batch, mut scanned) = (start, FIRST_BATCH, 0usize);
+        'search: while first < count {
+            if scanned >= MAX_FIND_PAGES {
+                next = Some(FindNext { start_page: first.saturating_add(1), skip: 0 });
+                break;
+            }
+            let end = first.saturating_add(batch).min(count).min(first.saturating_add(MAX_FIND_PAGES - scanned));
+            let pages: Vec<usize> = (first..end).collect();
+            scanned = scanned.saturating_add(pages.len());
+            for (p, text) in self.page_texts(id, &pages, extract)? {
+                let text = match text {
+                    Ok(text) => text,
+                    Err(mut error) => {
+                        warning_count = warning_count.saturating_add(1);
+                        if warnings.len() < MAX_FIND_WARNINGS {
+                            let cut = error.floor_char_boundary(MAX_WARNING_BYTES.min(error.len()));
+                            let error_truncated = cut < error.len();
+                            error.truncate(cut);
+                            warnings.push(PageWarning { page: p.saturating_add(1), error, error_truncated });
+                        }
+                        continue;
+                    }
+                };
+                let skip_here = if p == start { skip } else { 0 };
+                // One extra match proves that the caller needs a continuation. Matches skipped on the starting page
+                // count towards the bound on what is held for one page.
+                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(1);
+                for (k, r) in text.find_opts_limited(&query, false, false, needed).into_iter().enumerate().skip(skip_here) {
+                    if matches.len() == limit {
+                        next = Some(FindNext { start_page: p.saturating_add(1), skip: k });
+                        break 'search;
+                    }
+                    matches.push(FoundMatch { page: p.saturating_add(1), text: text.text_of(r.clone()), rects: text.line_rects(r) });
+                }
+            }
+            first = end;
+            batch = batch.saturating_mul(2).min(MAX_BATCH);
+        }
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        Ok(OperationResult {
+            outcome: Outcome::Found(FindReport { query, matches, next, warnings, warning_count }),
+            version: Some(version_of(doc)),
+            warnings: Vec::new(),
+            effects: Vec::new(),
+        })
+    }
+
     fn rotate(&mut self, id: DocId, pages: PageSelection, degrees: i64) -> Result<OperationResult> {
         if degrees % 90 != 0 {
             return Err(OperationError::invalid("degrees must be a multiple of 90"));
@@ -772,6 +959,7 @@ impl Service {
             ));
         }
         self.session.close(id);
+        self.texts.remove(&id);
         self.files.remove(&id.0);
         self.orders.remove(&id.0);
         self.journals.remove(&id.0);
@@ -1426,5 +1614,103 @@ mod tests {
         assert_eq!(last.entry.outcome, AuditOutcome::Denied("grant_revoked".into()));
         assert_eq!(last.entry.effects.len(), 1, "the audit record names the write that happened");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- reading text ----
+
+    fn open_pages(service: &mut Service, pages: usize) -> DocId {
+        let source = OpenSource::Bytes { name: "doc.pdf".into(), bytes: Arc::new(fixture(pages)) };
+        let done =
+            service.execute(&RequestContext::new(1, me()), OperationRequest::new(None, Operation::Open { source, password: None })).expect("opens");
+        match done.outcome {
+            Outcome::Opened { document, .. } => DocId(document.document),
+            other => panic!("opened, got {other:?}"),
+        }
+    }
+
+    fn text_pages(done: OperationResult) -> TextPages {
+        match done.outcome {
+            Outcome::Text(text) => text,
+            other => panic!("text, got {other:?}"),
+        }
+    }
+
+    fn find_report(done: OperationResult) -> FindReport {
+        match done.outcome {
+            Outcome::Found(report) => report,
+            other => panic!("found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_text_answer_stops_before_the_page_that_would_pass_the_budget_and_always_has_the_first_page() {
+        let mut service = Service::new();
+        let id = open_pages(&mut service, 3);
+        // Each page's text is six bytes.
+        let mut read = |max: usize| text_pages(service.text(id, PageSelection::All, None, max, &mut extract_pages).expect("reads"));
+        let all = read(18);
+        assert_eq!((all.pages.len(), all.omitted_pages), (3, 0), "exactly the budget fits");
+        let two = read(17);
+        assert_eq!((two.pages.len(), two.omitted_pages), (2, 1), "one byte less leaves the last page out");
+        assert_eq!(two.pages.iter().map(|p| p.page).collect::<Vec<_>>(), [1, 2], "the pages that fit are the first ones, in order");
+        let one = read(0);
+        assert_eq!((one.pages.len(), one.omitted_pages), (1, 2), "a request is always answered with its first page");
+    }
+
+    #[test]
+    fn a_page_that_cannot_be_read_fails_the_text_and_is_a_warning_in_a_search() {
+        let mut service = Service::new();
+        let id = open_pages(&mut service, 150);
+        // Pages 2, 52 and 102 fail, with a message that is long and not made of single bytes.
+        let mut broken = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| -> PageTexts {
+            extract_pages(bytes, password, pages).into_iter().map(|(p, t)| if p % 50 == 1 { (p, Err("é".repeat(1000))) } else { (p, t) }).collect()
+        };
+        let error = service.text(id, PageSelection::All, None, MAX_TEXT_BYTES, &mut broken).expect_err("strict");
+        assert_eq!(error.code, ErrorCode::WorkerFailure);
+        assert!(error.message.starts_with("page 2: "), "{}", error.message);
+
+        let report = find_report(service.find(id, "Page".into(), 1000, 1, 0, &mut broken).expect("a search keeps what it could read"));
+        assert_eq!(report.matches.len(), 147, "the other pages' matches are kept");
+        assert_eq!(report.warning_count, 3);
+        assert_eq!(report.warnings.iter().map(|w| w.page).collect::<Vec<_>>(), [2, 52, 102]);
+        for w in &report.warnings {
+            assert!(w.error.len() <= MAX_WARNING_BYTES && w.error_truncated && w.error.starts_with('é'), "cut at a character, and says so");
+        }
+
+        // Every page failing, on a document nothing was read from yet: the warnings are bounded and the count is not.
+        let id = open_pages(&mut service, 150);
+        let mut all_broken =
+            |_: &Arc<Vec<u8>>, _: Option<Arc<str>>, pages: &[usize]| -> PageTexts { pages.iter().map(|p| (*p, Err("no".to_owned()))).collect() };
+        let report = find_report(service.find(id, "Page".into(), 10, 1, 0, &mut all_broken).expect("searches"));
+        assert_eq!((report.matches.len(), report.warnings.len(), report.warning_count), (0, MAX_FIND_WARNINGS, 150));
+
+        // A reader that returns nothing for a page is a failure of that page, never an empty success.
+        let mut silent = |_: &Arc<Vec<u8>>, _: Option<Arc<str>>, _: &[usize]| -> PageTexts { Vec::new() };
+        let id = open_pages(&mut service, 3);
+        let report = find_report(service.find(id, "Page".into(), 10, 1, 0, &mut silent).expect("searches"));
+        assert_eq!((report.matches.len(), report.warning_count), (0, 3));
+        assert!(report.warnings[0].error.contains("no result"));
+        assert_eq!(service.text(id, PageSelection::All, None, MAX_TEXT_BYTES, &mut silent).expect_err("strict").code, ErrorCode::WorkerFailure);
+    }
+
+    #[test]
+    fn the_text_cache_drops_what_an_edit_made_stale_and_what_a_close_left_behind() {
+        let mut service = Service::new();
+        let key = open_bytes(&mut service);
+        let id = DocId(key.document);
+        assert!(service.texts.is_empty());
+        find_report(service.find(id, "Page".into(), 10, 1, 0, &mut extract_pages).expect("searches"));
+        assert_eq!(service.texts.len(), 2, "both pages were read once, and are kept");
+
+        let revision = service.document(&me(), key).expect("open").version().content_revision;
+        service.execute(&RequestContext::new(2, me()), rotate_request(key, revision)).expect("rotates");
+        // Reading one page of the edited document: the old pages are gone, not served.
+        text_pages(service.text(id, PageSelection::Numbers(vec![1]), None, MAX_TEXT_BYTES, &mut extract_pages).expect("reads"));
+        assert_eq!(service.texts.len(), 1, "what was read from the earlier content was dropped");
+
+        let revision = service.document(&me(), key).expect("open").version().content_revision;
+        let close = Operation::Close { expected_revision: revision, discard_changes: true };
+        service.execute(&RequestContext::new(3, me()), OperationRequest::new(Some(key), close)).expect("closes");
+        assert_eq!((service.texts.len(), service.texts.bytes()), (0, 0), "a closed document holds nothing");
     }
 }

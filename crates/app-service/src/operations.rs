@@ -18,6 +18,23 @@ pub const OLDEST_SCHEMA: u32 = 1;
 pub const MAX_BOOKMARK_PAGE: usize = 1000;
 pub const DEFAULT_BOOKMARK_PAGE: usize = 100;
 
+/// The most text one `document.text` request returns, in bytes. The page that crosses it is left out and the answer
+/// says how many pages were. A request always returns its first page, however long it is.
+pub const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+/// The most pages a `document.text` request may name when it lists them (a request for all pages names none).
+pub const MAX_TEXT_PAGE_LIST: usize = 10_000;
+
+/// The most matches one `document.find` request returns, and how many it returns when `limit` is not given.
+pub const MAX_FIND_MATCHES: usize = 10_000;
+pub const DEFAULT_FIND_MATCHES: usize = 500;
+
+/// The most pages one `document.find` request reads. A search that gets this far says where to go on from.
+pub const MAX_FIND_PAGES: usize = 2_000;
+
+/// The longest phrase `document.find` looks for, in characters.
+pub const MAX_QUERY_CHARS: usize = 1_000;
+
 /// A stable operation id. The spelling ([`OperationId::name`]) is the contract; the variants are not ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OperationId {
@@ -32,10 +49,12 @@ pub enum OperationId {
     DocumentList,
     DocumentLinks,
     DocumentBookmarks,
+    DocumentText,
+    DocumentFind,
 }
 
 impl OperationId {
-    pub const ALL: [OperationId; 11] = [
+    pub const ALL: [OperationId; 13] = [
         OperationId::DocumentOpen,
         OperationId::DocumentQuery,
         OperationId::PageRotate,
@@ -47,6 +66,8 @@ impl OperationId {
         OperationId::DocumentList,
         OperationId::DocumentLinks,
         OperationId::DocumentBookmarks,
+        OperationId::DocumentText,
+        OperationId::DocumentFind,
     ];
 
     pub fn name(self) -> &'static str {
@@ -137,7 +158,7 @@ pub struct OperationDescriptor {
     pub needs_revision: bool,
 }
 
-pub static DESCRIPTORS: [OperationDescriptor; 11] = [
+pub static DESCRIPTORS: [OperationDescriptor; 13] = [
     OperationDescriptor {
         id: OperationId::DocumentOpen,
         name: "document.open",
@@ -248,6 +269,26 @@ pub static DESCRIPTORS: [OperationDescriptor; 11] = [
         needs_document: true,
         needs_revision: false,
     },
+    OperationDescriptor {
+        id: OperationId::DocumentText,
+        name: "document.text",
+        summary: "The text of some or all pages in reading order, or only what lies inside a rectangle.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::DocumentFind,
+        name: "document.find",
+        summary: "Find a phrase (case-insensitive, whitespace-normalised): page, text and line rectangles of each match.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
 ];
 
 /// One request. `schema_version` is checked before anything else.
@@ -303,6 +344,20 @@ pub enum Operation {
         offset: usize,
         limit: usize,
     },
+    /// The text of `pages`, or of the part of each inside `rect` (left, top, right, bottom in points from the top-left
+    /// of the displayed page, as links and matches are given). At most [`MAX_TEXT_BYTES`] come back.
+    TextExtract {
+        pages: PageSelection,
+        rect: Option<[f64; 4]>,
+    },
+    /// Matches of `query` from page `start_page` (1-based) on, after `skip` matches on that page. `limit` is from 1 to
+    /// [`MAX_FIND_MATCHES`]. The answer carries where to go on from when it stopped before the end.
+    TextFind {
+        query: String,
+        limit: usize,
+        start_page: i64,
+        skip: usize,
+    },
 }
 
 impl Operation {
@@ -319,6 +374,8 @@ impl Operation {
             Operation::List => OperationId::DocumentList,
             Operation::Links => OperationId::DocumentLinks,
             Operation::Bookmarks { .. } => OperationId::DocumentBookmarks,
+            Operation::TextExtract { .. } => OperationId::DocumentText,
+            Operation::TextFind { .. } => OperationId::DocumentFind,
         }
     }
 
@@ -330,7 +387,14 @@ impl Operation {
             | Operation::Redo { expected_revision }
             | Operation::Save { expected_revision, .. }
             | Operation::Close { expected_revision, .. } => Some(*expected_revision),
-            Operation::Open { .. } | Operation::Query | Operation::History | Operation::List | Operation::Links | Operation::Bookmarks { .. } => None,
+            Operation::Open { .. }
+            | Operation::Query
+            | Operation::History
+            | Operation::List
+            | Operation::Links
+            | Operation::Bookmarks { .. }
+            | Operation::TextExtract { .. }
+            | Operation::TextFind { .. } => None,
         }
     }
 }

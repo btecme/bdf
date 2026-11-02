@@ -324,7 +324,19 @@ mod tests {
         }
         // Reading: open (no file, so bytes only), query, history, list, links, bookmarks. Everything that changes, writes,
         // closes, undoes is refused.
-        assert_eq!(allowed, ["document.open", "document.query", "edit.history", "document.list", "document.links", "document.bookmarks"]);
+        assert_eq!(
+            allowed,
+            [
+                "document.open",
+                "document.query",
+                "edit.history",
+                "document.list",
+                "document.links",
+                "document.bookmarks",
+                "document.text",
+                "document.find"
+            ]
+        );
         for d in DESCRIPTORS.iter().filter(|d| matches!(d.access, Access::Mutate | Access::Persist) || d.name == "document.close") {
             let denial = policy.decide(&reader, d, &Facts { reverts: Some(Capability::DocumentRead), ..facts_for(1) }).expect_err(d.name);
             assert!(matches!(denial.reason, DenyReason::CapabilityNotGranted | DenyReason::HistoryNotPermitted), "{}: {denial}", d.name);

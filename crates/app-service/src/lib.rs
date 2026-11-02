@@ -33,13 +33,14 @@ pub use effects::Effect;
 pub use errors::{ConflictKind, ErrorCode, OperationError, Result};
 pub use grants::{AuthError, DocumentScope, FileAccess, GrantError, GrantRequest, GrantStore, GrantTerms, IssuedGrant, Scope};
 pub use operations::{
-    Access, Capability, DEFAULT_BOOKMARK_PAGE, DESCRIPTORS, MAX_BOOKMARK_PAGE, OLDEST_SCHEMA, OpenSource, Operation, OperationDescriptor,
-    OperationId, OperationRequest, Overwrite, PageSelection, Release, SCHEMA_VERSION, SaveTarget,
+    Access, Capability, DEFAULT_BOOKMARK_PAGE, DEFAULT_FIND_MATCHES, DESCRIPTORS, MAX_BOOKMARK_PAGE, MAX_FIND_MATCHES, MAX_FIND_PAGES,
+    MAX_QUERY_CHARS, MAX_TEXT_BYTES, MAX_TEXT_PAGE_LIST, OLDEST_SCHEMA, OpenSource, Operation, OperationDescriptor, OperationId, OperationRequest,
+    Overwrite, PageSelection, Release, SCHEMA_VERSION, SaveTarget,
 };
 pub use policy::{Denial, DenyReason, Facts, FileUse, Policy, ReleaseProfile, Watch};
 pub use results::{
-    BookmarkEntry, BookmarkList, DocumentInfo, History, LinkList, LinkSummary, LinkTarget, MAX_LINKS, OperationResult, Outcome, PageSummary,
-    SaveReport,
+    BookmarkEntry, BookmarkList, DocumentInfo, FindNext, FindReport, FoundMatch, History, LinkList, LinkSummary, LinkTarget, MAX_FIND_WARNINGS,
+    MAX_LINKS, MAX_WARNING_BYTES, OperationResult, Outcome, PageSummary, PageTextEntry, PageWarning, SaveReport, TextPages,
 };
 pub use service::{DocumentView, MAX_OPEN_BYTES, MAX_SAVES_IN_FLIGHT, PreparedSave, RequestContext, SchemaRange, ScriptTrust, Service, WrittenSave};
 pub use version::{DocumentKey, DocumentVersion, SavedSnapshot, SessionId};

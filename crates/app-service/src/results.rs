@@ -33,6 +33,8 @@ pub enum Outcome {
     Documents(Vec<DocumentInfo>),
     Links(LinkList),
     Bookmarks(BookmarkList),
+    Text(TextPages),
+    Found(FindReport),
 }
 
 /// A document as a caller may see it. Pages are numbered from 1 and sized in points as displayed (after rotation).
@@ -133,4 +135,60 @@ pub struct BookmarkEntry {
     /// 1-based page it goes to.
     pub page: Option<usize>,
     pub open: bool,
+}
+
+/// The text of pages, in the order they were asked for. When the answer would pass `MAX_TEXT_BYTES` the pages that
+/// did not fit are left out, from the one that crossed it on, and `omitted_pages` counts them; the first page is
+/// always there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextPages {
+    pub pages: Vec<PageTextEntry>,
+    pub omitted_pages: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageTextEntry {
+    /// 1-based.
+    pub page: usize,
+    pub text: String,
+}
+
+/// What a search found. It stopped early when `next` is set: `next` is where to ask again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FindReport {
+    pub query: String,
+    pub matches: Vec<FoundMatch>,
+    pub next: Option<FindNext>,
+    /// Pages that could not be read (at most [`MAX_FIND_WARNINGS`]); `warning_count` counts them all. The matches on
+    /// the other pages are kept.
+    pub warnings: Vec<PageWarning>,
+    pub warning_count: usize,
+}
+
+/// The most failed pages a search lists, and the longest message it keeps for one, in bytes.
+pub const MAX_FIND_WARNINGS: usize = 100;
+pub const MAX_WARNING_BYTES: usize = 1024;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FoundMatch {
+    /// 1-based.
+    pub page: usize,
+    pub text: String,
+    /// One rectangle per line the match covers: left, top, right, bottom in points from the top-left of the page.
+    pub rects: Vec<[f32; 4]>,
+}
+
+/// Where a search that stopped goes on: `start_page` (1-based) and the matches to skip on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FindNext {
+    pub start_page: usize,
+    pub skip: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageWarning {
+    /// 1-based.
+    pub page: usize,
+    pub error: String,
+    pub error_truncated: bool,
 }

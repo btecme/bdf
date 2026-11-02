@@ -143,6 +143,8 @@ fn every_operation_has_one_descriptor_and_the_descriptor_matches_the_typed_reque
         Operation::List,
         Operation::Links,
         Operation::Bookmarks { offset: 0, limit: DEFAULT_BOOKMARK_PAGE },
+        Operation::TextExtract { pages: PageSelection::All, rect: None },
+        Operation::TextFind { query: String::new(), limit: DEFAULT_FIND_MATCHES, start_page: 1, skip: 0 },
     ];
     assert_eq!(samples.len(), OperationId::ALL.len());
     for op in samples {
@@ -949,4 +951,180 @@ fn a_list_of_links_is_capped_and_says_how_many_there_are() {
     assert_eq!(list.total, count);
     assert_eq!(list.links.len(), MAX_LINKS);
     assert_eq!(list.links[MAX_LINKS - 1].index, MAX_LINKS, "the first ones, in order");
+}
+
+// ---- reading: text and search ----
+
+fn text_of(service: &mut Service, key: DocumentKey, pages: PageSelection, rect: Option<[f64; 4]>) -> Result<TextPages> {
+    run(service, Some(key), Operation::TextExtract { pages, rect }).map(|done| match done.outcome {
+        Outcome::Text(text) => text,
+        other => panic!("text, got {other:?}"),
+    })
+}
+
+fn found(service: &mut Service, key: DocumentKey, query: &str, limit: usize, start_page: i64, skip: usize) -> Result<FindReport> {
+    run(service, Some(key), Operation::TextFind { query: query.into(), limit, start_page, skip }).map(|done| match done.outcome {
+        Outcome::Found(report) => report,
+        other => panic!("found, got {other:?}"),
+    })
+}
+
+fn pages_and_text(text: &TextPages) -> Vec<(usize, &str)> {
+    text.pages.iter().map(|p| (p.page, p.text.as_str())).collect()
+}
+
+#[test]
+fn text_comes_in_the_order_asked_and_from_every_page_when_none_are_named() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 3);
+    let all = text_of(&mut service, key, PageSelection::All, None).expect("reads");
+    assert_eq!(pages_and_text(&all), [(1, "Page 1"), (2, "Page 2"), (3, "Page 3")]);
+    assert_eq!(all.omitted_pages, 0);
+    let some = text_of(&mut service, key, PageSelection::Numbers(vec![3, 1, 3]), None).expect("reads");
+    assert_eq!(pages_and_text(&some), [(3, "Page 3"), (1, "Page 1"), (3, "Page 3")]);
+}
+
+#[test]
+fn a_rectangle_takes_only_the_text_inside_it_and_either_pair_of_corners_will_do() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 2);
+    let pick = |service: &mut Service, rect| text_of(service, key, PageSelection::Numbers(vec![2]), Some(rect)).expect("reads");
+    assert_eq!(pages_and_text(&pick(&mut service, [0.0, 0.0, 200.0, 300.0])), [(2, "Page 2")]);
+    assert_eq!(pages_and_text(&pick(&mut service, [200.0, 300.0, 0.0, 0.0])), [(2, "Page 2")], "corners in the other order");
+    assert_eq!(pages_and_text(&pick(&mut service, [0.0, 0.0, 200.0, 10.0])), [(2, "")], "nothing there, and the page is still answered");
+}
+
+#[test]
+fn bad_text_arguments_are_refused_and_change_nothing() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    for pages in
+        [PageSelection::Numbers(vec![]), PageSelection::Numbers(vec![0]), PageSelection::Numbers(vec![3]), PageSelection::Numbers(vec![1, -1])]
+    {
+        assert_eq!(text_of(&mut service, key, pages.clone(), None).expect_err("refused").code, ErrorCode::InvalidArgument, "{pages:?}");
+    }
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0e300] {
+        let rect = Some([0.0, 0.0, bad, 10.0]);
+        assert_eq!(text_of(&mut service, key, PageSelection::All, rect).expect_err("refused").code, ErrorCode::InvalidArgument, "{bad}");
+    }
+    let too_many = PageSelection::Numbers(vec![1; MAX_TEXT_PAGE_LIST + 1]);
+    assert_eq!(text_of(&mut service, key, too_many, None).expect_err("refused").code, ErrorCode::ResourceLimit);
+    let exactly = PageSelection::Numbers(vec![1; MAX_TEXT_PAGE_LIST]);
+    assert_eq!(text_of(&mut service, key, exactly, None).expect("the limit itself is allowed").pages.len(), MAX_TEXT_PAGE_LIST);
+    assert_eq!(service.document(&me(), key).expect("open").version(), version, "reading changes nothing");
+}
+
+#[test]
+fn a_search_finds_matches_in_page_order_with_their_text_and_line_rectangles() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 3);
+    let report = found(&mut service, key, "page", 100, 1, 0).expect("searches");
+    assert_eq!(report.query, "page");
+    assert_eq!(report.matches.iter().map(|m| (m.page, m.text.as_str())).collect::<Vec<_>>(), [(1, "Page"), (2, "Page"), (3, "Page")]);
+    assert!(report.next.is_none() && report.warnings.is_empty() && report.warning_count == 0);
+    for m in &report.matches {
+        assert_eq!(m.rects.len(), 1, "one line");
+        let [left, top, right, bottom] = m.rects[0];
+        assert!(0.0 <= left && left < right && right <= 200.0 && 0.0 <= top && top < bottom && bottom <= 300.0, "inside the page: {:?}", m.rects[0]);
+        // The rectangle is in the same space as the text extraction's: it selects exactly the text it was found as.
+        let rect = m.rects[0].map(f64::from);
+        let inside = text_of(&mut service, key, PageSelection::Numbers(vec![m.page as i64]), Some(rect)).expect("reads");
+        assert_eq!(pages_and_text(&inside), [(m.page, "Page")]);
+    }
+}
+
+#[test]
+fn a_phrase_is_matched_without_regard_to_case_or_spacing_and_an_empty_one_matches_nothing() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 3);
+    let report = found(&mut service, key, "  pAGE   2 ", 100, 1, 0).expect("searches");
+    assert_eq!(report.matches.iter().map(|m| (m.page, m.text.as_str())).collect::<Vec<_>>(), [(2, "Page 2")]);
+    for nothing in ["", "   ", "absent"] {
+        let report = found(&mut service, key, nothing, 100, 1, 0).expect("searches");
+        assert!(report.matches.is_empty() && report.next.is_none() && report.warning_count == 0, "{nothing:?}");
+    }
+}
+
+#[test]
+fn a_search_that_stops_at_its_limit_says_where_to_go_on_from_and_the_pieces_add_up() {
+    let mut service = Service::new();
+    // "1" is in Page 1, Page 10, Page 11 (twice) and Page 12: five matches, two on one page.
+    let (key, _) = open_bytes(&mut service, 12);
+    let all = found(&mut service, key, "1", 100, 1, 0).expect("searches");
+    assert_eq!(all.matches.iter().map(|m| m.page).collect::<Vec<_>>(), [1, 10, 11, 11, 12]);
+    assert!(all.next.is_none());
+
+    for step in [1, 2, 3] {
+        let (mut pieces, mut at, mut places) = (Vec::new(), (1i64, 0usize), Vec::new());
+        loop {
+            let part = found(&mut service, key, "1", step, at.0, at.1).expect("searches");
+            assert!(part.matches.len() <= step);
+            pieces.extend(part.matches);
+            match part.next {
+                Some(next) => {
+                    places.push(next);
+                    at = (next.start_page as i64, next.skip);
+                }
+                None => break,
+            }
+        }
+        assert_eq!(pieces, all.matches, "limit {step}: the pieces are the whole list, in order, none twice");
+        if step == 1 {
+            assert!(places.contains(&FindNext { start_page: 11, skip: 1 }), "a continuation inside a page: {places:?}");
+        }
+    }
+}
+
+#[test]
+fn bad_search_arguments_are_refused_and_change_nothing() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    let long = "a".repeat(MAX_QUERY_CHARS + 1);
+    let accents = "é".repeat(MAX_QUERY_CHARS);
+    let refusals = [
+        found(&mut service, key, "x", 0, 1, 0),
+        found(&mut service, key, "x", MAX_FIND_MATCHES + 1, 1, 0),
+        found(&mut service, key, "x", usize::MAX, 1, 0),
+        found(&mut service, key, &long, 10, 1, 0),
+        found(&mut service, key, "x", 10, 0, 0),
+        found(&mut service, key, "x", 10, -1, 0),
+        found(&mut service, key, "x", 10, 3, 0),
+        found(&mut service, key, "x", 10, i64::MIN, 0),
+        found(&mut service, key, "x", 10, i64::MAX, 0),
+    ];
+    for (i, r) in refusals.into_iter().enumerate() {
+        assert_eq!(r.expect_err("refused").code, ErrorCode::InvalidArgument, "case {i}");
+    }
+    found(&mut service, key, &"a".repeat(MAX_QUERY_CHARS), MAX_FIND_MATCHES, 2, usize::MAX).expect("the limits themselves, and a skip past the end");
+    found(&mut service, key, &accents, 10, 1, 0).expect("the bound counts characters, not bytes");
+    assert_eq!(service.document(&me(), key).expect("open").version(), version);
+}
+
+#[test]
+fn a_search_reads_at_most_a_bounded_number_of_pages_and_says_where_it_stopped() {
+    let mut service = Service::new();
+    let pages = MAX_FIND_PAGES + 10;
+    let (key, _) = open_bytes(&mut service, pages);
+    let first = found(&mut service, key, "absent", 10, 1, 0).expect("searches");
+    assert!(first.matches.is_empty());
+    assert_eq!(first.next, Some(FindNext { start_page: MAX_FIND_PAGES + 1, skip: 0 }), "stopped, and not complete");
+    let rest = found(&mut service, key, "absent", 10, (MAX_FIND_PAGES + 1) as i64, 0).expect("searches");
+    assert!(rest.next.is_none(), "the end of the document");
+    // A match past the first stretch is found by going on from where the first one stopped.
+    let late = found(&mut service, key, &format!("Page {pages}"), 10, (MAX_FIND_PAGES + 1) as i64, 0).expect("searches");
+    assert_eq!(late.matches.iter().map(|m| m.page).collect::<Vec<_>>(), [pages]);
+}
+
+#[test]
+fn text_and_search_follow_an_edit_and_a_closed_document_is_not_found() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    let before = found(&mut service, key, "Page 1", 10, 1, 0).expect("searches").matches[0].rects.clone();
+    rotate(&mut service, key, version.content_revision, 1).expect("rotates");
+    let after = found(&mut service, key, "Page 1", 10, 1, 0).expect("searches").matches[0].rects.clone();
+    assert_ne!(before, after, "what is found is where the page now shows it, not where it was when it was first read");
+    let current = service.document(&me(), key).expect("open").version();
+    run(&mut service, Some(key), Operation::Close { expected_revision: current.content_revision, discard_changes: true }).expect("closes");
+    assert_eq!(text_of(&mut service, key, PageSelection::All, None).expect_err("gone").code, ErrorCode::NotFound);
+    assert_eq!(found(&mut service, key, "Page", 10, 1, 0).expect_err("gone").code, ErrorCode::NotFound);
 }

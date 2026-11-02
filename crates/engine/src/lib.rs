@@ -28,6 +28,7 @@ pub mod js;
 pub mod links;
 pub mod ocr;
 pub mod optimizer;
+mod page_text;
 pub mod printcheck;
 mod scan_colours;
 pub mod signature_image;
@@ -149,6 +150,7 @@ pub type SplitPart = (usize, usize, Arc<Vec<u8>>);
 
 use std::sync::Arc;
 
+pub use page_text::{PageText, PageTexts, TextCache, TextGlyph, extract_pages};
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 pub use pdfcraft_render::OpenError;
 use pdfcraft_render::{DocInfo, Layer, LayerOp, ReadingColors, RenderConfig, RenderPool, inspect};

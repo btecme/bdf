@@ -29,14 +29,13 @@ mod printing;
 mod reading;
 mod redact;
 mod signing;
-mod text_cache;
 mod tools;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
+use pdfcraft_engine::{CombineSource, DocId, Document, Edit, PageTexts, Session, TextCache, commands, extract_pages};
 use pdfcraft_platform::confinement::{pin_existing, write_confined_with};
 use pdfcraft_platform::file_identity::{
     Authority, Conflict, FileVersion, conflict_of, parse_fingerprint, read_regular_with_version, read_with_version, write_guarded,
@@ -154,9 +153,6 @@ const MAX_BOOKMARK_PAGE: usize = 1000;
 const FIND_FIRST_BATCH: usize = 8;
 const FIND_MAX_BATCH: usize = 128;
 
-use text_cache::TextCache;
-
-type PageTexts = Vec<(usize, std::result::Result<Arc<PageText>, String>)>;
 const FIND_MAX_WARNINGS: usize = 100;
 const FIND_MAX_WARNING_BYTES: usize = 1024;
 
@@ -1834,7 +1830,7 @@ impl Automation {
 
     /// The text of `pages` (0-based), from the cache or extracted in parallel.
     fn page_texts(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<Arc<PageText>>> {
-        self.page_text_results(id, pages, &mut extract_parallel)?
+        self.page_text_results(id, pages, &mut extract_pages)?
             .into_iter()
             .map(|(p, text)| text.map_err(|e| failed(format!("page {}: {e}", p + 1))))
             .collect()
@@ -1900,7 +1896,7 @@ impl Automation {
     /// (#971). One match past the limit supplies `next`. Reached extraction failures are reported
     /// as bounded warnings; `complete` requires both no continuation and no failed pages.
     fn text_find(&mut self, a: &Args) -> Result<Value> {
-        self.text_find_with(a, &mut extract_parallel)
+        self.text_find_with(a, &mut extract_pages)
     }
 
     fn text_find_with(&mut self, a: &Args, extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts) -> Result<Value> {
@@ -2376,44 +2372,6 @@ fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> 
     Ok(out)
 }
 
-/// Extract the text of `pages` (0-based) with one renderer per worker thread.
-fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
-    let extract = |r: &mut PageRenderer, p: usize| {
-        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
-        match out.error {
-            Some(e) => Err(e),
-            None => Ok(out.text.unwrap_or_default()),
-        }
-    };
-    let config = RenderConfig { password, ..Default::default() };
-    let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(8) };
-    // Small jobs aren't worth a second parse of the document.
-    if workers == 1 || pages.len() < 8 {
-        let mut r = PageRenderer::new(bytes.clone(), config);
-        return pages.iter().map(|p| (*p, extract(&mut r, *p))).collect();
-    }
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let mut out: PageTexts = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..workers)
-            .map(|_| {
-                s.spawn(|| {
-                    let mut r = PageRenderer::new(bytes.clone(), config.clone());
-                    let mut done = Vec::new();
-                    loop {
-                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(p) = pages.get(i) else { break };
-                        done.push((*p, extract(&mut r, *p)));
-                    }
-                    done
-                })
-            })
-            .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
-    });
-    out.sort_by_key(|(p, _)| *p);
-    out
-}
-
 /// The file `name` inside `dir`, where `name` comes from a document or an argument: separators,
 /// colons (a Windows drive or stream) and control characters become `_`, and a name of only dots
 /// gets a leading `_`, so it is one plain file name and can't lead out of `dir`.
@@ -2556,7 +2514,7 @@ mod tests {
         let mut a = Automation::new();
         let id = search_document(&mut a, 16);
         let mut extract = |bytes: &Arc<Vec<u8>>, password, pages: &[usize]| {
-            extract_parallel(bytes, password, pages)
+            extract_pages(bytes, password, pages)
                 .into_iter()
                 .map(|(p, result)| (p, if [2, 6].contains(&p) { Err(format!("synthetic page {} failure", p + 1)) } else { result }))
                 .collect()
@@ -2595,7 +2553,7 @@ mod tests {
         let first = a
             .text_find_with(&Args(&json!({ "doc": id.0, "query": "Page", "limit": 1 })), &mut |bytes, password, pages| {
                 assert!(pages.iter().all(|p| *p < FIND_FIRST_BATCH), "a bounded search must not reach the bad page at the end");
-                extract_parallel(bytes, password, pages)
+                extract_pages(bytes, password, pages)
             })
             .unwrap();
         assert_eq!(first["count"], 1);

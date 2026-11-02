@@ -69,6 +69,7 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `links` | Link creation, properties, and finding URLs in page text |
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
+| `page_text` | Page text for what reads or searches it: `extract_pages` (one renderer per worker thread) and `TextCache`, a bounded cache of extracted pages shared by the application service and the automation tools |
 
 ## Not done here
 

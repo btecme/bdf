@@ -9,8 +9,8 @@
 //!   this build is and which operations it has. It lists no files and returns no document content (the specification's
 //!   rule for an MCP invocation that has no grant); every other tool call is refused.
 //! * **With a grant** the tools are the service's operations, under the names the automation tools already use where
-//!   there is one: `doc_open`, `doc_info`, `doc_list`, `link_list`, `bookmark_list`, `page_rotate`, `edit_undo`,
-//!   `edit_redo`, `edit_history`, `doc_save` and `doc_close`. What the grant allows is the policy's decision, not this module's: a read-only grant lists the same
+//!   there is one: `doc_open`, `doc_info`, `doc_list`, `link_list`, `bookmark_list`, `text_extract`, `text_find`,
+//!   `page_rotate`, `edit_undo`, `edit_redo`, `edit_history`, `doc_save` and `doc_close`. What the grant allows is the policy's decision, not this module's: a read-only grant lists the same
 //!   tools and is refused at the call.
 //! * A tool that changes or discards content names the revision it was made against (`revision`, from the last reply).
 //!
@@ -20,9 +20,9 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use pdfcraft_app_service::{
-    ActorContext, BookmarkList, ConflictKind, DEFAULT_BOOKMARK_PAGE, DESCRIPTORS, DocumentInfo, DocumentKey, Effect, ErrorCode, History, LinkList,
-    LinkTarget, OpenSource, Operation, OperationError, OperationId, OperationRequest, OperationResult, Outcome, Overwrite, PageSelection,
-    RequestContext, SaveReport, SaveTarget, Service,
+    ActorContext, BookmarkList, ConflictKind, DEFAULT_BOOKMARK_PAGE, DEFAULT_FIND_MATCHES, DESCRIPTORS, DocumentInfo, DocumentKey, Effect, ErrorCode,
+    FindReport, History, LinkList, LinkTarget, OpenSource, Operation, OperationError, OperationId, OperationRequest, OperationResult, Outcome,
+    Overwrite, PageSelection, RequestContext, SaveReport, SaveTarget, Service, TextPages,
 };
 use serde_json::{Map, Value, json};
 
@@ -223,7 +223,7 @@ struct Spec {
     build: Build,
 }
 
-static SPECS: [Spec; 11] = [
+static SPECS: [Spec; 13] = [
     Spec {
         name: "doc_open",
         operation: OperationId::DocumentOpen,
@@ -372,6 +372,43 @@ static SPECS: [Spec; 11] = [
             Ok((Some(a.doc()?), Operation::Bookmarks { offset, limit }))
         },
     },
+    Spec {
+        name: "text_extract",
+        operation: OperationId::DocumentText,
+        title: "Extract text",
+        description: "The text of the listed pages, or all, in reading order. With rect (left, top, right, bottom in points from the top-left of the page), only the text inside it, one row per visual line. A long answer stops at a page boundary and says truncated and how many pages it left out.",
+        args: &[("doc", "integer", true), ("pages", "array", false), ("rect", "array", false)],
+        read_only: true,
+        destructive: false,
+        build: |a| {
+            let pages = match a.opt_int_list("pages")? {
+                Some(list) => PageSelection::Numbers(list),
+                None => PageSelection::All,
+            };
+            Ok((Some(a.doc()?), Operation::TextExtract { pages, rect: a.opt_rect("rect")? }))
+        },
+    },
+    Spec {
+        name: "text_find",
+        operation: OperationId::DocumentFind,
+        title: "Find text",
+        description: "Find a phrase (case-insensitive, whitespace-normalised): matches in page order with page, text and line rectangles in points (origin top-left). `next` ({start_page, skip}) says where to go on when the search stopped before the end; complete is false then, and after a page that could not be read (warnings).",
+        args: &[
+            ("doc", "integer", true),
+            ("query", "string", true),
+            ("limit", "integer", false),
+            ("start_page", "integer", false),
+            ("skip", "integer", false),
+        ],
+        read_only: true,
+        destructive: false,
+        build: |a| {
+            let limit = usize::try_from(a.opt_uint("limit")?.unwrap_or(DEFAULT_FIND_MATCHES as u64)).unwrap_or(usize::MAX);
+            let skip = usize::try_from(a.opt_uint("skip")?.unwrap_or(0)).unwrap_or(usize::MAX);
+            let start_page = a.opt_int("start_page")?.unwrap_or(1);
+            Ok((Some(a.doc()?), Operation::TextFind { query: a.string("query")?, limit, start_page, skip }))
+        },
+    },
 ];
 
 fn document_tools() -> Vec<Value> {
@@ -446,6 +483,28 @@ impl Args<'_> {
         match self.get(key) {
             None => Ok(None),
             Some(v) => v.as_u64().map(Some).ok_or_else(|| format!("{key} must be a whole number, 0 or more")),
+        }
+    }
+
+    fn opt_int(&self, key: &str) -> Result<Option<i64>, String> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(v) => v.as_i64().map(Some).ok_or_else(|| format!("{key} must be a whole number")),
+        }
+    }
+
+    fn opt_rect(&self, key: &str) -> Result<Option<[f64; 4]>, String> {
+        let wrong = || format!("{key} must be four numbers: left, top, right, bottom");
+        match self.get(key) {
+            None => Ok(None),
+            Some(Value::Array(items)) if items.len() == 4 => {
+                let mut rect = [0.0; 4];
+                for (slot, item) in rect.iter_mut().zip(items) {
+                    *slot = item.as_f64().ok_or_else(wrong)?;
+                }
+                Ok(Some(rect))
+            }
+            Some(_) => Err(wrong()),
         }
     }
 
@@ -525,6 +584,8 @@ fn success(result: &OperationResult) -> Value {
         Outcome::Documents(documents) => json!({ "documents": documents.iter().map(info_json).collect::<Vec<_>>() }),
         Outcome::Links(list) => links_json(list),
         Outcome::Bookmarks(list) => bookmarks_json(list),
+        Outcome::Text(text) => text_json(text),
+        Outcome::Found(report) => found_json(report),
     };
     if let Some(version) = &result.version {
         body["revision"] = json!(version.content_revision);
@@ -576,6 +637,35 @@ fn links_json(list: &LinkList) -> Value {
 fn bookmarks_json(list: &BookmarkList) -> Value {
     let rows = list.rows.iter().map(|r| BookmarkView { path: r.path.clone(), title: &r.title, page: r.page, open: r.open });
     json!({ "bookmarks": nest_rows(rows), "next": list.next, "truncated": list.truncated })
+}
+
+fn text_json(text: &TextPages) -> Value {
+    let pages: Vec<Value> = text.pages.iter().map(|p| json!({ "page": p.page, "text": p.text })).collect();
+    let mut body = json!({ "pages": pages });
+    if text.omitted_pages > 0 {
+        body["truncated"] = json!(true);
+        body["omitted_pages"] = json!(text.omitted_pages);
+    }
+    body
+}
+
+fn found_json(report: &FindReport) -> Value {
+    let matches: Vec<Value> = report.matches.iter().map(|m| json!({ "page": m.page, "text": m.text, "rects": m.rects })).collect();
+    let warnings: Vec<Value> =
+        report.warnings.iter().map(|w| json!({ "page": w.page, "error": w.error, "error_truncated": w.error_truncated })).collect();
+    let mut body = json!({
+        "query": report.query,
+        "count": matches.len(),
+        "complete": report.next.is_none() && report.warning_count == 0,
+        "matches": matches,
+        "warnings_truncated": report.warning_count > report.warnings.len(),
+        "warning_count": report.warning_count,
+        "warnings": warnings,
+    });
+    if let Some(next) = report.next {
+        body["next"] = json!({ "start_page": next.start_page, "skip": next.skip });
+    }
+    body
 }
 
 fn history_json(h: &History) -> Value {

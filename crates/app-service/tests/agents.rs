@@ -785,3 +785,91 @@ fn document_scripts_are_off_unless_someone_has_decided_to_trust_them() {
     assert!(!service_with(&grants).scripts_enabled(), "granting a client access does not turn scripts on");
     assert_eq!(ScriptTrust::default(), ScriptTrust::Disabled);
 }
+
+fn open_notes(service: &mut Service) -> DocumentKey {
+    let source = OpenSource::Bytes { name: "notes.pdf".into(), bytes: Arc::new(fixture(2)) };
+    match run(service, &human(1), None, Operation::Open { source, password: None }).expect("opens").outcome {
+        Outcome::Opened { document, .. } => document,
+        other => panic!("opened, got {other:?}"),
+    }
+}
+
+fn text_ops() -> [Operation; 2] {
+    [
+        Operation::TextExtract { pages: PageSelection::All, rect: None },
+        Operation::TextFind { query: "Page 2".into(), limit: 10, start_page: 1, skip: 0 },
+    ]
+}
+
+#[test]
+fn a_client_reads_and_searches_text_only_in_the_documents_it_was_granted() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let first = open_notes(&mut service);
+    let second = open_notes(&mut service);
+    let request = GrantRequest {
+        scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![first]) }],
+        ..GrantRequest::read_only(ClientId::parse("narrow").expect("a name"))
+    };
+    let issued = grants.issue(request).expect("issues");
+    let narrow = grants.authenticate("narrow", issued.secret()).expect("authenticates");
+    let ctx = RequestContext::new(2, narrow);
+
+    match run(&mut service, &ctx, Some(first), text_ops()[0].clone()).expect("reads").outcome {
+        Outcome::Text(text) => assert_eq!(text.pages.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Page 1", "Page 2"]),
+        other => panic!("text, got {other:?}"),
+    }
+    match run(&mut service, &ctx, Some(first), text_ops()[1].clone()).expect("searches").outcome {
+        Outcome::Found(report) => assert_eq!(report.matches.len(), 1),
+        other => panic!("found, got {other:?}"),
+    }
+    // The other document, one that does not exist and one of another session all get the one answer, and what the
+    // person (or a wider grant) has already read of the other document is not served from the cache to this client.
+    run(&mut service, &human(3), Some(second), text_ops()[0].clone()).expect("the person reads it");
+    let missing = DocumentKey { session: service.session_id(), document: 9_999 };
+    let foreign = DocumentKey { session: Service::new().session_id(), document: first.document };
+    for operation in text_ops() {
+        for key in [second, missing, foreign] {
+            assert_eq!(refused(run(&mut service, &ctx, Some(key), operation.clone())), (ErrorCode::NotAuthorized, Some("document_out_of_scope")));
+        }
+    }
+}
+
+#[test]
+fn a_client_that_was_not_granted_reading_gets_no_text() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let key = open_notes(&mut service);
+    let (editor, _) = grant(&grants, "editor", &[Capability::DocumentEditPages], FileAccess::default());
+    let ctx = RequestContext::new(2, editor);
+    for operation in text_ops() {
+        assert_eq!(refused(run(&mut service, &ctx, Some(key), operation)), (ErrorCode::NotAuthorized, Some("capability_not_granted")));
+    }
+}
+
+#[test]
+fn reading_and_searching_text_is_audited_without_the_text_or_the_phrase() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let key = open_notes(&mut service);
+    let ctx = RequestContext::new(2, read_only(&grants, "reader"));
+    for operation in text_ops() {
+        run(&mut service, &ctx, Some(key), operation).expect("runs");
+    }
+    run(&mut service, &ctx, Some(key), Operation::TextFind { query: "Page 2".into(), limit: 0, start_page: 1, skip: 0 }).expect_err("a bad bound");
+    let records = service.recent_audit();
+    let by_agent: Vec<(&str, &AuditOutcome)> =
+        records.iter().filter(|r| r.entry.actor.as_str() == "agent").map(|r| (r.entry.operation.as_str(), &r.entry.outcome)).collect();
+    assert_eq!(
+        by_agent,
+        [
+            ("document.text", &AuditOutcome::Ok),
+            ("document.find", &AuditOutcome::Ok),
+            ("document.find", &AuditOutcome::Failed("invalid_argument".into())),
+        ]
+    );
+    let everything = format!("{records:?}");
+    for read in ["Page 1", "Page 2", "notes.pdf"] {
+        assert!(!everything.contains(read), "the record does not hold {read:?}");
+    }
+}

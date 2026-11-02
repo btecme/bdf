@@ -208,7 +208,7 @@ fn without_a_grant_the_server_lists_only_help_and_serves_nothing() {
         assert_eq!(error_code(&body), "not_authorized", "{tool}");
     }
     // The tools that were never offered are not tools.
-    let reply = rpc(&mut server, 2, "tools/call", json!({ "name": "text_extract", "arguments": {} }));
+    let reply = rpc(&mut server, 2, "tools/call", json!({ "name": "page_render", "arguments": {} }));
     assert!(reply.get("error").is_some(), "{reply}");
 }
 
@@ -217,7 +217,7 @@ fn a_read_only_grant_opens_inside_its_folder_and_is_refused_every_change() {
     let f = Fixture::new("read-only");
     let path = f.file(&f.work, "a.pdf", 3);
     let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
-    assert_eq!(tool_names(&mut server).len(), 12, "help and the eleven operations");
+    assert_eq!(tool_names(&mut server).len(), 14, "help and the thirteen operations");
 
     let opened = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
     assert_eq!(opened["pages"].as_array().expect("pages").len(), 3);
@@ -461,6 +461,107 @@ fn the_client_tools_answer_as_the_automation_tools_do() {
         mine["doc"] = json!(doc);
         theirs["doc"] = json!(tool_doc);
         assert_eq!(without_revision(ok(&mut server, "bookmark_list", mine.clone())), tool_json(&mut tools, "bookmark_list", theirs), "{mine}");
+    }
+}
+
+#[test]
+fn a_read_only_grant_reads_and_searches_text_end_to_end() {
+    let f = Fixture::new("read-text");
+    let path = f.work.join("text.pdf");
+    std::fs::write(&path, fixture(12)).expect("writes the fixture");
+    let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
+    let opened = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
+    let (doc, revision) = (opened["doc"].as_u64().expect("doc"), opened["revision"].as_u64().expect("revision"));
+
+    let all = ok(&mut server, "text_extract", json!({ "doc": doc }));
+    assert_eq!(all["pages"].as_array().expect("pages").len(), 12);
+    assert_eq!(all["pages"][11], json!({ "page": 12, "text": "Page 12" }));
+    assert!(all.get("truncated").is_none());
+    let two = ok(&mut server, "text_extract", json!({ "doc": doc, "pages": [2] }));
+    assert_eq!(two["pages"], json!([{ "page": 2, "text": "Page 2" }]));
+    let inside = ok(&mut server, "text_extract", json!({ "doc": doc, "pages": [2], "rect": [0, 0, 200, 300] }));
+    assert_eq!(inside["pages"][0]["text"], "Page 2");
+    let outside = ok(&mut server, "text_extract", json!({ "doc": doc, "pages": [2], "rect": [0, 0, 200, 10] }));
+    assert_eq!(outside["pages"][0]["text"], "");
+
+    // "1" is in Page 1, 10, 11 (twice) and 12.
+    let found = ok(&mut server, "text_find", json!({ "doc": doc, "query": "1" }));
+    assert_eq!(found["count"], 5);
+    assert_eq!(found["complete"], true);
+    assert!(found.get("next").is_none());
+    let first = ok(&mut server, "text_find", json!({ "doc": doc, "query": "1", "limit": 1 }));
+    assert_eq!((first["count"].clone(), first["complete"].clone()), (json!(1), json!(false)));
+    assert_eq!(first["next"], json!({ "start_page": 10, "skip": 0 }));
+    let inner = ok(&mut server, "text_find", json!({ "doc": doc, "query": "1", "limit": 1, "start_page": 11, "skip": 1 }));
+    assert_eq!(inner["matches"][0]["page"], 11);
+    assert_eq!(inner["next"], json!({ "start_page": 12, "skip": 0 }));
+
+    // Strict arguments, and the service's own bounds; none of it changes the document.
+    for (tool, args) in [
+        ("text_extract", json!({ "doc": doc, "pages": [0] })),
+        ("text_extract", json!({ "doc": doc, "pages": [13] })),
+        ("text_extract", json!({ "doc": doc, "pages": [] })),
+        ("text_extract", json!({ "doc": doc, "rect": [0, 0, 1] })),
+        ("text_extract", json!({ "doc": doc, "rect": [0, 0, 1, "2"] })),
+        ("text_extract", json!({ "doc": doc, "pages": "1" })),
+        ("text_find", json!({ "doc": doc })),
+        ("text_find", json!({ "doc": doc, "query": 7 })),
+        ("text_find", json!({ "doc": doc, "query": "x", "limit": 0 })),
+        ("text_find", json!({ "doc": doc, "query": "x", "limit": 100000 })),
+        ("text_find", json!({ "doc": doc, "query": "x", "limit": -1 })),
+        ("text_find", json!({ "doc": doc, "query": "x", "skip": -1 })),
+        ("text_find", json!({ "doc": doc, "query": "x", "start_page": 0 })),
+        ("text_find", json!({ "doc": doc, "query": "x", "start_page": 13 })),
+        ("text_find", json!({ "doc": doc, "query": "x".repeat(2000) })),
+    ] {
+        let (body, is_error) = call(&mut server, tool, args.clone());
+        assert!(is_error, "{tool} {args} should be refused");
+        assert_eq!(error_code(&body), "invalid_argument", "{tool} {args}: {body}");
+    }
+    assert_eq!(ok(&mut server, "doc_info", json!({ "doc": doc }))["revision"], revision);
+}
+
+#[test]
+fn the_client_text_tools_answer_as_the_automation_tools_do() {
+    let f = Fixture::new("text-parity");
+    let path = f.work.join("text.pdf");
+    std::fs::write(&path, fixture(12)).expect("writes the fixture");
+    let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
+    let doc = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }))["doc"].as_u64().expect("doc");
+
+    let mut tools = pdfcraft_automation::Automation::new();
+    let first = tools.call("doc_open", &json!({ "path": path.to_string_lossy() })).expect("opens");
+    let tool_doc = match &first[0] {
+        pdfcraft_automation::Content::Json(v) => v["doc"].as_u64().expect("doc"),
+        other => panic!("expected JSON, got {other:?}"),
+    };
+    let tool_json = |tools: &mut pdfcraft_automation::Automation, name: &str, args: Value| match tools.call(name, &args).expect("runs").remove(0) {
+        pdfcraft_automation::Content::Json(v) => v,
+        other => panic!("{name}: expected JSON, got {other:?}"),
+    };
+    let without_revision = |mut body: Value| {
+        body.as_object_mut().expect("an object").remove("revision");
+        body
+    };
+    let cases = [
+        ("text_extract", json!({})),
+        ("text_extract", json!({ "pages": [3, 1] })),
+        ("text_extract", json!({ "pages": [2], "rect": [0, 0, 200, 300] })),
+        ("text_extract", json!({ "pages": [2], "rect": [0, 0, 200, 10] })),
+        ("text_extract", json!({ "pages": [2], "rect": [30, 100, 60, 200] })),
+        ("text_find", json!({ "query": "page" })),
+        ("text_find", json!({ "query": "  PAGE   1 " })),
+        ("text_find", json!({ "query": "1", "limit": 1 })),
+        ("text_find", json!({ "query": "1", "limit": 2, "start_page": 10 })),
+        ("text_find", json!({ "query": "1", "limit": 1, "start_page": 11, "skip": 1 })),
+        ("text_find", json!({ "query": "absent" })),
+        ("text_find", json!({ "query": "" })),
+    ];
+    for (name, args) in cases {
+        let (mut mine, mut theirs) = (args.clone(), args);
+        mine["doc"] = json!(doc);
+        theirs["doc"] = json!(tool_doc);
+        assert_eq!(without_revision(ok(&mut server, name, mine.clone())), tool_json(&mut tools, name, theirs), "{name} {mine}");
     }
 }
 
