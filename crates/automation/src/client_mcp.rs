@@ -10,7 +10,7 @@
 //!   rule for an MCP invocation that has no grant); every other tool call is refused.
 //! * **With a grant** the tools are the service's operations, under the names the automation tools already use where
 //!   there is one: `doc_open`, `doc_info`, `doc_list`, `link_list`, `bookmark_list`, `text_extract`, `text_find`,
-//!   `page_rotate`, `edit_undo`, `edit_redo`, `edit_history`, `doc_save` and `doc_close`. What the grant allows is the policy's decision, not this module's: a read-only grant lists the same
+//!   `page_render`, `render_preview`, `page_rotate`, `edit_undo`, `edit_redo`, `edit_history`, `doc_save` and `doc_close`. What the grant allows is the policy's decision, not this module's: a read-only grant lists the same
 //!   tools and is refused at the call.
 //! * A tool that changes or discards content names the revision it was made against (`revision`, from the last reply).
 //!
@@ -19,10 +19,11 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
+use base64::Engine as _;
 use pdfcraft_app_service::{
-    ActorContext, BookmarkList, ConflictKind, DEFAULT_BOOKMARK_PAGE, DEFAULT_FIND_MATCHES, DESCRIPTORS, DocumentInfo, DocumentKey, Effect, ErrorCode,
-    FindReport, History, LinkList, LinkTarget, OpenSource, Operation, OperationError, OperationId, OperationRequest, OperationResult, Outcome,
-    Overwrite, PageSelection, RequestContext, SaveReport, SaveTarget, Service, TextPages,
+    ActorContext, BookmarkList, ConflictKind, DEFAULT_BOOKMARK_PAGE, DEFAULT_FIND_MATCHES, DEFAULT_PREVIEW_SIDE, DEFAULT_RENDER_DPI, DESCRIPTORS,
+    DocumentInfo, DocumentKey, Effect, ErrorCode, FindReport, History, LinkList, LinkTarget, OpenSource, Operation, OperationError, OperationId,
+    OperationRequest, OperationResult, Outcome, Overwrite, PageSelection, RequestContext, SaveReport, SaveTarget, Service, TextPages,
 };
 use serde_json::{Map, Value, json};
 
@@ -223,7 +224,7 @@ struct Spec {
     build: Build,
 }
 
-static SPECS: [Spec; 13] = [
+static SPECS: [Spec; 15] = [
     Spec {
         name: "doc_open",
         operation: OperationId::DocumentOpen,
@@ -409,6 +410,31 @@ static SPECS: [Spec; 13] = [
             Ok((Some(a.doc()?), Operation::TextFind { query: a.string("query")?, limit, start_page, skip }))
         },
     },
+    Spec {
+        name: "page_render",
+        operation: OperationId::PageRender,
+        title: "Render a page",
+        description: "Render a page to a PNG at `dpi` dots per inch (1 to 600, 96 when not given), as the document shows it now. The picture is an image block; the reply also gives its page, size and the revision it shows. A page too large for the renderer's limits comes out smaller.",
+        args: &[("doc", "integer", true), ("page", "integer", true), ("dpi", "number", false)],
+        read_only: true,
+        destructive: false,
+        build: |a| Ok((Some(a.doc()?), Operation::PageRender { page: a.int("page")?, dpi: a.opt_f64("dpi")?.unwrap_or(DEFAULT_RENDER_DPI) })),
+    },
+    Spec {
+        name: "render_preview",
+        operation: OperationId::PagePreview,
+        title: "Render a preview",
+        description: "Render a page (the first when not given) to a PNG whose longer side is at most `max_side` pixels (1 to 4096, 1024 when not given), without changing the document.",
+        args: &[("doc", "integer", true), ("page", "integer", false), ("max_side", "integer", false)],
+        read_only: true,
+        destructive: false,
+        build: |a| {
+            Ok((
+                Some(a.doc()?),
+                Operation::PagePreview { page: a.opt_int("page")?.unwrap_or(1), max_side: a.opt_int("max_side")?.unwrap_or(DEFAULT_PREVIEW_SIDE) },
+            ))
+        },
+    },
 ];
 
 fn document_tools() -> Vec<Value> {
@@ -490,6 +516,13 @@ impl Args<'_> {
         match self.get(key) {
             None => Ok(None),
             Some(v) => v.as_i64().map(Some).ok_or_else(|| format!("{key} must be a whole number")),
+        }
+    }
+
+    fn opt_f64(&self, key: &str) -> Result<Option<f64>, String> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(v) => v.as_f64().map(Some).ok_or_else(|| format!("{key} must be a number")),
         }
     }
 
@@ -586,6 +619,9 @@ fn success(result: &OperationResult) -> Value {
         Outcome::Bookmarks(list) => bookmarks_json(list),
         Outcome::Text(text) => text_json(text),
         Outcome::Found(report) => found_json(report),
+        Outcome::Image(image) => {
+            json!({ "page": image.page, "width": image.width, "height": image.height, "mime_type": "image/png", "bytes": image.png.len() })
+        }
     };
     if let Some(version) = &result.version {
         body["revision"] = json!(version.content_revision);
@@ -596,7 +632,13 @@ fn success(result: &OperationResult) -> Value {
     if !result.effects.is_empty() {
         body["effects"] = json!(result.effects.iter().map(effect_json).collect::<Vec<_>>());
     }
-    result_text(&body, false)
+    let mut reply = result_text(&body, false);
+    // The picture goes first, as an image block, the way the automation tools return it.
+    if let (Outcome::Image(image), Some(content)) = (&result.outcome, reply.get_mut("content").and_then(Value::as_array_mut)) {
+        let data = base64::engine::general_purpose::STANDARD.encode(&image.png);
+        content.insert(0, json!({ "type": "image", "mimeType": "image/png", "data": data }));
+    }
+    reply
 }
 
 fn info_json(info: &DocumentInfo) -> Value {

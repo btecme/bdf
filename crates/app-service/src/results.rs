@@ -35,6 +35,7 @@ pub enum Outcome {
     Bookmarks(BookmarkList),
     Text(TextPages),
     Found(FindReport),
+    Image(PageImage),
 }
 
 /// A document as a caller may see it. Pages are numbered from 1 and sized in points as displayed (after rotation).
@@ -191,4 +192,20 @@ pub struct PageWarning {
     pub page: usize,
     pub error: String,
     pub error_truncated: bool,
+}
+
+/// A page as a PNG. `Debug` shows its size and not its bytes, so a record or a failed assertion cannot dump a page.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PageImage {
+    /// 1-based.
+    pub page: usize,
+    pub width: u32,
+    pub height: u32,
+    pub png: Vec<u8>,
+}
+
+impl std::fmt::Debug for PageImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PageImage {{ page: {}, {}x{}, {} bytes }}", self.page, self.width, self.height, self.png.len())
+    }
 }

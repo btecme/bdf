@@ -334,7 +334,9 @@ mod tests {
                 "document.links",
                 "document.bookmarks",
                 "document.text",
-                "document.find"
+                "document.find",
+                "page.render",
+                "page.preview"
             ]
         );
         for d in DESCRIPTORS.iter().filter(|d| matches!(d.access, Access::Mutate | Access::Persist) || d.name == "document.close") {

@@ -873,3 +873,71 @@ fn reading_and_searching_text_is_audited_without_the_text_or_the_phrase() {
         assert!(!everything.contains(read), "the record does not hold {read:?}");
     }
 }
+
+fn picture_ops() -> [Operation; 2] {
+    [Operation::PageRender { page: 1, dpi: 72.0 }, Operation::PagePreview { page: 1, max_side: 64 }]
+}
+
+#[test]
+fn a_client_renders_pages_only_of_the_documents_it_was_granted() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let first = open_notes(&mut service);
+    let second = open_notes(&mut service);
+    let request = GrantRequest {
+        scopes: vec![Scope { capability: Capability::DocumentRead, documents: DocumentScope::Only(vec![first]) }],
+        ..GrantRequest::read_only(ClientId::parse("narrow").expect("a name"))
+    };
+    let issued = grants.issue(request).expect("issues");
+    let narrow = grants.authenticate("narrow", issued.secret()).expect("authenticates");
+    let ctx = RequestContext::new(2, narrow);
+
+    for operation in picture_ops() {
+        match run(&mut service, &ctx, Some(first), operation).expect("renders").outcome {
+            Outcome::Image(image) => assert!(image.png.starts_with(&[137, 80, 78, 71]) && image.width > 0 && image.height > 0),
+            other => panic!("an image, got {other:?}"),
+        }
+    }
+    // The other document (which the person has already drawn, so a renderer for it exists), one that does not exist and
+    // one of another session all get the one answer.
+    run(&mut service, &human(3), Some(second), picture_ops()[0].clone()).expect("the person renders it");
+    let missing = DocumentKey { session: service.session_id(), document: 9_999 };
+    let foreign = DocumentKey { session: Service::new().session_id(), document: first.document };
+    for operation in picture_ops() {
+        for key in [second, missing, foreign] {
+            assert_eq!(refused(run(&mut service, &ctx, Some(key), operation.clone())), (ErrorCode::NotAuthorized, Some("document_out_of_scope")));
+        }
+    }
+}
+
+#[test]
+fn a_client_that_was_not_granted_reading_gets_no_picture() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let key = open_notes(&mut service);
+    let (editor, _) = grant(&grants, "editor", &[Capability::DocumentEditPages], FileAccess::default());
+    let ctx = RequestContext::new(2, editor);
+    for operation in picture_ops() {
+        assert_eq!(refused(run(&mut service, &ctx, Some(key), operation)), (ErrorCode::NotAuthorized, Some("capability_not_granted")));
+    }
+}
+
+#[test]
+fn rendering_is_audited_without_the_picture_or_the_file_name() {
+    let grants = GrantStore::in_memory(owner());
+    let mut service = service_with(&grants);
+    let key = open_notes(&mut service);
+    let ctx = RequestContext::new(2, read_only(&grants, "reader"));
+    for operation in picture_ops() {
+        run(&mut service, &ctx, Some(key), operation).expect("runs");
+    }
+    run(&mut service, &ctx, Some(key), Operation::PageRender { page: 1, dpi: 0.0 }).expect_err("a bad bound");
+    let records = service.recent_audit();
+    let by_agent: Vec<(&str, &AuditOutcome)> =
+        records.iter().filter(|r| r.entry.actor.as_str() == "agent").map(|r| (r.entry.operation.as_str(), &r.entry.outcome)).collect();
+    assert_eq!(
+        by_agent,
+        [("page.render", &AuditOutcome::Ok), ("page.preview", &AuditOutcome::Ok), ("page.render", &AuditOutcome::Failed("invalid_argument".into())),]
+    );
+    assert!(!format!("{records:?}").contains("notes.pdf"), "the record does not hold the file name");
+}

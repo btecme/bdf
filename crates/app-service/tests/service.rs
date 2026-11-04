@@ -145,6 +145,8 @@ fn every_operation_has_one_descriptor_and_the_descriptor_matches_the_typed_reque
         Operation::Bookmarks { offset: 0, limit: DEFAULT_BOOKMARK_PAGE },
         Operation::TextExtract { pages: PageSelection::All, rect: None },
         Operation::TextFind { query: String::new(), limit: DEFAULT_FIND_MATCHES, start_page: 1, skip: 0 },
+        Operation::PageRender { page: 1, dpi: DEFAULT_RENDER_DPI },
+        Operation::PagePreview { page: 1, max_side: DEFAULT_PREVIEW_SIDE },
     ];
     assert_eq!(samples.len(), OperationId::ALL.len());
     for op in samples {
@@ -1127,4 +1129,102 @@ fn text_and_search_follow_an_edit_and_a_closed_document_is_not_found() {
     run(&mut service, Some(key), Operation::Close { expected_revision: current.content_revision, discard_changes: true }).expect("closes");
     assert_eq!(text_of(&mut service, key, PageSelection::All, None).expect_err("gone").code, ErrorCode::NotFound);
     assert_eq!(found(&mut service, key, "Page", 10, 1, 0).expect_err("gone").code, ErrorCode::NotFound);
+}
+
+// ---- reading: pages as pictures ----
+
+const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
+fn picture(done: OperationResult) -> PageImage {
+    match done.outcome {
+        Outcome::Image(image) => image,
+        other => panic!("an image, got {other:?}"),
+    }
+}
+
+fn rendered(service: &mut Service, key: DocumentKey, page: i64, dpi: f64) -> Result<PageImage> {
+    run(service, Some(key), Operation::PageRender { page, dpi }).map(picture)
+}
+
+fn previewed(service: &mut Service, key: DocumentKey, page: i64, max_side: i64) -> Result<PageImage> {
+    run(service, Some(key), Operation::PagePreview { page, max_side }).map(picture)
+}
+
+/// The size a PNG says it has: the width and the height of its header chunk.
+fn png_size(png: &[u8]) -> (u32, u32) {
+    assert_eq!(png.get(..8), Some(&PNG_SIGNATURE[..]), "a PNG");
+    let be = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().expect("four bytes"));
+    (be(16), be(20))
+}
+
+#[test]
+fn a_page_is_rendered_to_a_png_whose_size_follows_the_resolution() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 2);
+    let at_72 = rendered(&mut service, key, 1, 72.0).expect("renders");
+    assert_eq!((at_72.page, at_72.width, at_72.height), (1, 200, 300), "the page is 200 by 300 points");
+    assert_eq!(png_size(&at_72.png), (200, 300), "and the picture says what size it is");
+    let at_144 = rendered(&mut service, key, 1, 144.0).expect("renders");
+    assert_eq!((at_144.width, at_144.height), (400, 600));
+    let default = rendered(&mut service, key, 1, DEFAULT_RENDER_DPI).expect("renders");
+    assert_eq!(png_size(&default.png), (default.width, default.height));
+    assert!((266..=267).contains(&default.width) && default.height == 400, "{}x{}", default.width, default.height);
+
+    // The pages differ; a page is drawn the same way twice.
+    let second = rendered(&mut service, key, 2, 72.0).expect("renders");
+    assert_eq!(second.page, 2);
+    assert_ne!(second.png, at_72.png, "page 2 shows other text");
+    assert_eq!(rendered(&mut service, key, 1, 72.0).expect("renders").png, at_72.png);
+}
+
+#[test]
+fn a_preview_bounds_the_longer_side_and_never_enlarges_a_page() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 1);
+    let small = previewed(&mut service, key, 1, 100).expect("renders");
+    assert_eq!((small.width, small.height), (67, 100), "the longer side is the bound");
+    assert_eq!(png_size(&small.png), (67, 100));
+    let large = previewed(&mut service, key, 1, MAX_PREVIEW_SIDE).expect("renders");
+    assert_eq!((large.width, large.height), (200, 300), "a page already smaller than the bound is not enlarged");
+    let one = previewed(&mut service, key, 1, 1).expect("the smallest bound is allowed");
+    assert!(one.width.max(one.height) <= 1 && one.width.min(one.height) <= 1);
+}
+
+#[test]
+fn bad_render_arguments_are_refused_and_change_nothing() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    for dpi in [0.0, 0.5, -1.0, MAX_RENDER_DPI + 1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
+        assert_eq!(rendered(&mut service, key, 1, dpi).expect_err("refused").code, ErrorCode::InvalidArgument, "dpi {dpi}");
+    }
+    for side in [0, -1, MAX_PREVIEW_SIDE + 1, i64::MIN, i64::MAX] {
+        assert_eq!(previewed(&mut service, key, 1, side).expect_err("refused").code, ErrorCode::InvalidArgument, "max_side {side}");
+    }
+    for page in [0, -1, 3, i64::MIN, i64::MAX] {
+        assert_eq!(rendered(&mut service, key, page, 72.0).expect_err("refused").code, ErrorCode::InvalidArgument, "page {page}");
+        assert_eq!(previewed(&mut service, key, page, 100).expect_err("refused").code, ErrorCode::InvalidArgument, "page {page}");
+    }
+    rendered(&mut service, key, 2, 1.0).expect("the lowest resolution is allowed");
+    rendered(&mut service, key, 1, MAX_RENDER_DPI).expect("the highest resolution is allowed");
+    assert_eq!(service.document(&me(), key).expect("open").version(), version, "reading changes nothing");
+}
+
+#[test]
+fn a_picture_shows_the_document_as_it_is_now_and_a_closed_document_has_none() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    assert_eq!(png_size(&rendered(&mut service, key, 1, 72.0).expect("renders").png), (200, 300));
+    let rotated = rotate(&mut service, key, version.content_revision, 1).expect("rotates").version.expect("a version");
+    let after = rendered(&mut service, key, 1, 72.0).expect("renders");
+    assert_eq!((after.width, after.height), (300, 200), "turned a quarter: wider than tall");
+    assert_eq!(png_size(&previewed(&mut service, key, 1, 100).expect("renders").png), (100, 67));
+    let other = rendered(&mut service, key, 2, 72.0).expect("renders");
+    assert_eq!((other.width, other.height), (200, 300), "the other page was not turned");
+    run(&mut service, Some(key), Operation::Undo { expected_revision: rotated.content_revision }).expect("undoes");
+    assert_eq!(png_size(&rendered(&mut service, key, 1, 72.0).expect("renders").png), (200, 300), "and back");
+
+    let current = service.document(&me(), key).expect("open").version();
+    run(&mut service, Some(key), Operation::Close { expected_revision: current.content_revision, discard_changes: true }).expect("closes");
+    assert_eq!(rendered(&mut service, key, 1, 72.0).expect_err("gone").code, ErrorCode::NotFound);
+    assert_eq!(previewed(&mut service, key, 1, 100).expect_err("gone").code, ErrorCode::NotFound);
 }

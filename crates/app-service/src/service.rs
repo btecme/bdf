@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use pdfcraft_engine::{
-    DocId, Document, Edit, EditError, LinkAction, OpenError, PageTexts, SaveToken, Saved, Session, TextCache, UNDO_LIMIT, extract_pages,
+    DocId, Document, Edit, EditError, LinkAction, OpenError, PageRasters, PageTexts, SaveToken, Saved, Session, TextCache, UNDO_LIMIT, extract_pages,
 };
 use pdfcraft_platform::confinement::{pin_existing, write_confined_gated};
 use pdfcraft_platform::file_identity::{
@@ -21,13 +21,13 @@ use crate::effects::Effect;
 use crate::errors::{ConflictKind, ErrorCode, OperationError, Result};
 use crate::grants::system_now;
 use crate::operations::{
-    Access, Capability, MAX_BOOKMARK_PAGE, MAX_FIND_MATCHES, MAX_FIND_PAGES, MAX_QUERY_CHARS, MAX_TEXT_BYTES, MAX_TEXT_PAGE_LIST, OLDEST_SCHEMA,
-    OpenSource, Operation, OperationId, OperationRequest, Overwrite, PageSelection, SCHEMA_VERSION, SaveTarget,
+    Access, Capability, MAX_BOOKMARK_PAGE, MAX_FIND_MATCHES, MAX_FIND_PAGES, MAX_PREVIEW_SIDE, MAX_QUERY_CHARS, MAX_RENDER_DPI, MAX_TEXT_BYTES,
+    MAX_TEXT_PAGE_LIST, OLDEST_SCHEMA, OpenSource, Operation, OperationId, OperationRequest, Overwrite, PageSelection, SCHEMA_VERSION, SaveTarget,
 };
 use crate::policy::{Denial, DenyReason, Facts, FileUse, Policy, Watch};
 use crate::results::{
     BookmarkEntry, BookmarkList, DocumentInfo, FindNext, FindReport, FoundMatch, History, LinkList, LinkSummary, LinkTarget, MAX_FIND_WARNINGS,
-    MAX_LINKS, MAX_WARNING_BYTES, OperationResult, Outcome, PageSummary, PageTextEntry, PageWarning, SaveReport, TextPages,
+    MAX_LINKS, MAX_WARNING_BYTES, OperationResult, Outcome, PageImage, PageSummary, PageTextEntry, PageWarning, SaveReport, TextPages,
 };
 use crate::version::{DocumentKey, DocumentVersion, SavedSnapshot, SessionId};
 
@@ -114,6 +114,8 @@ pub struct Service {
     /// The text of pages already read, under one memory budget across the session's documents. Whoever reads a page,
     /// the document is checked first: the cache is never asked about a document the caller may not read.
     texts: TextCache,
+    /// The renderers of the open documents. As with the text, the document is checked first.
+    rasters: PageRasters,
     /// Test seams, each run at the moment its name says, so a test can withdraw a grant exactly there.
     #[cfg(test)]
     hooks: Hooks,
@@ -171,6 +173,7 @@ impl Service {
             journals: HashMap::new(),
             clock: system_now,
             texts: TextCache::default(),
+            rasters: PageRasters::default(),
             #[cfg(test)]
             hooks: Hooks::default(),
         }
@@ -358,6 +361,8 @@ impl Service {
             Operation::Links => self.links(self.need(doc_id)?)?,
             Operation::Bookmarks { offset, limit } => self.bookmarks(self.need(doc_id)?, offset, limit)?,
             Operation::TextExtract { pages, rect } => self.text(self.need(doc_id)?, pages, rect, MAX_TEXT_BYTES, &mut extract_pages)?,
+            Operation::PageRender { page, dpi } => self.render(self.need(doc_id)?, page, dpi)?,
+            Operation::PagePreview { page, max_side } => self.preview(self.need(doc_id)?, page, max_side)?,
             Operation::TextFind { query, limit, start_page, skip } => {
                 self.find(self.need(doc_id)?, query, limit, start_page, skip, &mut extract_pages)?
             }
@@ -881,6 +886,37 @@ impl Service {
         })
     }
 
+    fn render(&mut self, id: DocId, page: i64, dpi: f64) -> Result<OperationResult> {
+        if !(1.0..=MAX_RENDER_DPI).contains(&dpi) {
+            return Err(OperationError::invalid(format!("dpi must be between 1 and {MAX_RENDER_DPI}")));
+        }
+        let count = self.session.get(id).ok_or_else(OperationError::not_found)?.info.pages.len();
+        let page = zero_based(page, count)?;
+        self.image(id, page, (dpi / 72.0) as f32)
+    }
+
+    fn preview(&mut self, id: DocId, page: i64, max_side: i64) -> Result<OperationResult> {
+        if !(1..=MAX_PREVIEW_SIDE).contains(&max_side) {
+            return Err(OperationError::invalid(format!("max_side must be between 1 and {MAX_PREVIEW_SIDE}")));
+        }
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        let page = zero_based(page, doc.info.pages.len())?;
+        let size = doc.info.pages.get(page).ok_or_else(|| OperationError::invalid("page is out of range"))?;
+        let side = size.width.max(size.height);
+        if !side.is_finite() || side <= 0.0 {
+            return Err(OperationError::new(ErrorCode::UnsupportedFeature, "the page has invalid dimensions"));
+        }
+        self.image(id, page, (max_side as f32 / side).min(1.0))
+    }
+
+    /// 0-based `page` at `scale`, as a PNG. A page the renderer cannot draw is a failure of that page.
+    fn image(&mut self, id: DocId, page: usize, scale: f32) -> Result<OperationResult> {
+        let png = self.rasters.render_png(&self.session, id, page, scale).map_err(|e| OperationError::new(ErrorCode::WorkerFailure, e))?;
+        let doc = self.session.get(id).ok_or_else(OperationError::not_found)?;
+        let image = PageImage { page: page.saturating_add(1), width: png.width, height: png.height, png: png.png };
+        Ok(OperationResult { outcome: Outcome::Image(image), version: Some(version_of(doc)), warnings: Vec::new(), effects: Vec::new() })
+    }
+
     fn rotate(&mut self, id: DocId, pages: PageSelection, degrees: i64) -> Result<OperationResult> {
         if degrees % 90 != 0 {
             return Err(OperationError::invalid("degrees must be a multiple of 90"));
@@ -960,6 +996,7 @@ impl Service {
         }
         self.session.close(id);
         self.texts.remove(&id);
+        self.rasters.remove(id);
         self.files.remove(&id.0);
         self.orders.remove(&id.0);
         self.journals.remove(&id.0);
@@ -1712,5 +1749,18 @@ mod tests {
         let close = Operation::Close { expected_revision: revision, discard_changes: true };
         service.execute(&RequestContext::new(3, me()), OperationRequest::new(Some(key), close)).expect("closes");
         assert_eq!((service.texts.len(), service.texts.bytes()), (0, 0), "a closed document holds nothing");
+    }
+    #[test]
+    fn the_renderer_of_a_document_goes_when_it_closes() {
+        let mut service = Service::new();
+        let key = open_bytes(&mut service);
+        assert!(service.rasters.is_empty());
+        let draw = Operation::PageRender { page: 1, dpi: 72.0 };
+        service.execute(&RequestContext::new(2, me()), OperationRequest::new(Some(key), draw)).expect("renders");
+        assert_eq!(service.rasters.len(), 1, "the document has a renderer, kept for the next page");
+        let revision = service.document(&me(), key).expect("open").version().content_revision;
+        let close = Operation::Close { expected_revision: revision, discard_changes: true };
+        service.execute(&RequestContext::new(3, me()), OperationRequest::new(Some(key), close)).expect("closes");
+        assert!(service.rasters.is_empty(), "a closed document holds no renderer");
     }
 }

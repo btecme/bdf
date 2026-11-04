@@ -35,6 +35,16 @@ pub const MAX_FIND_PAGES: usize = 2_000;
 /// The longest phrase `document.find` looks for, in characters.
 pub const MAX_QUERY_CHARS: usize = 1_000;
 
+/// `page.render` takes a resolution from 1 to [`MAX_RENDER_DPI`] dots per inch (96 when a caller gives none). A page that
+/// would come out larger than the renderer's own size and pixel limits is rendered smaller, and the answer says how large.
+pub const DEFAULT_RENDER_DPI: f64 = 96.0;
+pub const MAX_RENDER_DPI: f64 = 600.0;
+
+/// `page.preview` bounds the longer side of the picture, in pixels: from 1 to [`MAX_PREVIEW_SIDE`] (1,024 when not
+/// given). A page that is already smaller is not enlarged.
+pub const DEFAULT_PREVIEW_SIDE: i64 = 1_024;
+pub const MAX_PREVIEW_SIDE: i64 = 4_096;
+
 /// A stable operation id. The spelling ([`OperationId::name`]) is the contract; the variants are not ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OperationId {
@@ -51,10 +61,12 @@ pub enum OperationId {
     DocumentBookmarks,
     DocumentText,
     DocumentFind,
+    PageRender,
+    PagePreview,
 }
 
 impl OperationId {
-    pub const ALL: [OperationId; 13] = [
+    pub const ALL: [OperationId; 15] = [
         OperationId::DocumentOpen,
         OperationId::DocumentQuery,
         OperationId::PageRotate,
@@ -68,6 +80,8 @@ impl OperationId {
         OperationId::DocumentBookmarks,
         OperationId::DocumentText,
         OperationId::DocumentFind,
+        OperationId::PageRender,
+        OperationId::PagePreview,
     ];
 
     pub fn name(self) -> &'static str {
@@ -158,7 +172,7 @@ pub struct OperationDescriptor {
     pub needs_revision: bool,
 }
 
-pub static DESCRIPTORS: [OperationDescriptor; 13] = [
+pub static DESCRIPTORS: [OperationDescriptor; 15] = [
     OperationDescriptor {
         id: OperationId::DocumentOpen,
         name: "document.open",
@@ -289,6 +303,26 @@ pub static DESCRIPTORS: [OperationDescriptor; 13] = [
         needs_document: true,
         needs_revision: false,
     },
+    OperationDescriptor {
+        id: OperationId::PageRender,
+        name: "page.render",
+        summary: "Render a page to a PNG at a resolution in dots per inch, as the document shows it now.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::PagePreview,
+        name: "page.preview",
+        summary: "Render a page to a PNG whose longer side is at most a given number of pixels, without changing the document.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
 ];
 
 /// One request. `schema_version` is checked before anything else.
@@ -358,6 +392,16 @@ pub enum Operation {
         start_page: i64,
         skip: usize,
     },
+    /// `page` is 1-based; `dpi` is from 1 to [`MAX_RENDER_DPI`].
+    PageRender {
+        page: i64,
+        dpi: f64,
+    },
+    /// `page` is 1-based; `max_side` is from 1 to [`MAX_PREVIEW_SIDE`].
+    PagePreview {
+        page: i64,
+        max_side: i64,
+    },
 }
 
 impl Operation {
@@ -376,6 +420,8 @@ impl Operation {
             Operation::Bookmarks { .. } => OperationId::DocumentBookmarks,
             Operation::TextExtract { .. } => OperationId::DocumentText,
             Operation::TextFind { .. } => OperationId::DocumentFind,
+            Operation::PageRender { .. } => OperationId::PageRender,
+            Operation::PagePreview { .. } => OperationId::PagePreview,
         }
     }
 
@@ -394,7 +440,9 @@ impl Operation {
             | Operation::Links
             | Operation::Bookmarks { .. }
             | Operation::TextExtract { .. }
-            | Operation::TextFind { .. } => None,
+            | Operation::TextFind { .. }
+            | Operation::PageRender { .. }
+            | Operation::PagePreview { .. } => None,
         }
     }
 }

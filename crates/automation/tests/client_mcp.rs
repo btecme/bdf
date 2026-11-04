@@ -208,7 +208,7 @@ fn without_a_grant_the_server_lists_only_help_and_serves_nothing() {
         assert_eq!(error_code(&body), "not_authorized", "{tool}");
     }
     // The tools that were never offered are not tools.
-    let reply = rpc(&mut server, 2, "tools/call", json!({ "name": "page_render", "arguments": {} }));
+    let reply = rpc(&mut server, 2, "tools/call", json!({ "name": "redact_apply", "arguments": {} }));
     assert!(reply.get("error").is_some(), "{reply}");
 }
 
@@ -217,7 +217,7 @@ fn a_read_only_grant_opens_inside_its_folder_and_is_refused_every_change() {
     let f = Fixture::new("read-only");
     let path = f.file(&f.work, "a.pdf", 3);
     let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
-    assert_eq!(tool_names(&mut server).len(), 14, "help and the thirteen operations");
+    assert_eq!(tool_names(&mut server).len(), 16, "help and the fifteen operations");
 
     let opened = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
     assert_eq!(opened["pages"].as_array().expect("pages").len(), 3);
@@ -562,6 +562,100 @@ fn the_client_text_tools_answer_as_the_automation_tools_do() {
         mine["doc"] = json!(doc);
         theirs["doc"] = json!(tool_doc);
         assert_eq!(without_revision(ok(&mut server, name, mine.clone())), tool_json(&mut tools, name, theirs), "{name} {mine}");
+    }
+}
+
+/// The PNG a reply carries as its first content block, and the structured part of the reply.
+fn picture_reply(server: &mut ClientMcpServer, tool: &str, args: Value) -> (Vec<u8>, Value) {
+    use base64::Engine as _;
+    let reply = rpc(server, 1, "tools/call", json!({ "name": tool, "arguments": args }));
+    let result = reply.get("result").unwrap_or_else(|| panic!("a result, got {reply}"));
+    assert_eq!(result["isError"], false, "{tool}: {result}");
+    let content = result["content"].as_array().expect("content");
+    assert_eq!(content[0]["type"], "image");
+    assert_eq!(content[0]["mimeType"], "image/png");
+    assert_eq!(content[1]["type"], "text", "the facts about the picture follow it");
+    let png = base64::engine::general_purpose::STANDARD.decode(content[0]["data"].as_str().expect("data")).expect("base64");
+    (png, result["structuredContent"].clone())
+}
+
+fn png_size(png: &[u8]) -> (u64, u64) {
+    assert_eq!(png.get(..8), Some(&[137u8, 80, 78, 71, 13, 10, 26, 10][..]), "a PNG");
+    let be = |at: usize| u64::from(u32::from_be_bytes(png[at..at + 4].try_into().expect("four bytes")));
+    (be(16), be(20))
+}
+
+#[test]
+fn a_read_only_grant_renders_pictures_end_to_end() {
+    let f = Fixture::new("read-pictures");
+    let path = f.work.join("pic.pdf");
+    std::fs::write(&path, fixture(2)).expect("writes the fixture");
+    let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
+    let opened = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }));
+    let (doc, revision) = (opened["doc"].as_u64().expect("doc"), opened["revision"].as_u64().expect("revision"));
+
+    let (png, facts) = picture_reply(&mut server, "page_render", json!({ "doc": doc, "page": 1, "dpi": 72 }));
+    assert_eq!(png_size(&png), (200, 300));
+    assert_eq!(facts, json!({ "page": 1, "width": 200, "height": 300, "mime_type": "image/png", "bytes": png.len(), "revision": revision }));
+    let (png, facts) = picture_reply(&mut server, "page_render", json!({ "doc": doc, "page": 2 }));
+    assert_eq!((png_size(&png).1, facts["page"].clone()), (400, json!(2)), "96 dpi when none is given");
+    let (png, _) = picture_reply(&mut server, "render_preview", json!({ "doc": doc, "page": 2, "max_side": 100 }));
+    assert_eq!(png_size(&png), (67, 100));
+    let (png, facts) = picture_reply(&mut server, "render_preview", json!({ "doc": doc }));
+    assert_eq!((png_size(&png), facts["page"].clone()), ((200, 300), json!(1)), "the first page, at most 1024 on a side");
+
+    // Strict arguments, and the service's own bounds; none of it changes the document.
+    for (tool, args) in [
+        ("page_render", json!({ "doc": doc })),
+        ("page_render", json!({ "doc": doc, "page": 0 })),
+        ("page_render", json!({ "doc": doc, "page": 3 })),
+        ("page_render", json!({ "doc": doc, "page": "1" })),
+        ("page_render", json!({ "doc": doc, "page": 1, "dpi": "72" })),
+        ("page_render", json!({ "doc": doc, "page": 1, "dpi": 0 })),
+        ("page_render", json!({ "doc": doc, "page": 1, "dpi": 1000 })),
+        ("render_preview", json!({ "doc": doc, "page": 1, "max_side": 0 })),
+        ("render_preview", json!({ "doc": doc, "page": 1, "max_side": 5000 })),
+        ("render_preview", json!({ "doc": doc, "page": 1, "max_side": 1.5 })),
+        ("render_preview", json!({ "doc": doc, "page": 3 })),
+    ] {
+        let (body, is_error) = call(&mut server, tool, args.clone());
+        assert!(is_error, "{tool} {args} should be refused");
+        assert_eq!(error_code(&body), "invalid_argument", "{tool} {args}: {body}");
+    }
+    assert_eq!(ok(&mut server, "doc_info", json!({ "doc": doc }))["revision"], revision);
+}
+
+#[test]
+fn the_client_pictures_are_the_automation_tools_pictures() {
+    let f = Fixture::new("picture-parity");
+    let path = f.work.join("pic.pdf");
+    std::fs::write(&path, fixture(2)).expect("writes the fixture");
+    let mut server = f.server(Some(f.issue("reader", &[Capability::DocumentRead])));
+    let doc = ok(&mut server, "doc_open", json!({ "path": path.to_string_lossy() }))["doc"].as_u64().expect("doc");
+
+    let mut tools = pdfcraft_automation::Automation::new();
+    let first = tools.call("doc_open", &json!({ "path": path.to_string_lossy() })).expect("opens");
+    let tool_doc = match &first[0] {
+        pdfcraft_automation::Content::Json(v) => v["doc"].as_u64().expect("doc"),
+        other => panic!("expected JSON, got {other:?}"),
+    };
+    let tool_png = |tools: &mut pdfcraft_automation::Automation, name: &str, args: Value| match tools.call(name, &args).expect("runs").remove(0) {
+        pdfcraft_automation::Content::Png { data, .. } => data,
+        other => panic!("{name}: expected a PNG, got {other:?}"),
+    };
+    let cases = [
+        ("page_render", json!({ "page": 1, "dpi": 72 })),
+        ("page_render", json!({ "page": 2, "dpi": 150 })),
+        ("page_render", json!({ "page": 1 })),
+        ("render_preview", json!({ "page": 2, "max_side": 100 })),
+        ("render_preview", json!({ "page": 1 })),
+    ];
+    for (name, args) in cases {
+        let (mut mine, mut theirs) = (args.clone(), args);
+        mine["doc"] = json!(doc);
+        theirs["doc"] = json!(tool_doc);
+        let (png, _) = picture_reply(&mut server, name, mine.clone());
+        assert!(png == tool_png(&mut tools, name, theirs), "{name} {mine}: the same picture, byte for byte");
     }
 }
 
