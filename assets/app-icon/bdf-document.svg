@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- BDF PDF document icon: contributor-original; lettering is stroked paths, no font. MIT OR Apache-2.0. -->
+  <path d="M124 40H340L424 124V436Q424 472 388 472H124Q88 472 88 436V76Q88 40 124 40Z" fill="#1f3a5f"/>
+  <path d="M126 52H332L412 132V434Q412 460 386 460H126Q100 460 100 434V78Q100 52 126 52Z" fill="#ffffff"/>
+  <path d="M340 48V124H416Z" fill="#c9d3e0"/>
+  <rect x="96" y="292" width="320" height="100" fill="#1f3a5f"/>
+  <path d="M150 308 L150 376 M150 308 L172 308 A20 20 0 0 1 172.000 348.000 L150 348 M232 308 L232 376 M232 308 L242 308 A34 34 0 0 1 242.000 376.000 L232 376 M318 308 L318 376 M318 308 L368 308 M318 338 L356 338" fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

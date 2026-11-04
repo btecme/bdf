@@ -3,7 +3,7 @@
 //!
 //! What it measures, and how:
 //!
-//! * **Headless first page** (`pdfcraft-cli run`: open, render page 1 at 96 dpi): wall time from
+//! * **Headless first page** (`bdf-cli run`: open, render page 1 at 96 dpi): wall time from
 //!   spawn to exit, and the process's peak working set and peak commit from the operating
 //!   system's counters, `runs` times per fixture. Reported as min, median, p95 and max (nearest
 //!   rank), never an average.
@@ -322,7 +322,7 @@ impl App {
 fn app_dir(c: &Cfg) -> Result<PathBuf> {
     let dir = c.out.join("app");
     std::fs::create_dir_all(&dir)?;
-    std::fs::copy(&c.app, dir.join("pdfcraft.exe")).context("copying the app")?;
+    std::fs::copy(&c.app, dir.join("bdf.exe")).context("copying the app")?;
     // A portable marker keeps settings inside this folder, out of the user's profile.
     std::fs::write(dir.join("portable.txt"), b"")?;
     Ok(dir)
@@ -331,7 +331,7 @@ fn app_dir(c: &Cfg) -> Result<PathBuf> {
 fn ui_launch(c: &Cfg, dir: &Path) -> Result<Row> {
     let mut row = Row::new("ui-launch", "launch", "(empty window)", "spawn to the first answered ui.state; warm file cache");
     let mut copy = Cfg { ..clone_cfg(c) };
-    copy.app = dir.join("pdfcraft.exe");
+    copy.app = dir.join("bdf.exe");
     let (mut wall, mut ws, mut commit) = (Vec::new(), Vec::new(), Vec::new());
     // One unrecorded launch warms caches and creates the settings folder.
     if let Ok((app, _)) = App::launch(&copy, dir) {
@@ -375,7 +375,7 @@ fn ui_open(c: &Cfg, dir: &Path, class: &str, case: &str) -> Result<Row> {
     let mut row =
         Row::new("ui-open", class, case, "ui.open to first page raster (wall_ms) and to all renders finished (wall2_ms); one warm app instance");
     let mut copy = clone_cfg(c);
-    copy.app = dir.join("pdfcraft.exe");
+    copy.app = dir.join("bdf.exe");
     let (mut app, _) = App::launch(&copy, dir)?;
     let doc = dir.join(format!("{case}.pdf"));
     std::fs::copy(c.corpus.join(format!("{case}.pdf")), &doc)?;
@@ -416,7 +416,7 @@ fn ui_open(c: &Cfg, dir: &Path, class: &str, case: &str) -> Result<Row> {
 fn ui_cycles(c: &Cfg, dir: &Path, case: &str) -> Result<Row> {
     let mut row = Row::new("ui-cycles", "ordinary", case, "ten open, rotate, save, close cycles in one app; working set after each close");
     let mut copy = clone_cfg(c);
-    copy.app = dir.join("pdfcraft.exe");
+    copy.app = dir.join("bdf.exe");
     let (mut app, _) = App::launch(&copy, dir)?;
     let Some(rotate) = app.find_command(&["rotate"])? else {
         row.failures.push("no rotate command in the registry".into());
@@ -470,8 +470,8 @@ fn machine_description() -> Value {
 pub fn run(args: &[String]) -> Result<()> {
     let r = root();
     let mut c = Cfg {
-        cli: target_dir().join("bench/release/pdfcraft-cli.exe"),
-        app: target_dir().join("bench/release/pdfcraft.exe"),
+        cli: target_dir().join("bench/release/bdf-cli.exe"),
+        app: target_dir().join("bench/release/bdf.exe"),
         corpus: target_dir().join("bdf-corpus"),
         out: r.join("target/bdf-evidence/BUILD-002/bench"),
         runs: 30,

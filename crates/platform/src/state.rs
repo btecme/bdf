@@ -8,9 +8,9 @@
 //! * elsewhere: `$XDG_DATA_HOME/bdf/access`, or `~/.local/share/bdf/access`
 //!
 //! The folder is BDF's own (the owner's decision, 2026-10-31; the build specification requires a BDF-specific directory).
-//! It is deliberately **not** the inherited `PdfCraft` folder: access grants and their secrets are BDF's, and nothing
+//! It is deliberately **not** the inherited `BDF` folder: access grants and their secrets are BDF's, and nothing
 //! here reads, imports or shares anything the upstream application left under that name. The applications' older data
-//! folders (settings, the recovery store, the clipboard cache) still use the `PdfCraft` name; moving them is a separate,
+//! folders (settings, the recovery store, the clipboard cache) still use the `BDF` name; moving them is a separate,
 //! recorded decision and is not done here. The name is one constant. Nothing here creates the folder or checks that it
 //! is private: the files written into it do that (`crate::private_files`).
 

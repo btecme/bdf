@@ -823,7 +823,7 @@ fn negative_control(t: &Tools, manifest: &InManifest) -> (usize, Vec<String>) {
 pub fn run(args: &[String]) -> Result<()> {
     let r = root();
     let mut t = Tools {
-        cli: target_dir().join("bench").join("release").join("pdfcraft-cli.exe"),
+        cli: target_dir().join("bench").join("release").join("bdf-cli.exe"),
         mutool: r.join("target/bdf-evidence/BUILD-002/untrusted/mupdf-1.28.5/x/mupdf-1.28.5-windows/mutool.exe"),
         corpus: target_dir().join("bdf-corpus"),
         dpi: 96,

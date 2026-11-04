@@ -1,4 +1,4 @@
-//! `pdfcraft-cli mcp` over its real stdin and stdout: message lines are bounded before they are buffered or parsed
+//! `bdf-cli mcp` over its real stdin and stdout: message lines are bounded before they are buffered or parsed
 //! (BUILD-005, finding F05). The unit and library tests cover every message kind; this one proves the bound is
 //! reached through the actual process, in plain and compact mode, with the 16 MiB default.
 #![cfg(feature = "mcp")]
@@ -21,7 +21,7 @@ fn request_of(len: usize, id: u64, method: &str, mut params: Value) -> String {
 }
 
 fn session(flags: &[&str], lines: Vec<String>) -> Vec<Value> {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bdf-cli"))
         .arg("mcp")
         .args(flags)
         .stdin(Stdio::piped())

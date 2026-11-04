@@ -1,4 +1,4 @@
-//! pdfcraft-app-service — the application service behind every PdfCraft surface (BUILD-007).
+//! pdfcraft-app-service — the application service behind every BDF surface (BUILD-007).
 //!
 //! The desktop, the command line and the MCP server will each be an adapter over this crate: they translate their own
 //! shapes (widgets, arguments, JSON-RPC) into the typed requests of [`operations`] and the results and errors of

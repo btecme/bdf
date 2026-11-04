@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=PdfCraft
+Name=BDF
 GenericName=PDF Editor
 Comment=Read, organize, combine, split and secure PDFs
-Exec=pdfcraft %U
-TryExec=pdfcraft
+Exec=bdf %U
+TryExec=bdf
 Icon=ai.storyteller.pdfcraft
 Terminal=false
 StartupNotify=true

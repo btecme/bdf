@@ -11,7 +11,7 @@ use pdfcraft_app_service::{
     ActorContext, AuditEffect, AuditEntry, AuditOutcome, AuditSink, ClientId, FileAudit, GrantRequest, GrantStore, OsPrincipal, PrincipalKind,
 };
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_bdf-cli");
 
 /// A new empty folder only the current user can use (a system temporary folder is not that on every machine).
 fn private_dir(test: &str) -> PathBuf {
@@ -183,7 +183,7 @@ fn revoking_from_the_command_reaches_a_service_already_running_in_another_proces
 }
 
 /// Two processes change the grants at the same moment. One issues a grant and is held, partway through its change, until
-/// the test lets it go; the other, a real `pdfcraft-cli`, revokes a grant meanwhile. Without turns the first writes the
+/// the test lets it go; the other, a real `bdf-cli`, revokes a grant meanwhile. Without turns the first writes the
 /// file from what it read before the revocation and the revoked grant is live again.
 #[test]
 fn a_revocation_is_not_lost_to_a_grant_issued_in_another_process_at_the_same_moment() {
@@ -319,7 +319,7 @@ fn the_activity_log_is_verified_shown_and_damage_is_reported() {
 fn the_commands_are_listed_in_the_usage_and_the_person_is_not_an_actor_they_can_claim() {
     let help = Command::new(BIN).arg("--help").output().expect("runs");
     let usage = text(&help.stdout);
-    for line in ["pdfcraft-cli grant issue --client NAME", "pdfcraft-cli grant revoke <GRANT-ID>", "pdfcraft-cli activity verify|show"] {
+    for line in ["bdf-cli grant issue --client NAME", "bdf-cli grant revoke <GRANT-ID>", "bdf-cli activity verify|show"] {
         assert!(usage.contains(line), "{line}: {usage}");
     }
     // The commands take no identity: there is no option that names who is asking.

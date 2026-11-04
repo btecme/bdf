@@ -1,9 +1,9 @@
 # pdfcraft-app-service
 
-The application service behind every PdfCraft surface. The desktop, the command line and the MCP server are meant to be adapters over this crate: they turn their own shapes (widgets, arguments, JSON-RPC) into the typed requests below and the results and errors back out, and none of them keeps its own document session, save logic or policy. This is BUILD-007 of the BDF plan ([work items](../../docs/bdf-work-items.toml), finding F08).
+The application service behind every BDF surface. The desktop, the command line and the MCP server are meant to be adapters over this crate: they turn their own shapes (widgets, arguments, JSON-RPC) into the typed requests below and the results and errors back out, and none of them keeps its own document session, save logic or policy. This is BUILD-007 of the BDF plan ([work items](../../docs/bdf-work-items.toml), finding F08).
 
 - **Layer:** L7, headless. It depends on `engine` and `platform`, never on a UI toolkit, and never on `automation`. The only same-layer edges `xtask layers` allows into or out of it are `app-service → platform`, `automation → app-service` and `ui-egui → app-service`.
-- **Status:** one adapter uses it: `pdfcraft-cli mcp --client NAME` (BUILD-009, first slice) serves a client over MCP through the service, so the grant policy applies to that server. **Nothing else does yet:** the desktop, the CLI subcommands and `pdfcraft-cli mcp` without `--client` still run on the older automation engine or their own sessions until the rest of BUILD-009, so agent access is not released and the policy is not applied to the surfaces people use. What the service enforces is described under "Who may do what" below (BUILD-008).
+- **Status:** one adapter uses it: `bdf-cli mcp --client NAME` (BUILD-009, first slice) serves a client over MCP through the service, so the grant policy applies to that server. **Nothing else does yet:** the desktop, the CLI subcommands and `bdf-cli mcp` without `--client` still run on the older automation engine or their own sessions until the rest of BUILD-009, so agent access is not released and the policy is not applied to the surfaces people use. What the service enforces is described under "Who may do what" below (BUILD-008).
 
 ## Contract
 

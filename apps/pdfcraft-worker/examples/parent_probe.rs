@@ -7,7 +7,7 @@ use pdfcraft_worker::supervisor::{Config, Worker};
 
 fn main() {
     let Some(exe) = std::env::args().nth(1) else {
-        eprintln!("usage: parent_probe <path to pdfcraft-worker>");
+        eprintln!("usage: parent_probe <path to bdf-worker>");
         std::process::exit(2);
     };
     let worker = match Worker::spawn(&Config::new(exe)) {

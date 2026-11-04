@@ -189,7 +189,7 @@ pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
             }
         }
         // Resources before the content: a content stream's dictionary may point at what it
-        // draws (PdfCraft's /PCAdded records an added image), which stays an image or font.
+        // draws (BDF's /PCAdded records an added image), which stays an image or font.
         let res = a.resolve_dict(p.dict.get(b"Resources"));
         a.resources(&res);
         if let Some(c) = p.dict.get(b"Contents") {

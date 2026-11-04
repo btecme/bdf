@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_bdf-cli");
 
 struct Workdir(PathBuf);
 

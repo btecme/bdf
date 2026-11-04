@@ -1,4 +1,4 @@
-# Flatpak manifest for PdfCraft, ready for a Flathub submission.
+# Flatpak manifest for BDF, ready for a Flathub submission.
 #
 # Flatpak builds run offline, so the crate sources must be vendored first. From the repo root:
 #
@@ -39,7 +39,7 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
-  - name: pdfcraft
+  - name: bdf
     buildsystem: simple
     build-options:
       env:
@@ -47,7 +47,7 @@ modules:
         CARGO_NET_OFFLINE: 'true'
     build-commands:
       - cargo --offline build --release --locked -p pdfcraft
-      - install -Dm755 target/release/pdfcraft /app/bin/pdfcraft
+      - install -Dm755 target/release/pdfcraft /app/bin/bdf
       - install -Dm644 packaging/linux/ai.storyteller.pdfcraft.desktop /app/share/applications/ai.storyteller.pdfcraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.pdfcraft.mime.xml /app/share/mime/packages/ai.storyteller.pdfcraft.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/

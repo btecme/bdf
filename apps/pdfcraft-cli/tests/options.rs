@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_bdf-cli");
 
 #[test]
 fn non_edit_commands_reject_unknown_options_before_io() {

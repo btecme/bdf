@@ -1,9 +1,9 @@
-//! One PdfCraft per Windows sign-in: a launch that only names files hands them to the PdfCraft
+//! One BDF per Windows sign-in: a launch that only names files hands them to the BDF
 //! that is already running, where they open as tabs, and exits (#282, #317).
 //!
-//! Outlook attachments, Explorer double-clicks and Open With all start `pdfcraft.exe "<file>"`, so
-//! until now every file got its own process and window. The first PdfCraft listens on a Unix
-//! domain socket (Windows 10 1803 and later) in `%LOCALAPPDATA%\PdfCraft`, or in the data folder of
+//! Outlook attachments, Explorer double-clicks and Open With all start `bdf.exe "<file>"`, so
+//! until now every file got its own process and window. The first BDF listens on a Unix
+//! domain socket (Windows 10 1803 and later) in `%LOCALAPPDATA%\BDF`, or in the data folder of
 //! a portable copy. The socket is named after the Windows session (`instance-Console.sock`), so
 //! two sign-ins of the same user never open files in each other's windows, and it lives in the
 //! user's own profile, so other accounts can't create, replace or reach it: nobody else can
@@ -37,9 +37,9 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// What this launch should do.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub enum Claim {
-    /// The running PdfCraft took the files: exit without a window.
+    /// The running BDF took the files: exit without a window.
     HandedOff,
-    /// This is the first PdfCraft: open a window and accept later launches' files.
+    /// This is the first BDF: open a window and accept later launches' files.
     Primary(Server),
     /// Open a window of its own and accept nothing (the behaviour before #282).
     Alone,
@@ -52,7 +52,7 @@ struct Inbox {
     wake: Option<Box<dyn Fn() + Send>>,
 }
 
-/// The first PdfCraft's end of the socket. A background thread accepts launches until the
+/// The first BDF's end of the socket. A background thread accepts launches until the
 /// process exits; the UI picks their files up through [`Server::connect`].
 pub struct Server {
     inbox: Arc<Mutex<Inbox>>,
@@ -135,7 +135,7 @@ pub fn claim(files: &[String], may_hand_off: bool) -> Claim {
     }
 }
 
-/// The socket in `%LOCALAPPDATA%\PdfCraft` (beside the crash-recovery folder); none when
+/// The socket in `%LOCALAPPDATA%\BDF` (beside the crash-recovery folder); none when
 /// `%LOCALAPPDATA%` is unset.
 #[cfg(windows)]
 fn socket_path() -> Option<std::path::PathBuf> {
@@ -145,7 +145,7 @@ fn socket_path() -> Option<std::path::PathBuf> {
     // own name so it never hands files to an installed copy (which keeps its settings elsewhere).
     // Never the portable folder itself: it may sit where other accounts can write (`C:\Tools`).
     let name = if pdfcraft_ui_egui::portable::data_dir().is_some() { format!("portable-{name}") } else { name };
-    std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("PdfCraft").join(name))
+    std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("BDF").join(name))
 }
 
 /// The socket's file name for a Windows session (`SESSIONNAME`: `Console`, `RDP-Tcp#3`…). The
@@ -199,12 +199,12 @@ fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Cla
                 return match hand_off(&stream, files) {
                     Ok(()) => Claim::HandedOff,
                     Err(e) => {
-                        log::warn!("couldn't hand the files to the running PdfCraft ({e}); opening a new window");
+                        log::warn!("couldn't hand the files to the running BDF ({e}); opening a new window");
                         Claim::Alone
                     }
                 };
             }
-            // Nobody is listening: no socket yet, or one left by a PdfCraft that didn't exit
+            // Nobody is listening: no socket yet, or one left by a BDF that didn't exit
             // cleanly (connecting to it is refused). Clear it and become the first. Removed
             // without asking `path.exists()` first: on Windows that follows the socket's reparse
             // point, which can fail, and a leftover socket would then block every later start.
@@ -250,7 +250,7 @@ fn hand_off(stream: &uds_windows::UnixStream, files: &[String]) -> std::io::Resu
     writer.write_all(request(files).as_bytes())?;
     let mut reply = String::new();
     std::io::BufReader::new(stream.take(16)).read_line(&mut reply)?;
-    if reply == "ok\n" { Ok(()) } else { Err(std::io::Error::other("the running PdfCraft didn't confirm")) }
+    if reply == "ok\n" { Ok(()) } else { Err(std::io::Error::other("the running BDF didn't confirm")) }
 }
 
 /// Accept launches on a background thread for as long as the process runs.

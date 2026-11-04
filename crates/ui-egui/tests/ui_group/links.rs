@@ -1,5 +1,5 @@
-//! Community links: the Discord button is one click away everywhere; Help menu, About dialog and
-//! home screen open the ArtCraft and PdfCraft pages.
+//! Project links: the Help menu, the About dialog and the home screen open the BDF repository and
+//! its issue tracker, and nothing else: no Discord, no other product's website.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -18,43 +18,43 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 }
 
 #[test]
-fn discord_button_in_the_top_bar_opens_discord() {
-    let mut h = harness(|_| {});
-    h.get_by_label("Discord").click();
-    h.run_steps(2);
-    assert_eq!(h.state().last_opened_url.as_deref(), Some(links::DISCORD));
-    assert_eq!(links::DISCORD, "https://discord.gg/artcraft");
+fn there_is_no_discord_button_in_the_top_bar() {
+    let h = harness(|_| {});
+    assert_eq!(h.query_all_by_label("Discord").count(), 0);
 }
 
 #[test]
 fn home_screen_links() {
-    for (label, url) in [
-        ("Join our Discord", links::DISCORD),
-        ("PdfCraft web page", "https://getartcraft.com/apps/pdfcraft"),
-        ("PdfCraft on GitHub", "https://github.com/storytold/pdfcraft"),
-        ("ArtCraft website", "https://getartcraft.com"),
-    ] {
+    for (label, url) in [("BDF on GitHub", "https://github.com/btecme/bdf"), ("Report an issue", "https://github.com/btecme/bdf/issues")] {
         let mut h = harness(|_| {});
-        h.get_by_label("Join the ArtCraft community");
-        h.get_by_label(label).click();
+        h.get_by_label("Source code, releases and issue reports are on GitHub.");
+        // The first match is the card's heading (for the GitHub link); the pill comes after it.
+        h.get_all_by_label(label).last().unwrap().click();
         h.run_steps(2);
         assert_eq!(h.state().last_opened_url.as_deref(), Some(url), "{label}");
     }
 }
 
 #[test]
-fn about_dialog_shows_upstream_credit_and_links_without_restricted_marks() {
-    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+fn about_dialog_shows_upstream_credit_and_bdf_links_without_restricted_marks() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
     // With a document open, so the home screen's own links are not on screen.
     let mut h = harness(move |app| {
         app.open_bytes("one.pdf", None, pdf.to_vec()).unwrap();
         app.dialog = Some(Dialog::About);
     });
     h.get_by_label("Based on PdfCraft by the ArtCraft team.");
-    assert_eq!(h.query_all_by_label("ArtCraft").count(), 0, "forks must not display the restricted marks");
-    h.get_by_label("Join our Discord").click();
+    h.get_by_label("BDF");
+    // The credit is plain text; the restricted ArtCraft marks and its Discord are not offered.
+    assert_eq!(h.query_all_by_label("Join our Discord").count(), 0);
+    h.get_by_label("Report an issue").click();
     h.run_steps(2);
-    assert_eq!(h.state().last_opened_url.as_deref(), Some(links::DISCORD));
+    assert_eq!(h.state().last_opened_url.as_deref(), Some(links::ISSUES));
 }
 
 #[test]
@@ -64,6 +64,7 @@ fn help_commands_open_each_link() {
         assert!(h.state_mut().execute(l.command), "{}", l.command);
         assert_eq!(h.state().last_opened_url.as_deref(), Some(l.url));
         assert_eq!(pdfcraft_engine::commands::command(l.command).unwrap().menu, Some("Help"));
+        assert!(l.url.starts_with("https://github.com/btecme/bdf"), "{}", l.url);
     }
 }
 

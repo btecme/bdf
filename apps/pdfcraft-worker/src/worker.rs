@@ -101,7 +101,7 @@ fn is_sha256_hex(s: &str) -> bool {
 /// Returns the process exit code: 0 for a clean end, 2 for a protocol violation.
 pub fn run(input: impl Read + Send + 'static, mut output: impl Write, cfg: &WorkerConfig) -> i32 {
     if let Err(why) = cfg.validate() {
-        eprintln!("pdfcraft-worker: invalid configuration: {why}");
+        eprintln!("bdf-worker: invalid configuration: {why}");
         return 2;
     }
     let cancel = Arc::new(AtomicU64::new(0));
@@ -143,14 +143,14 @@ pub fn run(input: impl Read + Send + 'static, mut output: impl Write, cfg: &Work
                     // The parent is gone or sent nonsense we cannot answer.
                     Ok(Err(_)) => return 2,
                     Err(_) => {
-                        eprintln!("pdfcraft-worker: panic while handling a request");
+                        eprintln!("bdf-worker: panic while handling a request");
                         let _ = send_error(&mut output, 0, "internal_failure", "the worker hit an internal error", &cfg.limits);
                         return 3;
                     }
                 }
             }
             Ok(Event::Fault(e)) => {
-                eprintln!("pdfcraft-worker: protocol violation: {e}");
+                eprintln!("bdf-worker: protocol violation: {e}");
                 let _ = send_error(&mut output, 0, "invalid_argument", &e.to_string(), &cfg.limits);
                 return 2;
             }
@@ -373,7 +373,7 @@ fn debug(frame: &Frame, out: &mut impl Write, fault: &mut Option<protocol::Debug
             for i in (0..held.len()).step_by(4096) {
                 sum = sum.wrapping_add(u64::from(held[i]));
             }
-            eprintln!("pdfcraft-worker: holding {} MiB ({sum})", held.len() >> 20);
+            eprintln!("bdf-worker: holding {} MiB ({sum})", held.len() >> 20);
             loop {
                 thread::sleep(std::time::Duration::from_secs(1));
             }

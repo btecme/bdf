@@ -788,10 +788,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 };
                 let body = match conflict.kind {
                     crate::editing::ConflictKind::Changed => tl!(
-                        "“{name}” was changed outside PdfCraft since you opened or last saved it. Saving now would replace that newer version. Nothing has been written."
+                        "“{name}” was changed outside BDF since you opened or last saved it. Saving now would replace that newer version. Nothing has been written."
                     ),
                     crate::editing::ConflictKind::Exists => {
-                        tl!("A file named “{name}” already exists in that place and PdfCraft did not create it. Nothing has been written.")
+                        tl!("A file named “{name}” already exists in that place and BDF did not create it. Nothing has been written.")
                     }
                     crate::editing::ConflictKind::Gone => tl!("“{name}” was deleted since you opened or last saved it. Nothing has been written."),
                 };
@@ -1045,7 +1045,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(tl!("Recover unsaved documents?")).font(theme::semibold(18.0)));
                 });
                 ui.add_space(6.0);
-                ui.label(tl!("PdfCraft didn't shut down normally. These documents had changes that were autosaved:"));
+                ui.label(tl!("BDF didn't shut down normally. These documents had changes that were autosaved:"));
                 ui.add_space(8.0);
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
                 egui::Grid::new("recoverable").num_columns(2).spacing([18.0, 6.0]).show(ui, |ui| {
@@ -1135,7 +1135,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     _ => {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("PdfCraft").font(theme::semibold(20.0)));
+                                ui.label(egui::RichText::new("BDF").font(theme::semibold(20.0)));
                                 ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", &pdfcraft_engine::build_info::version())]));
                             });
                         });

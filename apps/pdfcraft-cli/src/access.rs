@@ -43,7 +43,7 @@ pub fn grant(args: &[String]) -> Result<(), CliError> {
         Some("list") => list(rest),
         Some("revoke") => revoke(rest),
         Some("prune") => prune(rest),
-        _ => Err("grant: use `issue`, `list`, `revoke` or `prune`; see pdfcraft-cli --help".into()),
+        _ => Err("grant: use `issue`, `list`, `revoke` or `prune`; see bdf-cli --help".into()),
     }
 }
 
@@ -52,7 +52,7 @@ pub fn activity(args: &[String]) -> Result<(), CliError> {
     match args.first().map(String::as_str) {
         Some("verify") => verify(rest),
         Some("show") => show(rest),
-        _ => Err("activity: use `verify` or `show`; see pdfcraft-cli --help".into()),
+        _ => Err("activity: use `verify` or `show`; see bdf-cli --help".into()),
     }
 }
 
@@ -83,7 +83,7 @@ fn issue(args: &[String]) -> Result<(), CliError> {
     let store = open_store(args)?;
     let issued = store.issue(request).map_err(|e| format!("grant issue: {e}"))?;
     let t = &issued.terms;
-    eprintln!("pdfcraft-cli: the secret below is shown once and is not stored; give it to the client, and revoke the grant if it leaks");
+    eprintln!("bdf-cli: the secret below is shown once and is not stored; give it to the client, and revoke the grant if it leaks");
     stdout_line(format_args!(
         "{}",
         serde_json::json!({
@@ -253,7 +253,7 @@ pub fn mcp_client(args: &[String]) -> Result<(), CliError> {
     let mut server = ClientMcpServer::new(service, actor);
     let _ = writeln!(
         std::io::stderr().lock(),
-        "pdfcraft-cli: MCP server for a client on stdio ({}); close stdin to stop",
+        "bdf-cli: MCP server for a client on stdio ({}); close stdin to stop",
         if server.is_authorized() { "grant accepted" } else { "no valid grant: help only" }
     );
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| CliError::Message(e.to_string()))
