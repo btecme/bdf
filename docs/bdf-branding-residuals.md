@@ -18,11 +18,11 @@ assignment: [bdf-branding-build-spec.md](bdf-branding-build-spec.md).
 
 | What | Installed | Portable (`portable.txt` or `BDF.portable` beside `bdf.exe`) |
 |---|---|---|
-| Settings (`app.ron`), logs (`logs\bdf.log`) | `%APPDATA%\BDF` (eframe's per-user data folder) | `BDFData\` beside the executable |
+| Settings (`app.ron`), logs (`logs\bdf.log`, `bdf.1.log`, `bdf.2.log`) | `%APPDATA%\BDF\data` (eframe's per-user data folder) | `BDFData\` beside the executable |
 | Crash recovery | `%LOCALAPPDATA%\BDF\Recovery` | `BDFData\Recovery` |
 | Clipboard images | `%LOCALAPPDATA%\BDF\Clipboard` | `BDFData\` |
 | New digital IDs | next to the recovery folder (`…\BDF\Digital IDs`) | `BDFData\Digital IDs` |
-| Instance hand-off | `%LOCALAPPDATA%\BDF` | same |
+| Single-instance hand-off (a socket and a lock file) | `%LOCALAPPDATA%\BDF\instance.*` | `%LOCALAPPDATA%\BDF\portable-instance.*`, so a portable copy never hands files to an installed one; the only write a portable copy makes outside `BDFData` |
 | Agent grants and audit | `bdf-cli grant … --state-dir` (explicit; unchanged) | same |
 
 BDF never reads, moves, imports or deletes the data of an installed or portable PdfCraft: not its settings, not its
