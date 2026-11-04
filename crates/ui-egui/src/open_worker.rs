@@ -199,31 +199,6 @@ pub(crate) fn read_error_text(error: &std::io::Error) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_stopped_cloud_provider_gets_an_actionable_message() {
-        let stopped = std::io::Error::from_raw_os_error(CLOUD_PROVIDER_NOT_RUNNING);
-        let text = read_error_text(&stopped);
-        if cfg!(windows) {
-            assert!(text.contains("Start OneDrive"), "{text}");
-            assert!(text.starts_with(stopped.to_string().trim_end()), "{text}");
-        } else {
-            assert_eq!(text, stopped.to_string());
-        }
-    }
-
-    #[test]
-    fn other_read_errors_keep_the_system_message() {
-        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
-        assert_eq!(read_error_text(&missing), missing.to_string());
-        let denied = std::io::Error::from_raw_os_error(5);
-        assert_eq!(read_error_text(&denied), denied.to_string());
-    }
-}
-
-#[cfg(test)]
 pub(crate) struct PrepareGate {
     pub started: Sender<()>,
     release: Mutex<Receiver<()>>,
@@ -246,4 +221,29 @@ pub(crate) fn prepare_gate() -> (Arc<PrepareGate>, Receiver<()>, Sender<()>, Rec
     let (release_tx, release) = mpsc::channel();
     let (finished, finished_rx) = mpsc::channel();
     (Arc::new(PrepareGate { started, release: Mutex::new(release), finished }), started_rx, release_tx, finished_rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_cloud_provider_gets_an_actionable_message() {
+        let stopped = std::io::Error::from_raw_os_error(CLOUD_PROVIDER_NOT_RUNNING);
+        let text = read_error_text(&stopped);
+        if cfg!(windows) {
+            assert!(text.contains("Start OneDrive"), "{text}");
+            assert!(text.starts_with(stopped.to_string().trim_end()), "{text}");
+        } else {
+            assert_eq!(text, stopped.to_string());
+        }
+    }
+
+    #[test]
+    fn other_read_errors_keep_the_system_message() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(read_error_text(&missing), missing.to_string());
+        let denied = std::io::Error::from_raw_os_error(5);
+        assert_eq!(read_error_text(&denied), denied.to_string());
+    }
 }
