@@ -163,7 +163,7 @@ fn prepare(job: Job) -> ResultKind {
     let bytes = match &job.input {
         Input::Path(path) => match std::fs::read(path) {
             Ok(bytes) => Arc::new(bytes),
-            Err(error) => return ResultKind::ReadFailed(error.to_string()),
+            Err(error) => return ResultKind::ReadFailed(read_error_text(&error)),
         },
         Input::RemotePath(path) => match pdfcraft_engine::read_remote_document(path) {
             Ok(bytes) => Arc::new(bytes),
@@ -180,6 +180,47 @@ fn prepare(job: Job) -> ResultKind {
     }
     let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
     ResultKind::Prepared { bytes, result: Box::new(result) }
+}
+
+/// Windows `ERROR_CLOUD_FILE_PROVIDER_NOT_RUNNING`: the file is a cloud placeholder (OneDrive
+/// "Available when online") and the sync app that owns it is not connected.
+const CLOUD_PROVIDER_NOT_RUNNING: i32 = 362;
+
+/// Why a file could not be read, in words a person can act on. An online-only cloud file whose sync
+/// app is not running cannot be read by any program (and the native Open dialog greys its Open
+/// button for it); the OS message alone doesn't say what to do.
+pub(crate) fn read_error_text(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    if cfg!(windows) && error.raw_os_error() == Some(CLOUD_PROVIDER_NOT_RUNNING) {
+        format!("{} Start OneDrive (or the app that syncs this file) and try again, or open a copy that is saved on this PC.", text.trim_end())
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_cloud_provider_gets_an_actionable_message() {
+        let stopped = std::io::Error::from_raw_os_error(CLOUD_PROVIDER_NOT_RUNNING);
+        let text = read_error_text(&stopped);
+        if cfg!(windows) {
+            assert!(text.contains("Start OneDrive"), "{text}");
+            assert!(text.starts_with(stopped.to_string().trim_end()), "{text}");
+        } else {
+            assert_eq!(text, stopped.to_string());
+        }
+    }
+
+    #[test]
+    fn other_read_errors_keep_the_system_message() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(read_error_text(&missing), missing.to_string());
+        let denied = std::io::Error::from_raw_os_error(5);
+        assert_eq!(read_error_text(&denied), denied.to_string());
+    }
 }
 
 #[cfg(test)]

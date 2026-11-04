@@ -1750,7 +1750,7 @@ impl PdfCraftApp {
                         }
                     }
                 }
-                Err(error) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &error.to_string())]),
+                Err(error) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &open_worker::read_error_text(&error))]),
             }
             return;
         }

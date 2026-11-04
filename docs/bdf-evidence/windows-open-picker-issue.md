@@ -1,6 +1,6 @@
 # Windows Open picker — online-only OneDrive selection
 
-Status: reproduced, not fixed. Owner-reported preview blocker, 2026-11-04.
+Status: root cause found (the OneDrive sync client was not connected, not a BDF or `rfd` option); actionable message added; opening verified through the native dialog. Owner-reported preview blocker, 2026-11-04.
 Candidate: `aee35194`, copied to the owner's working repository target preview folder.
 
 ## Observed in the actual native dialog
@@ -22,7 +22,35 @@ It confirms a user-visible cloud-selection compatibility problem. It does not ye
 prove the exact Windows option/namespace cause, and no corrected binary is claimed.
 The earlier path/control smoke did not cover this picker path.
 
-## Source boundary to investigate
+## Findings (2026-11-04, second pass)
+
+Reproduced on the owner's machine with the `aee35194` build, then isolated by driving the
+real native Open dialog through UI Automation (names and content of the owner's files are not
+recorded here; counts and states only).
+
+| Condition | Open button | Notes |
+|---|---|---|
+| OneDrive client (`OneDrive.exe`) **not running**; one local PDF selected | enabled | opens |
+| same; one or three online-only PDFs selected ("Available when online") | **disabled** | tooltip says "Available when online" |
+| same, in Paint's Open dialog and in a stock .NET `OpenFileDialog` (neither is BDF or `rfd`) | **disabled** | the OS dialog itself |
+| same, raw `IFileOpenDialog` with the default options, `FOS_FORCEFILESYSTEM`, `FOS_NOVALIDATE`, `FOS_ALLOWNONSTORAGEITEMS` or no options at all | **disabled** | no option set changes it |
+| same, reading an online-only file from the file system | fails | `The cloud file provider is not running.` (Win32 error 362) |
+| OneDrive client running and connected (it took a few minutes after the client was started) | enabled | for one and for three online-only PDFs, and for local PDFs |
+| same, `aee35194` build, one online-only PDF confirmed | opens | the file downloads and renders |
+
+Conclusion: the dialog's Open button is disabled by Windows for a cloud placeholder whose
+sync provider is not connected. It is the same in every application, and no dialog option
+changes it, so the earlier hypothesis about the `rfd` option flags is disproved. With the
+provider connected, the unchanged build selects and opens online-only OneDrive PDFs
+(single and multiple selection), and cancel leaves the app unchanged.
+
+What BDF can and does do: when it reads a file itself (drag and drop, a path argument, a
+recent file, Open after the picker) and Windows answers error 362, the message now says what
+to do (start OneDrive, or open a copy saved on this PC) instead of only the system text
+(`open_worker::read_error_text`, unit-tested). It cannot enable a button that Windows
+disables, and it does not start a user's sync client.
+
+## Source boundary that was investigated
 
 `PdfCraftApp::open_dialog` in `crates/ui-egui/src/lib.rs` asks for multiple files via
 `rfd::AsyncFileDialog`, using the shared asynchronous picker in `pickers.rs`.
@@ -60,3 +88,4 @@ folder is a supported comparison route. Actual native local opening is now verif
 | Date | Change |
 |---|---|
 | 2026-11-04 | Reproduce online-only cloud selection failure; verify native local selection opens and renders; define bounded correction and native acceptance cases. |
+| 2026-11-04 | Second pass: root cause is the OneDrive provider not running (OS-level, all apps); native-dialog matrix with the provider connected; actionable message for error 362. |
