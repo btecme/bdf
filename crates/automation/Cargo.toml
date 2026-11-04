@@ -14,6 +14,9 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-platform = { workspace = true }
+# The grant-gated MCP server (client_mcp) is an adapter over the service (BUILD-009); the tools and the service must also
+# agree (tests/service_parity.rs).
+pdfcraft-app-service = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = "3.27"
@@ -27,8 +30,6 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
-# The service and the tools must agree (tests/service_parity.rs); the adapters become dependents in BUILD-009.
-pdfcraft-app-service = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }

@@ -1,15 +1,59 @@
-//! Bounded, session-wide page-text reuse. Active tool results own their Arcs independently.
+//! Page text for the surfaces that read or search it: extraction with one renderer per worker thread, and a bounded,
+//! session-wide cache. Active results own their Arcs independently of the cache.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Weak};
 
-use pdfcraft_engine::DocId;
-use pdfcraft_render::{PageText, TextGlyph};
+use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
+pub use pdfcraft_render::{PageText, TextGlyph};
+
+use crate::DocId;
 
 const BYTE_BUDGET: usize = 64 * 1024 * 1024;
 // Also bound bookkeeping for documents with thousands of empty pages.
 const PAGE_BUDGET: usize = 4096;
 type Key = (DocId, usize);
+
+/// Page text by 0-based page, or why that page could not be read.
+pub type PageTexts = Vec<(usize, Result<Arc<PageText>, String>)>;
+
+/// Extract the text of `pages` (0-based) with one renderer per worker thread.
+pub fn extract_pages(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
+    let extract = |r: &mut PageRenderer, p: usize| {
+        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
+        match out.error {
+            Some(e) => Err(e),
+            None => Ok(out.text.unwrap_or_default()),
+        }
+    };
+    let config = RenderConfig { password, ..Default::default() };
+    let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(8) };
+    // Small jobs aren't worth a second parse of the document.
+    if workers == 1 || pages.len() < 8 {
+        let mut r = PageRenderer::new(bytes.clone(), config);
+        return pages.iter().map(|p| (*p, extract(&mut r, *p))).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut out: PageTexts = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut r = PageRenderer::new(bytes.clone(), config.clone());
+                    let mut done = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(p) = pages.get(i) else { break };
+                        done.push((*p, extract(&mut r, *p)));
+                    }
+                    done
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+    });
+    out.sort_by_key(|(p, _)| *p);
+    out
+}
 
 struct Cached {
     version: Weak<Vec<u8>>,
@@ -18,7 +62,7 @@ struct Cached {
     stamp: u64,
 }
 
-pub(super) struct TextCache {
+pub struct TextCache {
     pages: HashMap<Key, Cached>,
     order: BTreeMap<u64, Key>,
     clock: u64,
@@ -33,11 +77,11 @@ impl Default for TextCache {
 }
 
 impl TextCache {
-    pub(super) fn new(budget: usize) -> Self {
+    pub fn new(budget: usize) -> Self {
         Self { pages: HashMap::new(), order: BTreeMap::new(), clock: 0, bytes: 0, budget }
     }
 
-    pub(super) fn prepare(&mut self, id: DocId, bytes: &Arc<Vec<u8>>) {
+    pub fn prepare(&mut self, id: DocId, bytes: &Arc<Vec<u8>>) {
         let version = Arc::downgrade(bytes);
         // At most PAGE_BUDGET entries, independent of the document's page count. Weak pointers
         // distinguish revisions without keeping an obsolete PDF byte buffer alive.
@@ -47,7 +91,7 @@ impl TextCache {
         }
     }
 
-    pub(super) fn remove(&mut self, id: &DocId) {
+    pub fn remove(&mut self, id: &DocId) {
         let keys: Vec<_> = self.pages.keys().filter(|key| key.0 == *id).copied().collect();
         for key in keys {
             self.remove_page(key);
@@ -72,7 +116,7 @@ impl TextCache {
         self.clock
     }
 
-    pub(super) fn get(&mut self, id: DocId, page: usize) -> Option<Arc<PageText>> {
+    pub fn get(&mut self, id: DocId, page: usize) -> Option<Arc<PageText>> {
         let stamp = self.stamp();
         let entry = self.pages.get_mut(&(id, page))?;
         self.order.remove(&entry.stamp);
@@ -81,7 +125,7 @@ impl TextCache {
         Some(entry.text.clone())
     }
 
-    pub(super) fn insert(&mut self, id: DocId, page: usize, version: &Arc<Vec<u8>>, text: Arc<PageText>) {
+    pub fn insert(&mut self, id: DocId, page: usize, version: &Arc<Vec<u8>>, text: Arc<PageText>) {
         let bytes = retained_bytes(&text);
         self.remove_page((id, page));
         // An oversized page is usable by this call, but never retained by the cache.
@@ -98,13 +142,17 @@ impl TextCache {
         self.bytes += bytes;
     }
 
-    #[cfg(test)]
-    pub(super) fn len(&self) -> usize {
+    /// How many pages are held.
+    pub fn len(&self) -> usize {
         self.pages.len()
     }
 
-    #[cfg(test)]
-    pub(super) fn bytes(&self) -> usize {
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+    }
+
+    /// The estimated bytes held, never more than the budget.
+    pub fn bytes(&self) -> usize {
         self.bytes
     }
 }

@@ -14,6 +14,37 @@ use crate::version::DocumentKey;
 pub const SCHEMA_VERSION: u32 = 1;
 pub const OLDEST_SCHEMA: u32 = 1;
 
+/// The most bookmarks one `document.bookmarks` request returns, and how many it returns when `limit` is not given.
+pub const MAX_BOOKMARK_PAGE: usize = 1000;
+pub const DEFAULT_BOOKMARK_PAGE: usize = 100;
+
+/// The most text one `document.text` request returns, in bytes. The page that crosses it is left out and the answer
+/// says how many pages were. A request always returns its first page, however long it is.
+pub const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+/// The most pages a `document.text` request may name when it lists them (a request for all pages names none).
+pub const MAX_TEXT_PAGE_LIST: usize = 10_000;
+
+/// The most matches one `document.find` request returns, and how many it returns when `limit` is not given.
+pub const MAX_FIND_MATCHES: usize = 10_000;
+pub const DEFAULT_FIND_MATCHES: usize = 500;
+
+/// The most pages one `document.find` request reads. A search that gets this far says where to go on from.
+pub const MAX_FIND_PAGES: usize = 2_000;
+
+/// The longest phrase `document.find` looks for, in characters.
+pub const MAX_QUERY_CHARS: usize = 1_000;
+
+/// `page.render` takes a resolution from 1 to [`MAX_RENDER_DPI`] dots per inch (96 when a caller gives none). A page that
+/// would come out larger than the renderer's own size and pixel limits is rendered smaller, and the answer says how large.
+pub const DEFAULT_RENDER_DPI: f64 = 96.0;
+pub const MAX_RENDER_DPI: f64 = 600.0;
+
+/// `page.preview` bounds the longer side of the picture, in pixels: from 1 to [`MAX_PREVIEW_SIDE`] (1,024 when not
+/// given). A page that is already smaller is not enlarged.
+pub const DEFAULT_PREVIEW_SIDE: i64 = 1_024;
+pub const MAX_PREVIEW_SIDE: i64 = 4_096;
+
 /// A stable operation id. The spelling ([`OperationId::name`]) is the contract; the variants are not ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OperationId {
@@ -25,10 +56,17 @@ pub enum OperationId {
     EditHistory,
     DocumentSave,
     DocumentClose,
+    DocumentList,
+    DocumentLinks,
+    DocumentBookmarks,
+    DocumentText,
+    DocumentFind,
+    PageRender,
+    PagePreview,
 }
 
 impl OperationId {
-    pub const ALL: [OperationId; 8] = [
+    pub const ALL: [OperationId; 15] = [
         OperationId::DocumentOpen,
         OperationId::DocumentQuery,
         OperationId::PageRotate,
@@ -37,6 +75,13 @@ impl OperationId {
         OperationId::EditHistory,
         OperationId::DocumentSave,
         OperationId::DocumentClose,
+        OperationId::DocumentList,
+        OperationId::DocumentLinks,
+        OperationId::DocumentBookmarks,
+        OperationId::DocumentText,
+        OperationId::DocumentFind,
+        OperationId::PageRender,
+        OperationId::PagePreview,
     ];
 
     pub fn name(self) -> &'static str {
@@ -127,7 +172,7 @@ pub struct OperationDescriptor {
     pub needs_revision: bool,
 }
 
-pub static DESCRIPTORS: [OperationDescriptor; 8] = [
+pub static DESCRIPTORS: [OperationDescriptor; 15] = [
     OperationDescriptor {
         id: OperationId::DocumentOpen,
         name: "document.open",
@@ -208,6 +253,76 @@ pub static DESCRIPTORS: [OperationDescriptor; 8] = [
         needs_document: true,
         needs_revision: true,
     },
+    OperationDescriptor {
+        id: OperationId::DocumentList,
+        name: "document.list",
+        summary: "The open documents this caller may read, with their pages and whether they can be edited.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: false,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::DocumentLinks,
+        name: "document.links",
+        summary: "The links of a document: page, position, and where each goes.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::DocumentBookmarks,
+        name: "document.bookmarks",
+        summary: "One page of a document's bookmarks, in outline order.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::DocumentText,
+        name: "document.text",
+        summary: "The text of some or all pages in reading order, or only what lies inside a rectangle.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::DocumentFind,
+        name: "document.find",
+        summary: "Find a phrase (case-insensitive, whitespace-normalised): page, text and line rectangles of each match.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::PageRender,
+        name: "page.render",
+        summary: "Render a page to a PNG at a resolution in dots per inch, as the document shows it now.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
+    OperationDescriptor {
+        id: OperationId::PagePreview,
+        name: "page.preview",
+        summary: "Render a page to a PNG whose longer side is at most a given number of pixels, without changing the document.",
+        capability: Capability::DocumentRead,
+        access: Access::Read,
+        release: Release::Core,
+        needs_document: true,
+        needs_revision: false,
+    },
 ];
 
 /// One request. `schema_version` is checked before anything else.
@@ -229,14 +344,64 @@ impl OperationRequest {
 /// made against as a field, so it cannot be built without one.
 #[derive(Clone, Debug)]
 pub enum Operation {
-    Open { source: OpenSource, password: Option<String> },
+    Open {
+        source: OpenSource,
+        password: Option<String>,
+    },
     Query,
-    Rotate { expected_revision: u64, pages: PageSelection, degrees: i64 },
-    Undo { expected_revision: u64 },
-    Redo { expected_revision: u64 },
+    Rotate {
+        expected_revision: u64,
+        pages: PageSelection,
+        degrees: i64,
+    },
+    Undo {
+        expected_revision: u64,
+    },
+    Redo {
+        expected_revision: u64,
+    },
     History,
-    Save { expected_revision: u64, target: SaveTarget, overwrite: Overwrite, full: Option<bool> },
-    Close { expected_revision: u64, discard_changes: bool },
+    Save {
+        expected_revision: u64,
+        target: SaveTarget,
+        overwrite: Overwrite,
+        full: Option<bool>,
+    },
+    Close {
+        expected_revision: u64,
+        discard_changes: bool,
+    },
+    List,
+    Links,
+    /// `offset` from 0; `limit` from 1 to [`MAX_BOOKMARK_PAGE`].
+    Bookmarks {
+        offset: usize,
+        limit: usize,
+    },
+    /// The text of `pages`, or of the part of each inside `rect` (left, top, right, bottom in points from the top-left
+    /// of the displayed page, as links and matches are given). At most [`MAX_TEXT_BYTES`] come back.
+    TextExtract {
+        pages: PageSelection,
+        rect: Option<[f64; 4]>,
+    },
+    /// Matches of `query` from page `start_page` (1-based) on, after `skip` matches on that page. `limit` is from 1 to
+    /// [`MAX_FIND_MATCHES`]. The answer carries where to go on from when it stopped before the end.
+    TextFind {
+        query: String,
+        limit: usize,
+        start_page: i64,
+        skip: usize,
+    },
+    /// `page` is 1-based; `dpi` is from 1 to [`MAX_RENDER_DPI`].
+    PageRender {
+        page: i64,
+        dpi: f64,
+    },
+    /// `page` is 1-based; `max_side` is from 1 to [`MAX_PREVIEW_SIDE`].
+    PagePreview {
+        page: i64,
+        max_side: i64,
+    },
 }
 
 impl Operation {
@@ -250,6 +415,13 @@ impl Operation {
             Operation::History => OperationId::EditHistory,
             Operation::Save { .. } => OperationId::DocumentSave,
             Operation::Close { .. } => OperationId::DocumentClose,
+            Operation::List => OperationId::DocumentList,
+            Operation::Links => OperationId::DocumentLinks,
+            Operation::Bookmarks { .. } => OperationId::DocumentBookmarks,
+            Operation::TextExtract { .. } => OperationId::DocumentText,
+            Operation::TextFind { .. } => OperationId::DocumentFind,
+            Operation::PageRender { .. } => OperationId::PageRender,
+            Operation::PagePreview { .. } => OperationId::PagePreview,
         }
     }
 
@@ -261,7 +433,16 @@ impl Operation {
             | Operation::Redo { expected_revision }
             | Operation::Save { expected_revision, .. }
             | Operation::Close { expected_revision, .. } => Some(*expected_revision),
-            Operation::Open { .. } | Operation::Query | Operation::History => None,
+            Operation::Open { .. }
+            | Operation::Query
+            | Operation::History
+            | Operation::List
+            | Operation::Links
+            | Operation::Bookmarks { .. }
+            | Operation::TextExtract { .. }
+            | Operation::TextFind { .. }
+            | Operation::PageRender { .. }
+            | Operation::PagePreview { .. } => None,
         }
     }
 }

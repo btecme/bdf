@@ -29,6 +29,13 @@ pub enum Outcome {
     History(History),
     Saved(SaveReport),
     Closed,
+    /// The documents the caller may read.
+    Documents(Vec<DocumentInfo>),
+    Links(LinkList),
+    Bookmarks(BookmarkList),
+    Text(TextPages),
+    Found(FindReport),
+    Image(PageImage),
 }
 
 /// A document as a caller may see it. Pages are numbered from 1 and sized in points as displayed (after rotation).
@@ -78,4 +85,127 @@ pub struct SaveReport {
     pub superseded: bool,
     /// The document was closed (or replaced) before the save finished; the file is written and nothing else changed.
     pub document_open: bool,
+}
+
+/// The links of a document. At most [`MAX_LINKS`] are listed; `total` says how many there are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkList {
+    pub links: Vec<LinkSummary>,
+    pub total: usize,
+}
+
+/// The most links one `document.links` request lists. Past it the list says how many were left out.
+pub const MAX_LINKS: usize = 10_000;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkSummary {
+    /// 1-based.
+    pub page: usize,
+    /// 1-based position among the page's annotations, as the link tools take it.
+    pub index: usize,
+    /// Points from the top-left of the displayed page: left, top, right, bottom.
+    pub rect: [f32; 4],
+    pub visible: bool,
+    pub target: LinkTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// A page of this document, 1-based.
+    Page(usize),
+    Uri(String),
+    /// Something else (a named destination, a script, a file): described, not followed.
+    Other(String),
+}
+
+/// One page of bookmarks, in outline order, flat: the nesting is in each row's `path`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkList {
+    pub rows: Vec<BookmarkEntry>,
+    /// Where the next page starts, or `None` at the end.
+    pub next: Option<usize>,
+    /// The structure could not be read for editing, so the listing is the viewer's shorter copy.
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BookmarkEntry {
+    /// 1-based child positions from the top level.
+    pub path: Vec<usize>,
+    pub title: String,
+    /// 1-based page it goes to.
+    pub page: Option<usize>,
+    pub open: bool,
+}
+
+/// The text of pages, in the order they were asked for. When the answer would pass `MAX_TEXT_BYTES` the pages that
+/// did not fit are left out, from the one that crossed it on, and `omitted_pages` counts them; the first page is
+/// always there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextPages {
+    pub pages: Vec<PageTextEntry>,
+    pub omitted_pages: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageTextEntry {
+    /// 1-based.
+    pub page: usize,
+    pub text: String,
+}
+
+/// What a search found. It stopped early when `next` is set: `next` is where to ask again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FindReport {
+    pub query: String,
+    pub matches: Vec<FoundMatch>,
+    pub next: Option<FindNext>,
+    /// Pages that could not be read (at most [`MAX_FIND_WARNINGS`]); `warning_count` counts them all. The matches on
+    /// the other pages are kept.
+    pub warnings: Vec<PageWarning>,
+    pub warning_count: usize,
+}
+
+/// The most failed pages a search lists, and the longest message it keeps for one, in bytes.
+pub const MAX_FIND_WARNINGS: usize = 100;
+pub const MAX_WARNING_BYTES: usize = 1024;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FoundMatch {
+    /// 1-based.
+    pub page: usize,
+    pub text: String,
+    /// One rectangle per line the match covers: left, top, right, bottom in points from the top-left of the page.
+    pub rects: Vec<[f32; 4]>,
+}
+
+/// Where a search that stopped goes on: `start_page` (1-based) and the matches to skip on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FindNext {
+    pub start_page: usize,
+    pub skip: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageWarning {
+    /// 1-based.
+    pub page: usize,
+    pub error: String,
+    pub error_truncated: bool,
+}
+
+/// A page as a PNG. `Debug` shows its size and not its bytes, so a record or a failed assertion cannot dump a page.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PageImage {
+    /// 1-based.
+    pub page: usize,
+    pub width: u32,
+    pub height: u32,
+    pub png: Vec<u8>,
+}
+
+impl std::fmt::Debug for PageImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PageImage {{ page: {}, {}x{}, {} bytes }}", self.page, self.width, self.height, self.png.len())
+    }
 }

@@ -34,6 +34,37 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+/// Two pages. Page 1 carries a web link and a link to page 2; the outline has two top-level bookmarks, one for each page.
+fn fixture_with_links_and_bookmarks() -> Vec<u8> {
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R >>",
+        "<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [9 0 R 10 0 R] >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Outlines /First 11 0 R /Last 12 0 R /Count 2 >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 80 30] /A << /S /URI /URI (https://example.com/) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 40 80 60] /Dest [6 0 R /Fit] >>",
+        "<< /Title (Intro) /Parent 8 0 R /Dest [4 0 R /Fit] /Next 12 0 R >>",
+        "<< /Title (Second) /Parent 8 0 R /Dest [6 0 R /Fit] /Prev 11 0 R >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 /// The person at the keyboard.
 fn me() -> ActorContext {
     ActorContext::local_user().expect("the current user")
@@ -109,6 +140,13 @@ fn every_operation_has_one_descriptor_and_the_descriptor_matches_the_typed_reque
         Operation::History,
         Operation::Save { expected_revision: 0, target: SaveTarget::Tracked, overwrite: Overwrite::Tracked, full: None },
         Operation::Close { expected_revision: 0, discard_changes: false },
+        Operation::List,
+        Operation::Links,
+        Operation::Bookmarks { offset: 0, limit: DEFAULT_BOOKMARK_PAGE },
+        Operation::TextExtract { pages: PageSelection::All, rect: None },
+        Operation::TextFind { query: String::new(), limit: DEFAULT_FIND_MATCHES, start_page: 1, skip: 0 },
+        Operation::PageRender { page: 1, dpi: DEFAULT_RENDER_DPI },
+        Operation::PagePreview { page: 1, max_side: DEFAULT_PREVIEW_SIDE },
     ];
     assert_eq!(samples.len(), OperationId::ALL.len());
     for op in samples {
@@ -764,4 +802,429 @@ fn the_open_size_limit_refuses_a_large_file_as_a_resource_limit_and_opens_one_at
     assert_eq!(error.code, ErrorCode::ResourceLimit);
     // A limit above the maximum is the maximum.
     assert!(Service::new().with_open_limit(u64::MAX).documents(&me()).is_empty());
+}
+
+// ---- reading: list, links, bookmarks ----
+
+fn open_links_fixture(service: &mut Service) -> (DocumentKey, DocumentVersion) {
+    let source = OpenSource::Bytes { name: "links.pdf".into(), bytes: Arc::new(fixture_with_links_and_bookmarks()) };
+    let done = run(service, None, Operation::Open { source, password: None }).expect("opens");
+    match done.outcome {
+        Outcome::Opened { document, .. } => (document, done.version.expect("a version")),
+        other => panic!("opened a document, got {other:?}"),
+    }
+}
+
+fn links_of(service: &mut Service, key: DocumentKey) -> LinkList {
+    match run(service, Some(key), Operation::Links).expect("lists links").outcome {
+        Outcome::Links(list) => list,
+        other => panic!("links, got {other:?}"),
+    }
+}
+
+fn bookmarks_of(service: &mut Service, key: DocumentKey, offset: usize, limit: usize) -> Result<BookmarkList> {
+    run(service, Some(key), Operation::Bookmarks { offset, limit }).map(|done| match done.outcome {
+        Outcome::Bookmarks(list) => list,
+        other => panic!("bookmarks, got {other:?}"),
+    })
+}
+
+#[test]
+fn links_are_listed_with_their_place_and_where_they_go() {
+    let mut service = Service::new();
+    let (key, _) = open_links_fixture(&mut service);
+    let list = links_of(&mut service, key);
+    assert_eq!(list.total, 2);
+    assert_eq!(list.links.len(), 2);
+    // The web link: page 1, the first annotation, in points from the top-left of the displayed page (the page is 300 high).
+    let web = &list.links[0];
+    assert_eq!((web.page, web.index), (1, 1));
+    assert_eq!(web.rect, [10.0, 270.0, 80.0, 290.0]);
+    assert_eq!(web.target, LinkTarget::Uri("https://example.com/".into()));
+    // The internal link names page 2, 1-based.
+    let internal = &list.links[1];
+    assert_eq!((internal.page, internal.index), (1, 2));
+    assert_eq!(internal.rect, [10.0, 240.0, 80.0, 260.0]);
+    assert_eq!(internal.target, LinkTarget::Page(2));
+}
+
+#[test]
+fn a_document_without_links_or_bookmarks_lists_none() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 2);
+    let list = links_of(&mut service, key);
+    assert_eq!((list.total, list.links.len()), (0, 0));
+    let bookmarks = bookmarks_of(&mut service, key, 0, 10).expect("lists");
+    assert_eq!((bookmarks.rows.len(), bookmarks.next), (0, None));
+}
+
+#[test]
+fn bookmarks_come_in_outline_order_a_page_at_a_time() {
+    let mut service = Service::new();
+    let (key, _) = open_links_fixture(&mut service);
+    let first = bookmarks_of(&mut service, key, 0, 1).expect("lists");
+    assert_eq!(first.rows, [BookmarkEntry { path: vec![1], title: "Intro".into(), page: Some(1), open: false }]);
+    assert_eq!(first.next, Some(1), "there is more");
+    let rest = bookmarks_of(&mut service, key, first.next.expect("a next page"), 1).expect("lists");
+    assert_eq!(rest.rows, [BookmarkEntry { path: vec![2], title: "Second".into(), page: Some(2), open: false }]);
+    assert_eq!(rest.next, None, "that was the last");
+    // Everything in one page is the same two rows, and an offset past the end is an empty page, not an error.
+    assert_eq!(bookmarks_of(&mut service, key, 0, DEFAULT_BOOKMARK_PAGE).expect("lists").rows.len(), 2);
+    assert!(bookmarks_of(&mut service, key, 50, 10).expect("lists").rows.is_empty());
+}
+
+#[test]
+fn a_bookmark_page_is_bounded_and_a_bad_bound_changes_nothing() {
+    let mut service = Service::new();
+    let (key, before) = open_links_fixture(&mut service);
+    for limit in [0, MAX_BOOKMARK_PAGE + 1, usize::MAX] {
+        let error = bookmarks_of(&mut service, key, 0, limit).expect_err("refused");
+        assert_eq!(error.code, ErrorCode::InvalidArgument, "limit {limit}");
+    }
+    assert!(bookmarks_of(&mut service, key, 0, MAX_BOOKMARK_PAGE).is_ok(), "the bound itself is allowed");
+    assert!(bookmarks_of(&mut service, key, usize::MAX, 10).expect("an offset past the end").rows.is_empty());
+    assert_eq!(service.document(&me(), key).expect("open").version(), before);
+}
+
+#[test]
+fn listing_names_the_open_documents_and_changes_nothing() {
+    let mut service = Service::new();
+    let listed = |service: &mut Service| match run(service, None, Operation::List).expect("lists").outcome {
+        Outcome::Documents(documents) => documents,
+        other => panic!("documents, got {other:?}"),
+    };
+    assert!(listed(&mut service).is_empty());
+    let (first, v1) = open_bytes(&mut service, 1);
+    let (second, _) = open_links_fixture(&mut service);
+    let documents = listed(&mut service);
+    assert_eq!(documents.iter().map(|d| d.document).collect::<Vec<_>>(), [first, second]);
+    assert_eq!(documents.iter().map(|d| d.pages.len()).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(service.document(&me(), first).expect("open").version(), v1, "reading moved nothing");
+    run(&mut service, Some(first), Operation::Close { expected_revision: v1.content_revision, discard_changes: false }).expect("closes");
+    assert_eq!(listed(&mut service).iter().map(|d| d.document).collect::<Vec<_>>(), [second]);
+}
+
+#[test]
+fn reading_links_and_bookmarks_of_a_closed_or_unknown_document_is_not_found() {
+    let mut service = Service::new();
+    let (key, v) = open_links_fixture(&mut service);
+    let other_session = DocumentKey { session: Service::new().session_id(), document: key.document };
+    let unknown = DocumentKey { session: service.session_id(), document: 9_999 };
+    run(&mut service, Some(key), Operation::Close { expected_revision: v.content_revision, discard_changes: false }).expect("closes");
+    for gone in [key, other_session, unknown] {
+        assert_eq!(run(&mut service, Some(gone), Operation::Links).expect_err("refused").code, ErrorCode::NotFound);
+        assert_eq!(run(&mut service, Some(gone), Operation::Bookmarks { offset: 0, limit: 10 }).expect_err("refused").code, ErrorCode::NotFound);
+    }
+}
+
+#[test]
+fn a_list_of_links_is_capped_and_says_how_many_there_are() {
+    // One page with more links than a request lists.
+    let count = MAX_LINKS + 5;
+    let annots: Vec<String> = (0..count).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [{}] >>", annots.join(" ")),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    objs.extend((0..count).map(|_| "<< /Type /Annot /Subtype /Link /Rect [10 10 80 30] /A << /S /URI /URI (https://example.com/) >> >>".to_string()));
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut service = Service::new();
+    let source = OpenSource::Bytes { name: "many.pdf".into(), bytes: Arc::new(bytes) };
+    let key = match run(&mut service, None, Operation::Open { source, password: None }).expect("opens").outcome {
+        Outcome::Opened { document, .. } => document,
+        other => panic!("opened, got {other:?}"),
+    };
+    let list = links_of(&mut service, key);
+    assert_eq!(list.total, count);
+    assert_eq!(list.links.len(), MAX_LINKS);
+    assert_eq!(list.links[MAX_LINKS - 1].index, MAX_LINKS, "the first ones, in order");
+}
+
+// ---- reading: text and search ----
+
+fn text_of(service: &mut Service, key: DocumentKey, pages: PageSelection, rect: Option<[f64; 4]>) -> Result<TextPages> {
+    run(service, Some(key), Operation::TextExtract { pages, rect }).map(|done| match done.outcome {
+        Outcome::Text(text) => text,
+        other => panic!("text, got {other:?}"),
+    })
+}
+
+fn found(service: &mut Service, key: DocumentKey, query: &str, limit: usize, start_page: i64, skip: usize) -> Result<FindReport> {
+    run(service, Some(key), Operation::TextFind { query: query.into(), limit, start_page, skip }).map(|done| match done.outcome {
+        Outcome::Found(report) => report,
+        other => panic!("found, got {other:?}"),
+    })
+}
+
+fn pages_and_text(text: &TextPages) -> Vec<(usize, &str)> {
+    text.pages.iter().map(|p| (p.page, p.text.as_str())).collect()
+}
+
+#[test]
+fn text_comes_in_the_order_asked_and_from_every_page_when_none_are_named() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 3);
+    let all = text_of(&mut service, key, PageSelection::All, None).expect("reads");
+    assert_eq!(pages_and_text(&all), [(1, "Page 1"), (2, "Page 2"), (3, "Page 3")]);
+    assert_eq!(all.omitted_pages, 0);
+    let some = text_of(&mut service, key, PageSelection::Numbers(vec![3, 1, 3]), None).expect("reads");
+    assert_eq!(pages_and_text(&some), [(3, "Page 3"), (1, "Page 1"), (3, "Page 3")]);
+}
+
+#[test]
+fn a_rectangle_takes_only_the_text_inside_it_and_either_pair_of_corners_will_do() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 2);
+    let pick = |service: &mut Service, rect| text_of(service, key, PageSelection::Numbers(vec![2]), Some(rect)).expect("reads");
+    assert_eq!(pages_and_text(&pick(&mut service, [0.0, 0.0, 200.0, 300.0])), [(2, "Page 2")]);
+    assert_eq!(pages_and_text(&pick(&mut service, [200.0, 300.0, 0.0, 0.0])), [(2, "Page 2")], "corners in the other order");
+    assert_eq!(pages_and_text(&pick(&mut service, [0.0, 0.0, 200.0, 10.0])), [(2, "")], "nothing there, and the page is still answered");
+}
+
+#[test]
+fn bad_text_arguments_are_refused_and_change_nothing() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    for pages in
+        [PageSelection::Numbers(vec![]), PageSelection::Numbers(vec![0]), PageSelection::Numbers(vec![3]), PageSelection::Numbers(vec![1, -1])]
+    {
+        assert_eq!(text_of(&mut service, key, pages.clone(), None).expect_err("refused").code, ErrorCode::InvalidArgument, "{pages:?}");
+    }
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0e300] {
+        let rect = Some([0.0, 0.0, bad, 10.0]);
+        assert_eq!(text_of(&mut service, key, PageSelection::All, rect).expect_err("refused").code, ErrorCode::InvalidArgument, "{bad}");
+    }
+    let too_many = PageSelection::Numbers(vec![1; MAX_TEXT_PAGE_LIST + 1]);
+    assert_eq!(text_of(&mut service, key, too_many, None).expect_err("refused").code, ErrorCode::ResourceLimit);
+    let exactly = PageSelection::Numbers(vec![1; MAX_TEXT_PAGE_LIST]);
+    assert_eq!(text_of(&mut service, key, exactly, None).expect("the limit itself is allowed").pages.len(), MAX_TEXT_PAGE_LIST);
+    assert_eq!(service.document(&me(), key).expect("open").version(), version, "reading changes nothing");
+}
+
+#[test]
+fn a_search_finds_matches_in_page_order_with_their_text_and_line_rectangles() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 3);
+    let report = found(&mut service, key, "page", 100, 1, 0).expect("searches");
+    assert_eq!(report.query, "page");
+    assert_eq!(report.matches.iter().map(|m| (m.page, m.text.as_str())).collect::<Vec<_>>(), [(1, "Page"), (2, "Page"), (3, "Page")]);
+    assert!(report.next.is_none() && report.warnings.is_empty() && report.warning_count == 0);
+    for m in &report.matches {
+        assert_eq!(m.rects.len(), 1, "one line");
+        let [left, top, right, bottom] = m.rects[0];
+        assert!(0.0 <= left && left < right && right <= 200.0 && 0.0 <= top && top < bottom && bottom <= 300.0, "inside the page: {:?}", m.rects[0]);
+        // The rectangle is in the same space as the text extraction's: it selects exactly the text it was found as.
+        let rect = m.rects[0].map(f64::from);
+        let inside = text_of(&mut service, key, PageSelection::Numbers(vec![m.page as i64]), Some(rect)).expect("reads");
+        assert_eq!(pages_and_text(&inside), [(m.page, "Page")]);
+    }
+}
+
+#[test]
+fn a_phrase_is_matched_without_regard_to_case_or_spacing_and_an_empty_one_matches_nothing() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 3);
+    let report = found(&mut service, key, "  pAGE   2 ", 100, 1, 0).expect("searches");
+    assert_eq!(report.matches.iter().map(|m| (m.page, m.text.as_str())).collect::<Vec<_>>(), [(2, "Page 2")]);
+    for nothing in ["", "   ", "absent"] {
+        let report = found(&mut service, key, nothing, 100, 1, 0).expect("searches");
+        assert!(report.matches.is_empty() && report.next.is_none() && report.warning_count == 0, "{nothing:?}");
+    }
+}
+
+#[test]
+fn a_search_that_stops_at_its_limit_says_where_to_go_on_from_and_the_pieces_add_up() {
+    let mut service = Service::new();
+    // "1" is in Page 1, Page 10, Page 11 (twice) and Page 12: five matches, two on one page.
+    let (key, _) = open_bytes(&mut service, 12);
+    let all = found(&mut service, key, "1", 100, 1, 0).expect("searches");
+    assert_eq!(all.matches.iter().map(|m| m.page).collect::<Vec<_>>(), [1, 10, 11, 11, 12]);
+    assert!(all.next.is_none());
+
+    for step in [1, 2, 3] {
+        let (mut pieces, mut at, mut places) = (Vec::new(), (1i64, 0usize), Vec::new());
+        loop {
+            let part = found(&mut service, key, "1", step, at.0, at.1).expect("searches");
+            assert!(part.matches.len() <= step);
+            pieces.extend(part.matches);
+            match part.next {
+                Some(next) => {
+                    places.push(next);
+                    at = (next.start_page as i64, next.skip);
+                }
+                None => break,
+            }
+        }
+        assert_eq!(pieces, all.matches, "limit {step}: the pieces are the whole list, in order, none twice");
+        if step == 1 {
+            assert!(places.contains(&FindNext { start_page: 11, skip: 1 }), "a continuation inside a page: {places:?}");
+        }
+    }
+}
+
+#[test]
+fn bad_search_arguments_are_refused_and_change_nothing() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    let long = "a".repeat(MAX_QUERY_CHARS + 1);
+    let accents = "é".repeat(MAX_QUERY_CHARS);
+    let refusals = [
+        found(&mut service, key, "x", 0, 1, 0),
+        found(&mut service, key, "x", MAX_FIND_MATCHES + 1, 1, 0),
+        found(&mut service, key, "x", usize::MAX, 1, 0),
+        found(&mut service, key, &long, 10, 1, 0),
+        found(&mut service, key, "x", 10, 0, 0),
+        found(&mut service, key, "x", 10, -1, 0),
+        found(&mut service, key, "x", 10, 3, 0),
+        found(&mut service, key, "x", 10, i64::MIN, 0),
+        found(&mut service, key, "x", 10, i64::MAX, 0),
+    ];
+    for (i, r) in refusals.into_iter().enumerate() {
+        assert_eq!(r.expect_err("refused").code, ErrorCode::InvalidArgument, "case {i}");
+    }
+    found(&mut service, key, &"a".repeat(MAX_QUERY_CHARS), MAX_FIND_MATCHES, 2, usize::MAX).expect("the limits themselves, and a skip past the end");
+    found(&mut service, key, &accents, 10, 1, 0).expect("the bound counts characters, not bytes");
+    assert_eq!(service.document(&me(), key).expect("open").version(), version);
+}
+
+#[test]
+fn a_search_reads_at_most_a_bounded_number_of_pages_and_says_where_it_stopped() {
+    let mut service = Service::new();
+    let pages = MAX_FIND_PAGES + 10;
+    let (key, _) = open_bytes(&mut service, pages);
+    let first = found(&mut service, key, "absent", 10, 1, 0).expect("searches");
+    assert!(first.matches.is_empty());
+    assert_eq!(first.next, Some(FindNext { start_page: MAX_FIND_PAGES + 1, skip: 0 }), "stopped, and not complete");
+    let rest = found(&mut service, key, "absent", 10, (MAX_FIND_PAGES + 1) as i64, 0).expect("searches");
+    assert!(rest.next.is_none(), "the end of the document");
+    // A match past the first stretch is found by going on from where the first one stopped.
+    let late = found(&mut service, key, &format!("Page {pages}"), 10, (MAX_FIND_PAGES + 1) as i64, 0).expect("searches");
+    assert_eq!(late.matches.iter().map(|m| m.page).collect::<Vec<_>>(), [pages]);
+}
+
+#[test]
+fn text_and_search_follow_an_edit_and_a_closed_document_is_not_found() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    let before = found(&mut service, key, "Page 1", 10, 1, 0).expect("searches").matches[0].rects.clone();
+    rotate(&mut service, key, version.content_revision, 1).expect("rotates");
+    let after = found(&mut service, key, "Page 1", 10, 1, 0).expect("searches").matches[0].rects.clone();
+    assert_ne!(before, after, "what is found is where the page now shows it, not where it was when it was first read");
+    let current = service.document(&me(), key).expect("open").version();
+    run(&mut service, Some(key), Operation::Close { expected_revision: current.content_revision, discard_changes: true }).expect("closes");
+    assert_eq!(text_of(&mut service, key, PageSelection::All, None).expect_err("gone").code, ErrorCode::NotFound);
+    assert_eq!(found(&mut service, key, "Page", 10, 1, 0).expect_err("gone").code, ErrorCode::NotFound);
+}
+
+// ---- reading: pages as pictures ----
+
+const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
+fn picture(done: OperationResult) -> PageImage {
+    match done.outcome {
+        Outcome::Image(image) => image,
+        other => panic!("an image, got {other:?}"),
+    }
+}
+
+fn rendered(service: &mut Service, key: DocumentKey, page: i64, dpi: f64) -> Result<PageImage> {
+    run(service, Some(key), Operation::PageRender { page, dpi }).map(picture)
+}
+
+fn previewed(service: &mut Service, key: DocumentKey, page: i64, max_side: i64) -> Result<PageImage> {
+    run(service, Some(key), Operation::PagePreview { page, max_side }).map(picture)
+}
+
+/// The size a PNG says it has: the width and the height of its header chunk.
+fn png_size(png: &[u8]) -> (u32, u32) {
+    assert_eq!(png.get(..8), Some(&PNG_SIGNATURE[..]), "a PNG");
+    let be = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().expect("four bytes"));
+    (be(16), be(20))
+}
+
+#[test]
+fn a_page_is_rendered_to_a_png_whose_size_follows_the_resolution() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 2);
+    let at_72 = rendered(&mut service, key, 1, 72.0).expect("renders");
+    assert_eq!((at_72.page, at_72.width, at_72.height), (1, 200, 300), "the page is 200 by 300 points");
+    assert_eq!(png_size(&at_72.png), (200, 300), "and the picture says what size it is");
+    let at_144 = rendered(&mut service, key, 1, 144.0).expect("renders");
+    assert_eq!((at_144.width, at_144.height), (400, 600));
+    let default = rendered(&mut service, key, 1, DEFAULT_RENDER_DPI).expect("renders");
+    assert_eq!(png_size(&default.png), (default.width, default.height));
+    assert!((266..=267).contains(&default.width) && default.height == 400, "{}x{}", default.width, default.height);
+
+    // The pages differ; a page is drawn the same way twice.
+    let second = rendered(&mut service, key, 2, 72.0).expect("renders");
+    assert_eq!(second.page, 2);
+    assert_ne!(second.png, at_72.png, "page 2 shows other text");
+    assert_eq!(rendered(&mut service, key, 1, 72.0).expect("renders").png, at_72.png);
+}
+
+#[test]
+fn a_preview_bounds_the_longer_side_and_never_enlarges_a_page() {
+    let mut service = Service::new();
+    let (key, _) = open_bytes(&mut service, 1);
+    let small = previewed(&mut service, key, 1, 100).expect("renders");
+    assert_eq!((small.width, small.height), (67, 100), "the longer side is the bound");
+    assert_eq!(png_size(&small.png), (67, 100));
+    let large = previewed(&mut service, key, 1, MAX_PREVIEW_SIDE).expect("renders");
+    assert_eq!((large.width, large.height), (200, 300), "a page already smaller than the bound is not enlarged");
+    let one = previewed(&mut service, key, 1, 1).expect("the smallest bound is allowed");
+    assert!(one.width.max(one.height) <= 1 && one.width.min(one.height) <= 1);
+}
+
+#[test]
+fn bad_render_arguments_are_refused_and_change_nothing() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    for dpi in [0.0, 0.5, -1.0, MAX_RENDER_DPI + 1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
+        assert_eq!(rendered(&mut service, key, 1, dpi).expect_err("refused").code, ErrorCode::InvalidArgument, "dpi {dpi}");
+    }
+    for side in [0, -1, MAX_PREVIEW_SIDE + 1, i64::MIN, i64::MAX] {
+        assert_eq!(previewed(&mut service, key, 1, side).expect_err("refused").code, ErrorCode::InvalidArgument, "max_side {side}");
+    }
+    for page in [0, -1, 3, i64::MIN, i64::MAX] {
+        assert_eq!(rendered(&mut service, key, page, 72.0).expect_err("refused").code, ErrorCode::InvalidArgument, "page {page}");
+        assert_eq!(previewed(&mut service, key, page, 100).expect_err("refused").code, ErrorCode::InvalidArgument, "page {page}");
+    }
+    rendered(&mut service, key, 2, 1.0).expect("the lowest resolution is allowed");
+    rendered(&mut service, key, 1, MAX_RENDER_DPI).expect("the highest resolution is allowed");
+    assert_eq!(service.document(&me(), key).expect("open").version(), version, "reading changes nothing");
+}
+
+#[test]
+fn a_picture_shows_the_document_as_it_is_now_and_a_closed_document_has_none() {
+    let mut service = Service::new();
+    let (key, version) = open_bytes(&mut service, 2);
+    assert_eq!(png_size(&rendered(&mut service, key, 1, 72.0).expect("renders").png), (200, 300));
+    let rotated = rotate(&mut service, key, version.content_revision, 1).expect("rotates").version.expect("a version");
+    let after = rendered(&mut service, key, 1, 72.0).expect("renders");
+    assert_eq!((after.width, after.height), (300, 200), "turned a quarter: wider than tall");
+    assert_eq!(png_size(&previewed(&mut service, key, 1, 100).expect("renders").png), (100, 67));
+    let other = rendered(&mut service, key, 2, 72.0).expect("renders");
+    assert_eq!((other.width, other.height), (200, 300), "the other page was not turned");
+    run(&mut service, Some(key), Operation::Undo { expected_revision: rotated.content_revision }).expect("undoes");
+    assert_eq!(png_size(&rendered(&mut service, key, 1, 72.0).expect("renders").png), (200, 300), "and back");
+
+    let current = service.document(&me(), key).expect("open").version();
+    run(&mut service, Some(key), Operation::Close { expected_revision: current.content_revision, discard_changes: true }).expect("closes");
+    assert_eq!(rendered(&mut service, key, 1, 72.0).expect_err("gone").code, ErrorCode::NotFound);
+    assert_eq!(previewed(&mut service, key, 1, 100).expect_err("gone").code, ErrorCode::NotFound);
 }

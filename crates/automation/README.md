@@ -38,6 +38,8 @@ are not cached; evicted pages can be extracted again. A changed document version
 cached text on the next text request, and closing a document removes its entries. Cache entries
 do not keep an old PDF byte buffer alive.
 
+The cache and the extractor are `pdfcraft_engine::TextCache` and `extract_pages`, the same ones the application service reads text through.
+
 This bounds retained text-cache data, not total process memory: active extraction batches,
 renderers, document buffers and the requested output have separate lifetimes. Search still reads
 growing batches (8 to 128 pages), with one lookahead match to determine continuation.

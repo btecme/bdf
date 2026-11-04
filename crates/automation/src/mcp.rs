@@ -22,10 +22,10 @@ use crate::{Automation, Content, ToolError};
 /// Protocol revisions we speak, newest first.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const PARSE_ERROR: i64 = -32700;
-const INVALID_REQUEST: i64 = -32600;
-const METHOD_NOT_FOUND: i64 = -32601;
-const INVALID_PARAMS: i64 = -32602;
+pub(crate) const PARSE_ERROR: i64 = -32700;
+pub(crate) const INVALID_REQUEST: i64 = -32600;
+pub(crate) const METHOD_NOT_FOUND: i64 = -32601;
+pub(crate) const INVALID_PARAMS: i64 = -32602;
 
 const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to get a document id, then inspect \
 (doc_info, text_extract, text_find, page_render) or edit it (page_*, doc_set_info). Edits are undoable \
@@ -104,34 +104,9 @@ impl McpServer {
     /// Lines are read with a bound ([`DEFAULT_MAX_MESSAGE`]): one that is longer gets a JSON-RPC error (-32600, id
     /// null, since it was never parsed), the rest of it is skipped without being kept, and the next message is read
     /// as usual. A line that is not valid UTF-8 gets a parse error and the server carries on.
-    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        let mut buf = Vec::new();
-        loop {
-            match read_line_limited(&mut input, &mut buf, self.max_message, None)? {
-                LineRead::End => return Ok(()),
-                LineRead::TooLong => {
-                    let reply = error(Value::Null, INVALID_REQUEST, &format!("message longer than {} bytes; it was not read", self.max_message));
-                    writeln!(output, "{reply}")?;
-                    output.flush()?;
-                    // Skip to the end of that line without keeping it; a stream that never ends it is given up on.
-                    let far = std::time::Instant::now() + std::time::Duration::from_secs(60 * 60 * 24 * 365);
-                    if !skip_line(&mut input, MAX_DISCARD, far) {
-                        return Ok(());
-                    }
-                    continue;
-                }
-                LineRead::Line => {}
-            }
-            let reply = match std::str::from_utf8(&buf) {
-                Ok(line) if line.trim().is_empty() => continue,
-                Ok(line) => self.handle_line(line),
-                Err(_) => Some(error(Value::Null, PARSE_ERROR, "parse error: the message is not valid UTF-8").to_string()),
-            };
-            if let Some(reply) = reply {
-                writeln!(output, "{reply}")?;
-                output.flush()?;
-            }
-        }
+    pub fn serve(&mut self, input: impl BufRead, output: impl Write) -> std::io::Result<()> {
+        let max = self.max_message;
+        serve_lines(input, output, max, |line| self.handle_line(line))
     }
 
     /// Handle one JSON-RPC message; returns the serialized reply, if one is due.
@@ -296,7 +271,7 @@ fn first_sentence(text: &str) -> &str {
 }
 
 /// Reject keys other than `allowed`, as the tool table does for a tool's own arguments.
-fn check_keys(tool: &str, args: &Value, allowed: &[&str]) -> Result<(), String> {
+pub(crate) fn check_keys(tool: &str, args: &Value, allowed: &[&str]) -> Result<(), String> {
     match args.as_object().and_then(|o| o.keys().find(|k| !allowed.contains(&k.as_str()))) {
         Some(k) => Err(format!("{tool}: unknown argument {k:?} (expected: {})", allowed.join(", "))),
         None => Ok(()),
@@ -361,7 +336,7 @@ fn unwrap_tool_call(args: &Value) -> Result<(String, Value), String> {
 }
 
 /// Last-resort boundary shared by every tools/call route, including compact dispatch.
-fn guarded_tool(f: impl FnOnce() -> Result<Value, (i64, String)>) -> Result<Value, (i64, String)> {
+pub(crate) fn guarded_tool(f: impl FnOnce() -> Result<Value, (i64, String)>) -> Result<Value, (i64, String)> {
     pdfcraft_engine::guard(f).unwrap_or_else(|message| Ok(tool_error(&format!("internal error: {message}"))))
 }
 
@@ -506,7 +481,45 @@ impl McpServer {
     }
 }
 
-fn error(id: Value, code: i64, message: &str) -> Value {
+/// Read newline-delimited JSON-RPC from `input` and write each reply to `output` until `input` ends. Both MCP servers
+/// (the one over the automation tools and the one over the application service) share this loop, so the bound on a
+/// message and the handling of one that is too long or not UTF-8 are the same for both.
+pub(crate) fn serve_lines(
+    mut input: impl BufRead,
+    mut output: impl Write,
+    max_message: usize,
+    mut handle_line: impl FnMut(&str) -> Option<String>,
+) -> std::io::Result<()> {
+    let mut buf = Vec::new();
+    loop {
+        match read_line_limited(&mut input, &mut buf, max_message, None)? {
+            LineRead::End => return Ok(()),
+            LineRead::TooLong => {
+                let reply = error(Value::Null, INVALID_REQUEST, &format!("message longer than {max_message} bytes; it was not read"));
+                writeln!(output, "{reply}")?;
+                output.flush()?;
+                // Skip to the end of that line without keeping it; a stream that never ends it is given up on.
+                let far = std::time::Instant::now() + std::time::Duration::from_secs(60 * 60 * 24 * 365);
+                if !skip_line(&mut input, MAX_DISCARD, far) {
+                    return Ok(());
+                }
+                continue;
+            }
+            LineRead::Line => {}
+        }
+        let reply = match std::str::from_utf8(&buf) {
+            Ok(line) if line.trim().is_empty() => continue,
+            Ok(line) => handle_line(line),
+            Err(_) => Some(error(Value::Null, PARSE_ERROR, "parse error: the message is not valid UTF-8").to_string()),
+        };
+        if let Some(reply) = reply {
+            writeln!(output, "{reply}")?;
+            output.flush()?;
+        }
+    }
+}
+
+pub(crate) fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 

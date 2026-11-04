@@ -36,6 +36,8 @@ macro_rules! mcp_usage {
         "\
 pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
+pdfcraft-cli mcp    --client NAME [--state-dir DIR]       MCP server limited by a grant (secret in BDF_CLIENT_SECRET): without a
+                                                           valid grant it serves help only; with one, what the grant allows
 "
     };
 }
@@ -264,7 +266,12 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
 
 #[cfg(feature = "mcp")]
-const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--root", takes_value: true }, OptionSpec { name: "--compact", takes_value: false }];
+const MCP_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--root", takes_value: true },
+    OptionSpec { name: "--compact", takes_value: false },
+    OptionSpec { name: "--client", takes_value: true },
+    OptionSpec { name: "--state-dir", takes_value: true },
+];
 
 fn positional(args: &[String]) -> Vec<&str> {
     let mut out = Vec::new();
@@ -812,11 +819,17 @@ fn run(args: &[String]) -> Result<(), CliError> {
 #[cfg(feature = "mcp")]
 fn mcp(args: &[String]) -> Result<(), CliError> {
     validate_options("mcp", args, MCP_OPTIONS)?;
+    if args.iter().any(|a| a == "--client") {
+        return access::mcp_client(args);
+    }
+    if args.iter().any(|a| a == "--state-dir") {
+        return Err("mcp: --state-dir goes with --client (the folder the grants are in)".into());
+    }
     let compact = args.iter().any(|a| a == "--compact");
     let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?).with_compact(compact);
     let _ = writeln!(
         std::io::stderr().lock(),
-        "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
+        "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop. Not limited by a grant: use --client NAME for a server that is",
         pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0],
         if compact { ", compact tool list" } else { "" }
     );
