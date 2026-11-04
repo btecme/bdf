@@ -12,6 +12,11 @@ Web is a later milestone. Preserve engine wasm compatibility but do not build a 
 
 Retain Rust, egui/eframe, COS and the current renderer abstraction. No wholesale rewrite, mass crate rename or new JavaScript/TypeScript product code. Keep internal `pdfcraft-*` package names during stabilization; BDF-facing branding, executable distribution names, settings and support routes are addressed deliberately in the packaging milestone.
 
+Owner identity decision (2026-11-04): this fork is **BDF** throughout its user-facing
+product, executable, storage and packaging identity. The next bounded implementation
+is [BDF branding](bdf-branding-build-spec.md); required legal/dependency credits and
+historical references remain accurate.
+
 ## 2. The first build and first useful slice
 
 The first task is **BUILD-001**, not a feature sprint. Establish a reproducible baseline on Windows; verify the existing uncommitted review/branding changes; capture failures and toolchain/platform evidence. Do not reset, stash or indiscriminately commit the existing worktree. Do not fetch/merge upstream main merely to get a build passing.

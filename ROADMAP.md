@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **BDF Windows checkpoint, 2026-11-04:** a local developer preview at `aee35194` passes path/control-driven form/rotate/save/reopen checks, but the owner reports a blocking native Open-picker failure. [Current progress and limits](docs/bdf-evidence/2026-11-04-progress-check.md). The inherited upstream estimates below are not a BDF completion percentage.
+
 **Stage: alpha** · next: beta, ~26% (ready for real work 49% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -147,6 +149,14 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-04 (native picker diagnosis):** Reproduced disabled Open with PDF filtering correct and online-only PDFs in the OneDrive shell view. After unlock, the same native picker opened and rendered the local synthetic PDF. [Cloud-selection correction](docs/bdf-evidence/windows-open-picker-issue.md) remains open; no production fix or personal document content capture. Native picker correction now precedes branding in the Claude handoff.
+
+- **2026-11-04 (owner Open-picker blocker):** The owner reports that selecting a PDF greys out Open. The earlier path/control-channel smoke did not test the native Windows picker; this is an unresolved ordinary-open workflow blocker. Native inspection awaits a running preview/dialog and app access. Sync/merge remains pending after an automatic approval-review usage-limit failure; no sync commit/push/merge occurred. [Current evidence](docs/bdf-evidence/2026-11-04-progress-check.md).
+
+- **2026-11-04 (BDF identity decision):** The owner opened the preview and confirmed that this fork must use BDF throughout the product. [Next Claude branding assignment](docs/bdf-branding-build-spec.md) covers visible text, executables, storage, Windows packaging and support/update identity, with required legal credits preserved. Implementation is the next build; the current preview still has inherited branding.
+
+- **2026-11-04 (BDF progress and Windows preview):** Built `aee35194` and staged a local portable developer preview. Native open/render, form entry, rotate/undo/redo, save and reopen pass; separate-process readback confirms persisted state. A 16-step owner-side CLI office workflow passes with the original unchanged. Original R14-1/R14-2 and B8-R5 counterexamples pass; two real client processes keep all five audit records. The desktop and legacy routes remain unmigrated; broader v1 qualification is open. PR #14 correction head is hosted-green; latest read-only groups have no PR-triggered hosted evidence. [Progress/correction record](docs/bdf-evidence/2026-11-04-progress-check.md), [owner checklist](docs/bdf-windows-preview-checklist.md), [updated proposed CC handoff](docs/bdf-claude-focus-prompt.md). No implementation fix, push, merge or release by Codex.
 
 - **2026-11-01 (PR #14 Codex review and BUILD-008 retest):** At `633cfd2c`, original BUILD-008 R1–R4 corrections pass, including native two-process revocation; new B8-R5 reactivates a locally revoked actor after persistence errors and an unrelated reload. PR #14 itself needs two audit corrections: concurrent MCP clients replace each other's history (a real binary save succeeds but its record disappears), and malformed authenticated document-tool calls leave no audit entry. Existing scoped suites pass 386 tests and current-head CI/FreeBSD/ARM64 pass (fuzz skipped). No whole-product migration/release accepted. [PR review](docs/bdf-evidence/PR-014-codex-review.md) · [Dependency retest](docs/bdf-evidence/BUILD-008-codex-retest.md).
 

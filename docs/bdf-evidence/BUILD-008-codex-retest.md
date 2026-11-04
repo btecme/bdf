@@ -1,5 +1,7 @@
 # BUILD-008 — independent correction retest
 
+Latest disposition (2026-11-04): the [focused correction retest](2026-11-04-progress-check.md) at `aee35194` closes the remaining reported corrections (R14-1/R14-2 and B8-R5). The findings below are the historical 2026-11-01 review; complete adapter migration and overall release acceptance remain open.
+
 Status: **original R1–R4 corrections pass; one additional P1, B8-R5, remains.**
 
 Retested 2026-11-01 on `633cfd2c4567dc603307ab2f30ff35c73445fc38` (PR #14),

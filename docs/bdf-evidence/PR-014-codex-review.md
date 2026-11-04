@@ -1,6 +1,8 @@
 # PR #14 — independent Codex review
 
-Status: **changes requested: one P1 and one P2 in this adapter slice.** A separate
+Latest disposition (2026-11-04): the [focused correction retest](2026-11-04-progress-check.md) at `aee35194` closes the remaining reported corrections (R14-1/R14-2 and B8-R5). The findings below are the historical 2026-11-01 review; complete adapter migration and overall release acceptance remain open.
+
+Historical status: **changes requested: one P1 and one P2 in this adapter slice.** A separate
 P1 found while retesting the merged BUILD-008 dependency is recorded in the
 [BUILD-008 retest](BUILD-008-codex-retest.md); it is not presented as introduced by #14.
 

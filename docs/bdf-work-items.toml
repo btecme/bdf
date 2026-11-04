@@ -2,7 +2,7 @@
 # Evidence must name the actual reviewed commit and real commands/artifacts.
 schema_version = 1
 spec_version = "0.1"
-updated = "2026-11-01"
+updated = "2026-11-04"
 target = "Windows 11 x64 desktop"
 spec = "docs/bdf-build-spec.md"
 kickoff = "docs/bdf-claude-kickoff.md"
@@ -195,13 +195,13 @@ stop_conditions = ["Proposed boundary requires general layer exceptions or dupli
 [[work_item]]
 id = "BUILD-008"
 title = "Implement local principals, grants, release policy and audit"
-status = "changes_requested"
+status = "pending_review"
 evidence = "docs/bdf-evidence/BUILD-008.md"
-codex_review = "docs/bdf-evidence/BUILD-008-codex-retest.md"
-review_status = "changes_requested"
-reviewed_heads = ["be477d71ddc70c164fd507792b640b02e2014a22", "586a00d665f3e04f80511a7c2f72537089d70aef", "633cfd2c4567dc603307ab2f30ff35c73445fc38"]
-review_result = "2026-11-01 retest on PR #14 head 633cfd2c (BUILD-008 source unchanged from merged base): original R1-R4 correction cases pass, including real concurrent issue/revoke. New P1 B8-R5: a revoke that fails persistence initially denies the actor in memory, but an unrelated transaction reloads the older disk state and reactivates it even when that transaction also fails. This prevents overall acceptance; no production fix or merge by Codex."
-status_note = "First two slices merged through PRs #11/#12. Original folder, document identity, audit-gate and successful-writer-race fixes pass independent retest. B8-R5 failed-revocation handling remains changes_requested. BDF state naming and model-free core packaging are present; current-head ARM64 packaging/native install pass. The new MCP adapter is reviewed separately in BUILD-009/PR #14 and also needs audit corrections. Legacy routes remain unmigrated; no whole-product grant enforcement or agent-access release is accepted. 2026-11-01: B8-R5 is corrected on the PR #14 branch (a revocation that could not be written is remembered across reloads and written by the next change that can be); not yet hosted or retested."
+codex_review = "docs/bdf-evidence/2026-11-04-progress-check.md"
+review_status = "corrections_pass"
+reviewed_heads = ["be477d71ddc70c164fd507792b640b02e2014a22", "586a00d665f3e04f80511a7c2f72537089d70aef", "633cfd2c4567dc603307ab2f30ff35c73445fc38", "aee35194bc547c6c6ddc0aac0b0ae530f9823bb8"]
+review_result = "2026-11-04 focused correction retest on aee35194 closes B8-R5: a real read-only grant file makes revoke fail, and a subsequent failed issue no longer reactivates the actor. Original R1-R4 were closed in the earlier retest; current service tests also pass. Broader owner acceptance and whole-product agent release remain pending."
+status_note = "First two slices merged via PRs #11/#12. The later failed-revocation correction is on the PR #14 branch and independently passes at descendant aee35194. Failed persistence still reports an error; memory-only revocation does not promise a successful revoke in another process. Existing product naming/package decisions stand. No new owner decision is required for the local desktop preview."
 priority = "P0"
 depends_on = ["BUILD-005", "BUILD-007"]
 prd_milestone = "BDF-04"
@@ -215,13 +215,13 @@ stop_conditions = ["Unauthenticated same-user impersonation route or scope escal
 [[work_item]]
 id = "BUILD-009"
 title = "Migrate and qualify the first vertical slice across adapters"
-status = "changes_requested"
+status = "pending_review"
 evidence = "docs/bdf-evidence/BUILD-009.md"
-codex_review = "docs/bdf-evidence/PR-014-codex-review.md"
-review_status = "first_slice_changes_requested"
-reviewed_heads = ["633cfd2c4567dc603307ab2f30ff35c73445fc38"]
-review_result = "PR #14 first slice: one P1 (concurrent MCP clients silently replace shared audit history) and one P2 (adapter-level document-tool refusals bypass auditing). Two real CLI/MCP processes perform four successful operations including a save, but activity verify reports intact=true with only the second client record. Existing scoped suites pass 386 tests; current-head CI/FreeBSD/ARM64 pass, fuzz skipped. Separate merged dependency finding B8-R5 remains open."
-status_note = "Inventory and the grant-authenticated MCP adapter are implemented; the desktop, plain CLI, run/batch, control channel and legacy MCP remain unmigrated. Correct the audit findings before further adapter expansion; do not claim whole-product authorization or release. Product migration direction stays the documented grouped Core-tool approach. 2026-11-01: corrections for both PR #14 findings (shared audit log under a cross-process lock; adapter-level refusals recorded) are implemented with regressions seen to fail with each defect restored; not yet hosted or retested by Codex. B8-R5 in the BUILD-008 grant store is corrected in its own commit on this branch (a failed revocation is remembered across reloads), not yet retested. 2026-11-01: slice 2a (document.list, document.links, document.bookmarks through the service and the client MCP server) is implemented on feat/build-009-read-only-tools, stacked on PR #14; text, rendering and inspect are the next steps of the read-only group; not hosted or reviewed. 2026-11-01: slice 2b (document.text and document.find, with the page-text cache moved into the engine) is implemented on the same branch; rendering and the full inspect are the next step of the read-only group; not hosted or reviewed. 2026-11-04: slice 2c (page.render and page.preview, with the renderer cache moved into the engine) is implemented on the same branch; the full doc_info/doc_inspect is the last of the read-only group; not hosted or reviewed."
+codex_review = "docs/bdf-evidence/2026-11-04-progress-check.md"
+review_status = "first_slice_corrections_pass"
+reviewed_heads = ["633cfd2c4567dc603307ab2f30ff35c73445fc38", "aee35194bc547c6c6ddc0aac0b0ae530f9823bb8"]
+review_result = "2026-11-04 focused correction retest on aee35194 closes R14-1 and R14-2. Three original library counterexamples pass; two real CLI/MCP processes preserve all four successful calls (including save) and a malformed refusal: five records, intact chain, both clients. Current service/client/CLI checks pass. This is not acceptance of all read-only groups or the complete migration."
+status_note = "Option A remains: migrate Core operations in groups. PR #14 correction head 1d4d9479 is hosted-green; checkout aee35194 adds list/links/bookmarks, text/search and render/preview groups, with 15 service operations. Latest-head PR-triggered hosted evidence is absent. Desktop, ordinary CLI, run/batch, control and legacy MCP remain unmigrated; no whole-product agent release. A local portable developer preview of aee35194 is built and passes native open/form/rotate/undo/redo/save/reopen plus a 16-step owner-side CLI office workflow. Finish missing desktop workflow checks and provide the owner a bounded preview checkpoint; broader BUILD-009/010+ acceptance stays open."
 priority = "P0"
 depends_on = ["BUILD-008"]
 prd_milestone = "BDF-03"
@@ -315,6 +315,8 @@ touch = ["packaging/windows", ".github/workflows", "xtask", "docs", "app resourc
 deliverables = ["Expand corpus to at least 500 qualification cases, run pilot workflows and bounded fuzz campaigns.", "BDF signing/provenance/SBOM/checksums and owned support/update identity; no inherited misleading product routing.", "Clean install/upgrade/rollback/uninstall/portable and state migration tests; preserve documents and unresolved recovery.", "Release evidence report with Codex review on the rebased commit; no open P0/P1 defects in released scope."]
 acceptance = ["All PRD release gates pass on actual packaged Windows artifacts.", "Performance and at least 90% unassisted pilot task completion targets pass or receive an explicit documented scope decision.", "Required hosted jobs are green; signing/distribution credentials are verified, not simulated.", "Human release authorization is obtained after the concrete artifact/evidence is ready."]
 stop_conditions = ["Any required gate fails or is unavailable: no production release claim."]
+branding_spec = "docs/bdf-branding-build-spec.md"
+branding_decision = "Owner, 2026-11-04: BDF throughout first-party product identity, executable names, storage and packaging; preserve required legal attribution. Next Claude implementation priority; not yet built."
 
 [[work_item]]
 id = "BUILD-016"
