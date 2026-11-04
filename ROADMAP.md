@@ -150,6 +150,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-04 (authorized version sync):** On the owner's merge/push instruction, the reviewed read-only groups and delivery notes were pushed forward on both development branches without rewriting history; the clean working checkout was fast-forwarded to the same snapshot. [PR #14](https://github.com/btecme/bdf/pull/14) tracks the combined integration and live hosted checks. This sync does not implement or close the OneDrive picker correction or runtime BDF branding.
+
 - **2026-11-04 (native picker diagnosis):** Reproduced disabled Open with PDF filtering correct and online-only PDFs in the OneDrive shell view. After unlock, the same native picker opened and rendered the local synthetic PDF. [Cloud-selection correction](docs/bdf-evidence/windows-open-picker-issue.md) remains open; no production fix or personal document content capture. Native picker correction now precedes branding in the Claude handoff.
 
 - **2026-11-04 (owner Open-picker blocker):** The owner reports that selecting a PDF greys out Open. The earlier path/control-channel smoke did not test the native Windows picker; this is an unresolved ordinary-open workflow blocker. Native inspection awaits a running preview/dialog and app access. Sync/merge remains pending after an automatic approval-review usage-limit failure; no sync commit/push/merge occurred. [Current evidence](docs/bdf-evidence/2026-11-04-progress-check.md).

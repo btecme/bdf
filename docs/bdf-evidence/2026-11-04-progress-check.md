@@ -5,8 +5,10 @@ not whole-product v1 acceptance or a full audit of every inherited feature.
 
 Checkout: `aee35194bc547c6c6ddc0aac0b0ae530f9823bb8` (clean at start, detached managed
 worktree). This includes PR #14's correction head `1d4d9479` plus three read-only
-migration commits. No implementation source, branch, commit, push, merge, installation,
-default-handler registration or MCP registration was changed by this check.
+migration commits. The initial progress check changed review documents and staged
+ignored local preview files, with production source unchanged. The owner later
+authorized repository merge/push; that integration is tracked by PR #14. Installation,
+default-handler registration and MCP registration are outside this work.
 
 ## What has actually advanced
 
@@ -145,10 +147,14 @@ local native opening is now verified. No personal PDF content was opened or copi
 See [the reproduced picker issue and next correction](windows-open-picker-issue.md).
 No production fix or corrected binary is claimed.
 
-The requested repository sync is still pending: automatic approval review rejected
-the validation command because its usage limit prevented review; the command was
-not executed. This was not a determination that the command was unsafe. No merge,
-push or commit has been performed in this sync attempt.
+The initial repository-sync validation attempt was not executed because automatic
+approval review hit a usage limit; that was not an unsafe-action determination.
+After the reported reset, the authorized retry passed formatting, layers and assets.
+The reviewed read-only groups, reports and handoff were pushed forward on the two
+existing development branches without rewriting history, and the clean working
+checkout was fast-forwarded to the same snapshot. [PR #14](https://github.com/btecme/bdf/pull/14)
+is the live record of integration and hosted checks; this evidence document does
+not self-certify v1 release readiness.
 
 ## Owner follow-up: BDF identity
 
