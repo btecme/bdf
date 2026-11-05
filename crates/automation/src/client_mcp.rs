@@ -41,7 +41,7 @@ document id and its revision. Page numbers are 1-based. Every tool that changes 
 against; a reply that says `conflict` means the document moved on, so read it again (doc_info) first. Edits are undoable (edit_undo) and stay in \
 memory until doc_save. What this client may do is limited by its grant; a refusal says why.";
 const INSTRUCTIONS_WITHOUT_GRANT: &str = "This server was started without a valid grant, so it serves no documents and lists no files. Call bdf_help for \
-what this build can do. Ask the person to issue a grant (`pdfcraft-cli grant issue`) and start the server with it.";
+what this build can do. Ask the person to issue a grant (`bdf-cli grant issue`) and start the server with it.";
 
 pub struct ClientMcpServer {
     service: Service,

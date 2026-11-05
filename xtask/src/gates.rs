@@ -18,9 +18,9 @@ pub fn target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d))
 }
 
-/// The release `pdfcraft-cli` that `cargo build --release -p pdfcraft-cli` produced.
+/// The release `bdf-cli` that `cargo build --release -p pdfcraft-cli` produced.
 pub fn release_cli() -> PathBuf {
-    target_dir().join("release").join(format!("pdfcraft-cli{}", std::env::consts::EXE_SUFFIX))
+    target_dir().join("release").join(format!("bdf-cli{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn cargo() -> Command {
@@ -158,7 +158,7 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
     let report = target_dir().join("check-pdfjs.json");
     let mut c = Command::new(release_cli());
     c.args(["check"]).arg(&corpus).args(["--timeout", "20", "--dpi", "36", "--json"]).arg(&report);
-    run(c, "pdfcraft-cli check corpus/pdfjs")?;
+    run(c, "bdf-cli check corpus/pdfjs")?;
     let results: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&report)?)?;
     let name =
         |v: &serde_json::Value| Path::new(v["file"].as_str().unwrap_or("")).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -196,7 +196,7 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `cargo xtask text-oracle [--limit N]`: compare `pdfcraft-cli text` with poppler's `pdftotext`
+/// `cargo xtask text-oracle [--limit N]`: compare `bdf-cli text` with poppler's `pdftotext`
 /// (external oracle process, never linked) over the corpus. Reports word-level F1 per file and the
 /// median. Plan target (M2): median ≥ 0.97.
 pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {

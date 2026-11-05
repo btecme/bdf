@@ -1,5 +1,5 @@
-//! `pdfcraft-cli.exe` carries a Windows version resource (`build.rs`), so Explorer, PowerShell's
-//! `VersionInfo` and inventory tools see its version and publisher, as they do for `pdfcraft.exe`.
+//! `bdf-cli.exe` carries a Windows version resource (`build.rs`), so Explorer, PowerShell's
+//! `VersionInfo` and inventory tools see its version and publisher, as they do for `bdf.exe`.
 
 #![cfg(windows)]
 
@@ -29,15 +29,15 @@ fn string_value(resource: &[u8], key: &str) -> Option<String> {
 
 #[test]
 fn the_exe_has_version_info_with_the_package_version() {
-    let exe = std::fs::read(env!("CARGO_BIN_EXE_pdfcraft-cli")).unwrap();
+    let exe = std::fs::read(env!("CARGO_BIN_EXE_bdf-cli")).unwrap();
     let start = find(&exe, &utf16("VS_VERSION_INFO")).expect("no version resource");
     let resource = &exe[start..];
     for (key, value) in [
-        ("ProductName", "PdfCraft"),
-        ("FileDescription", "PdfCraft command-line tool"),
-        ("LegalCopyright", "Copyright (c) the PdfCraft contributors. MIT OR Apache-2.0."),
-        ("OriginalFilename", "pdfcraft-cli.exe"),
-        ("InternalName", "pdfcraft-cli"),
+        ("ProductName", "BDF"),
+        ("FileDescription", "BDF command-line tool"),
+        ("LegalCopyright", "Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors; BDF changes by the BDF contributors. MIT OR Apache-2.0."),
+        ("OriginalFilename", "bdf-cli.exe"),
+        ("InternalName", "bdf-cli"),
         ("FileVersion", env!("CARGO_PKG_VERSION")),
         ("ProductVersion", env!("CARGO_PKG_VERSION")),
     ] {

@@ -1,12 +1,13 @@
-PdfCraft app icon (pdfcraft.svg, pdfcraft-small.svg and every file derived from them in this
-directory: pdfcraft-1024.png, pdfcraft.icns, pdfcraft.ico, hicolor/).
+BDF app icon (bdf.svg and every file derived from it in this directory: bdf-1024.png, bdf.icns,
+bdf.ico, hicolor/).
 
-Original artwork made for this project by the project owner, drawn in ArtCraft and vectorised for
-PdfCraft (no third-party material). Licensed like the rest of PdfCraft, under either of
+Original artwork made for this project by the BDF contributors: a rounded tile with the letters
+B, D and F drawn as stroked paths. It uses no typeface, image or other third-party material.
+Licensed like the rest of BDF, under either of
 
   * Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
   * MIT license (https://opensource.org/licenses/MIT)
 
 at your option.
 
-Regenerate the derived files with packaging/icons.sh.
+Regenerate the derived files with packaging/icons.py.

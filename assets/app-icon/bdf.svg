@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- BDF app icon: contributor-original; letters are stroked paths, no font. MIT OR Apache-2.0. -->
+  <rect width="512" height="512" rx="112" fill="#1f3a5f"/>
+  <path d="M75 180 L75 332 M75 180 L113 180 A38 38 0 0 1 113.000 256.000 L75 256 M75 256 L113 256 A38 38 0 0 1 113.000 332.000 L75 332 M211 180 L211 332 M211 180 L235 180 A76 76 0 0 1 235.000 332.000 L211 332 M371 180 L371 332 M371 180 L437 180 M371 250 L421 250" fill="none" stroke="#ffffff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

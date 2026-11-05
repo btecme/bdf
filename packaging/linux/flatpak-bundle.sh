@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Repackage a PdfCraft Linux tarball as a single-file Flatpak bundle:
+# Repackage a BDF Linux tarball as a single-file Flatpak bundle:
 #
 #   $DIST/pdfcraft-<version>-linux-<arch>.flatpak
 #
@@ -10,7 +10,7 @@
 # Needs flatpak, flatpak-builder and the SVG pixbuf loader (librsvg2-common) for the host's
 # `appstreamcli compose`; the freedesktop runtime and SDK named in the manifest are
 # installed per-user from Flathub. Unless --no-test, the bundle is then installed per-user and
-# `pdfcraft-cli --version` is run inside the sandbox as a smoke test.
+# `bdf-cli --version` is run inside the sandbox as a smoke test.
 # Manifest: packaging/linux/flatpak/ai.storyteller.pdfcraft.bundle.yml.
 set -euo pipefail
 # shellcheck source=../env.sh
@@ -43,13 +43,13 @@ for tool in flatpak flatpak-builder; do
   command -v "$tool" >/dev/null || { echo "error: $tool not found (apt install flatpak flatpak-builder librsvg2-common)" >&2; exit 1; }
 done
 
-echo "==> PdfCraft $VERSION Flatpak bundle for $ARCH from $(basename "$TARBALL")"
+echo "==> BDF $VERSION Flatpak bundle for $ARCH from $(basename "$TARBALL")"
 
 WORK="$CARGO_TARGET_DIR/flatpak-bundle"
 rm -rf "$WORK"
 mkdir -p "$WORK/stage"
 tar -xzf "$TARBALL" -C "$WORK/stage" --strip-components=1
-[ -x "$WORK/stage/bin/pdfcraft" ] || { echo "error: $TARBALL has no bin/pdfcraft" >&2; exit 1; }
+[ -x "$WORK/stage/bin/bdf" ] || { echo "error: $TARBALL has no bin/bdf" >&2; exit 1; }
 cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$APP_ID.yml"
 
 flatpak remote-add --user --if-not-exists flathub "$FLATHUB"
@@ -65,7 +65,7 @@ echo "wrote $OUT"
 if [ "$TEST" = 1 ]; then
   flatpak install --user -y --noninteractive --reinstall "$OUT"
   flatpak info --user "$APP_ID"
-  flatpak run --command=pdfcraft-cli "$APP_ID" --version
+  flatpak run --command=bdf-cli "$APP_ID" --version
   flatpak run --command=sh "$APP_ID" -c 'ls /app/share/applications /app/share/metainfo /app/share/mime/packages /app/share/icons/hicolor/scalable/apps /app/share/pdfcraft/models'
   # Informational: printing runs lp/lpstat, which the freedesktop runtime doesn't ship (see the
   # manifest's finish-args). Says so if a runtime update ever adds them.

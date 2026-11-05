@@ -7,8 +7,10 @@ undo/redo and recovery. Web and shared cloud workspaces follow desktop qualifica
 
 This repository is an independent fork with its own product direction. The current
 build is a developer preview; implementation and release qualification are tracked
-separately. Inherited UI/executable names are being replaced under the
-[BDF branding assignment](docs/bdf-branding-build-spec.md).
+separately. The product identity (names, executables, storage, Windows identity, links and
+artwork) is BDF throughout ([BDF branding assignment](docs/bdf-branding-build-spec.md);
+what still carries an inherited technical name, and why, is in
+[docs/bdf-branding-residuals.md](docs/bdf-branding-residuals.md)).
 
 ## Current checkpoint
 
@@ -17,13 +19,15 @@ separately. Inherited UI/executable names are being replaced under the
 - [Open-picker issue: online-only OneDrive selection](docs/bdf-evidence/windows-open-picker-issue.md)
 - [Focused Claude build handoff](docs/bdf-claude-focus-prompt.md)
 
-The local preview opens ordinary local PDFs. The owner-reported native picker issue
-with online-only OneDrive items remains unresolved. Do not treat a passing
-path/control-channel test as proof of that cloud-selection workflow.
+The preview opens local PDFs and, through the native Open dialog, online-only OneDrive
+PDFs while the OneDrive client is connected. Windows itself greys out Open for an
+online-only file whose sync client is not running (in every application), so start
+OneDrive first. Do not treat a passing path/control-channel test as proof of that
+cloud-selection workflow.
 
 Generated previews live under `target/` and are not included in Git synchronization.
-The tested local candidate is `target/bdf-preview-aee35194/`; its README, BUILD.json
-and verification notes identify the binaries and checks actually performed.
+Each preview folder holds `bdf.exe`, `bdf-cli.exe` and `bdf-worker.exe`; its README,
+BUILD.json and verification notes identify the binaries and checks actually performed.
 
 ## Build and contribute
 
@@ -31,10 +35,12 @@ Read [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md). Start from the
 [build specification](docs/bdf-build-spec.md), [work items](docs/bdf-work-items.toml)
 and [BDF PRD](docs/bdf-prd-draft.md). Claude implements; Codex independently reviews.
 
-Internal Cargo package names currently retain their inherited technical identifiers:
+Cargo package and crate names keep their inherited technical identifiers; the executables
+they build are `bdf.exe`, `bdf-cli.exe` and `bdf-worker.exe`:
 
 ```sh
-cargo build -p pdfcraft -p pdfcraft-cli --locked -j 2
+cargo build -p pdfcraft -p pdfcraft-cli -p pdfcraft-worker --locked -j 2
+cargo run -p pdfcraft -- file.pdf        # opens bdf
 ```
 
 Use scoped, bounded tests with two build jobs. Hosted CI owns the full workspace

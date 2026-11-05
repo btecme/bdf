@@ -22,8 +22,7 @@ For each problem, record the task, expected result, actual result and whether it
 Include the candidate commit from the preview README. Share a synthetic or approved
 sample if useful; do not put confidential PDFs or document content in public issues.
 
-The current app still shows inherited PdfCraft branding. The owner has required
-BDF branding for the next build; see [the branding assignment](bdf-branding-build-spec.md). The preview keeps settings and
+The app shows BDF branding ([the branding assignment](bdf-branding-build-spec.md)). The preview keeps settings and
 recovery in its own portable folder. Keep the whole folder together. Ordinary testing
 does not require MCP, a grant, a control token or installation/default-handler changes.
 

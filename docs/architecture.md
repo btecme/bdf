@@ -1,8 +1,8 @@
-# PdfCraft architecture
+# BDF architecture
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (shared print spooler; Windows CI passes) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
-How PdfCraft is built today. The design rationale and the planned crates live in
+How BDF is built today. The design rationale and the planned crates live in
 `plan/architecture.md` and `plan/adr/` (local-only); this file describes what is on `main`. Each
 crate's `README.md` has the detail.
 
@@ -84,9 +84,9 @@ Every user-facing feature is reachable headlessly (`AGENTS.md` §3):
 
 - the **command registry** (`crates/engine/src/commands.rs`, 184 commands) generates menus,
   shortcuts and the command palette;
-- the **automation tool table** (`crates/automation`, 141 tools) is shared by `pdfcraft-cli run`
-  and the opt-in **MCP server** (stdio only; `pdfcraft-cli mcp`), confined to `--root`;
-- the opt-in **UI control channel** (`pdfcraft --control FILE`; loopback, per-launch token) lets an
+- the **automation tool table** (`crates/automation`, 141 tools) is shared by `bdf-cli run`
+  and the opt-in **MCP server** (stdio only; `bdf-cli mcp`), confined to `--root`;
+- the opt-in **UI control channel** (`bdf --control FILE`; loopback, per-launch token) lets an
   agent inspect, click, type, run commands and take screenshots of the real interface.
 
 ## Safety

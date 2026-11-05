@@ -10,11 +10,15 @@ publish = false
 path = "src/lib.rs"
 
 [[bin]]
-name = "pdfcraft-worker"
+name = "bdf-worker"
 path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+# VERSIONINFO for bdf-worker.exe; build.rs only uses it when targeting Windows.
+winresource = "0.1"
 
 [features]
 # Test-only requests that make the worker hang, crash, allocate or misbehave on purpose. Never

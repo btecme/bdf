@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn missing_ocr_models_messages_are_translated() {
         let error = pdfcraft_engine::ocr::OcrError::NoModels.to_string();
-        let notice = "Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.";
+        let notice = "Text recognition isn't installed: its model files are missing. Reinstall BDF, or set BDF_MODELS to the folder that holds them.";
         assert!(include_str!("../ocr_ui.rs").contains(notice), "keep in step with ocr_ui.rs");
         for code in ["bg", "cs", "de", "es", "fr", "hu", "ja", "ru", "te", "uk", "zh-hans", "zh-hant"] {
             let lang = Lang::from_code(code).expect("registered");
@@ -1367,6 +1367,7 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            "b-tec Built",
         ];
         let (entries, errors) = parse_entries(cs.0.source, cs.0.plural_forms());
         assert!(errors.is_empty(), "{errors:?}");
@@ -1479,6 +1480,7 @@ mod tests {
             "−Bin",
             "Model",
             "Home / End",
+            "b-tec Built",
         ];
         let (entries, errors) = parse_entries(tr_lang.0.source, tr_lang.0.plural_forms());
         assert!(errors.is_empty(), "Turkish catalog errors: {errors:?}");
@@ -2254,7 +2256,7 @@ mod tests {
             "Virš kiekvieno žodžio prideda nematomą tekstą; puslapio vaizdas nesikeičia"
         );
         assert!(
-            tr(lt, "The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.")
+            tr(lt, "The fonts BDF writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.")
                 .contains("visose PDF žiūryklėse")
         );
     }
@@ -2694,6 +2696,7 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            "b-tec Built",
         ];
         let unchanged: Vec<_> = entries
             .iter()
@@ -2772,6 +2775,7 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            "b-tec Built",
         ];
         let unchanged: Vec<_> = entries
             .iter()
@@ -2955,7 +2959,7 @@ mod tests {
         // "حفظ باسم…" as typed; the ellipsis ends the phrase on the left.
         assert_eq!(tr(ar, "Save as…"), "…باسم حفظ");
         // Latin names keep their own direction inside the phrase.
-        assert_eq!(tr(ar, "About PdfCraft"), "PdfCraft حول");
+        assert_eq!(tr(ar, "About BDF"), "BDF حول");
         // A caption's colon stays beside the widget on its right.
         assert_eq!(tr(ar, "Name:"), "الاسم:");
         assert_eq!(tr(ar, "Issued by: "), "عن صادرة: ");

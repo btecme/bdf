@@ -316,7 +316,7 @@ deliverables = ["Expand corpus to at least 500 qualification cases, run pilot wo
 acceptance = ["All PRD release gates pass on actual packaged Windows artifacts.", "Performance and at least 90% unassisted pilot task completion targets pass or receive an explicit documented scope decision.", "Required hosted jobs are green; signing/distribution credentials are verified, not simulated.", "Human release authorization is obtained after the concrete artifact/evidence is ready."]
 stop_conditions = ["Any required gate fails or is unavailable: no production release claim."]
 branding_spec = "docs/bdf-branding-build-spec.md"
-branding_decision = "Owner, 2026-11-04: BDF throughout first-party product identity, executable names, storage and packaging; preserve required legal attribution. Next Claude implementation priority; not yet built."
+branding_decision = "Owner, 2026-11-04: BDF throughout first-party product identity, executable names, storage and packaging; preserve required legal attribution. Implemented 2026-11-04 on feat/build-015-bdf-branding (docs/bdf-branding-residuals.md); local checks only, not hosted-verified or independently reviewed."
 
 [[work_item]]
 id = "BUILD-016"

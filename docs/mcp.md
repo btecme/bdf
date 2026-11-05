@@ -1,6 +1,6 @@
 # MCP conventions
 
-Start explicitly with `pdfcraft-cli mcp [--root DIR] [--compact]`. The server uses JSON lines on
+Start explicitly with `bdf-cli mcp [--root DIR] [--compact]`. The server uses JSON lines on
 stdin/stdout, opens no port, and stops on EOF. `--root` confines all reads and writes, including
 commands invoked through the common tools. Logs stay on stderr.
 
@@ -39,7 +39,7 @@ harmlessly ignored; the server does not provide background export progress or ca
 
 ## A server limited by a grant (`mcp --client`)
 
-`pdfcraft-cli mcp --client NAME [--state-dir DIR]` is the MCP server over the application service (BUILD-009). The client's
+`bdf-cli mcp --client NAME [--state-dir DIR]` is the MCP server over the application service (BUILD-009). The client's
 secret is read from the environment variable `BDF_CLIENT_SECRET`, never from an argument, which other processes can read. It
 takes no `--root` or `--compact`: a client's folders are in its grant, and its tool list is the service's.
 
@@ -51,7 +51,7 @@ takes no `--root` or `--compact`: a client's folders are in its grant, and its t
   policy's decision: a read-only grant lists the same tools and is refused at the call, with the reason. A revocation from
   another process stops the next call.
 * A tool that changes or discards content takes `revision` (from the last reply); a stale one is a `conflict` that names both
-  revisions and changes nothing. Page numbers are 1-based. Every document-tool call is recorded in the activity log (`pdfcraft-cli activity show`), including one refused for its arguments (unknown name, wrong type, missing value, a negative revision): the client, the grant, the operation, the outcome and the error's code, never what the client sent. `bdf_help`, the protocol's own messages, an unknown tool name and a call without a grant are not recorded. Several servers may run at once against one state folder; they take turns writing the log.
+  revisions and changes nothing. Page numbers are 1-based. Every document-tool call is recorded in the activity log (`bdf-cli activity show`), including one refused for its arguments (unknown name, wrong type, missing value, a negative revision): the client, the grant, the operation, the outcome and the error's code, never what the client sent. `bdf_help`, the protocol's own messages, an unknown tool name and a call without a grant are not recorded. Several servers may run at once against one state folder; they take turns writing the log.
 * `doc_list` names only the documents the grant may read; `link_list` lists at most 10,000 links and says `truncated` and the `total` when there are more; `bookmark_list` takes `offset` and `limit` (1 to 1,000, default 100) and gives `next` when there is another page. Their answers are the automation tools' (plus `revision`). `text_extract` answers at most 4 MiB of text: when more was asked for, the pages that did not fit are left out and the answer says `truncated` and `omitted_pages` (the first page is always there, so a request that repeats with the pages left out makes progress). `text_find` reads at most 2,000 pages and returns at most 10,000 matches (500 when `limit` is not given) for a phrase of at most 1,000 characters; when it stops before the end, `next` (`start_page`, `skip`) says where to go on and `complete` is false. `page_render` (`doc`, `page`, `dpi` from 1 to 600, 96 when not given) and `render_preview` (`doc`, `page` or the first, `max_side` from 1 to 4,096, 1,024 when not given; a smaller page is not enlarged) answer with the PNG as an image block, then the facts about it (`page`, `width`, `height`, `bytes`, `revision`); the picture is the document as it is now, edits included, and is the automation tools' picture byte for byte. A page too large for the renderer's own size and pixel limits comes out smaller, and `width` and `height` say how large. The full document description (`doc_inspect`, and the rest of `doc_info`) is not on this server yet.
 * Results are in `structuredContent`. A failure has `isError: true` and `{"error": {"code", "message", "retryable", "reason"?,
   "conflict"?, "committed"?}}`; the codes are the service's (`invalid_argument`, `not_authorized`, `not_found`, `conflict`, ...).
@@ -61,8 +61,8 @@ automation engine. It stays until the tools it offers are available through the 
 
 ## Resources and protocol versions
 
-`pdfcraft://document` returns the session's document information (as `doc_inspect` without
-arguments), including an empty `documents` array before any PDF is opened. `pdfcraft://commands`
+`bdf://document` returns the session's document information (as `doc_inspect` without
+arguments), including an empty `documents` array before any PDF is opened. `bdf://commands`
 returns the command catalog (as `command_list`). Existing per-document info, text and page-image
 resources and their templates are preserved.
 

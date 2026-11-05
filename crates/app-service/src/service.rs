@@ -1353,7 +1353,7 @@ fn negotiate(version: u32) -> Result<()> {
     let advice = if version < OLDEST_SCHEMA {
         "this client is older than the service supports; update the client"
     } else {
-        "this client is newer than the service; update PdfCraft, or ask with a supported schema"
+        "this client is newer than the service; update BDF, or ask with a supported schema"
     };
     Err(OperationError::new(
         ErrorCode::UnsupportedSchema,

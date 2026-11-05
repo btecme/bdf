@@ -443,7 +443,7 @@ fn tab_and_window_show_the_document_title_when_asked() {
     use pdfcraft_engine::Edit;
     let mut h = harness();
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    assert_eq!(h.state().window_title, "b.pdf — BDF");
     {
         let s = h.state_mut();
         let id = s.views[s.active.unwrap()].id;
@@ -453,7 +453,7 @@ fn tab_and_window_show_the_document_title_when_asked() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "Quarterly report — PdfCraft");
+    assert_eq!(h.state().window_title, "Quarterly report — BDF");
     h.get_by_label_contains("Quarterly report");
 }
 
@@ -472,7 +472,7 @@ fn a_placeholder_title_leaves_the_file_name_on_the_tab_and_window() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    assert_eq!(h.state().window_title, "b.pdf — BDF");
     assert!(h.query_by_label_contains("about:blank").is_none());
 }
 
@@ -845,9 +845,10 @@ fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
     h
 }
 
-/// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons).
+/// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons). The Inspector, which
+/// holds it, is the strip at the window's left edge.
 fn thumbnail(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
-    h.get_all_by_label(label).find(|n| n.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect().center()
+    h.get_all_by_label(label).find(|n| n.rect().right() < 400.0).expect("the Pages panel thumbnail").rect().center()
 }
 
 /// Press and release `button` at `at`.

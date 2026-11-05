@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-app-service"
-description = "The application service behind every PdfCraft surface: typed operations over privately owned document sessions"
+description = "The application service behind every BDF surface: typed operations over privately owned document sessions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

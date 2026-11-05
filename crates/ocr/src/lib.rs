@@ -30,7 +30,7 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 pub enum OcrError {
     /// Shown to end users (release packages ship the models; a source build fetches them with
     /// `cargo xtask models`). The UI catalogs key this exact text.
-    #[error("the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
+    #[error("the text recognition models are not installed (reinstall BDF, or set BDF_MODELS to the folder that holds them)")]
     NoModels,
     #[error("loading {0}: {1}")]
     Load(String, String),
@@ -54,7 +54,7 @@ impl Models {
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
     }
 
-    /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
+    /// Look for the models: `$BDF_MODELS`, then where the release packages install them
     /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
@@ -63,7 +63,7 @@ impl Models {
     /// The directories [`Models::find`] looks in, in order.
     pub fn search_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        if let Some(d) = std::env::var_os("PDFCRAFT_MODELS") {
+        if let Some(d) = std::env::var_os("BDF_MODELS") {
             dirs.push(PathBuf::from(d));
         }
         if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
@@ -304,11 +304,11 @@ mod tests {
     fn finds_the_models_in_every_release_package_layout() {
         let base = std::env::temp_dir().join(format!("pdfcraft-ocr-layouts-{}", std::process::id()));
         let layouts = [
-            ("windows", "PdfCraft", "PdfCraft/models"),
-            ("macos", "PdfCraft.app/Contents/MacOS", "PdfCraft.app/Contents/Resources/models"),
+            ("windows", "BDF", "BDF/models"),
+            ("macos", "BDF.app/Contents/MacOS", "BDF.app/Contents/Resources/models"),
             ("linux-deb-rpm", "usr/bin", "usr/share/pdfcraft/models"),
             ("linux-tar", "pdfcraft-1.0.0-linux-x86_64/bin", "pdfcraft-1.0.0-linux-x86_64/share/pdfcraft/models"),
-            ("appimage", "PdfCraft.AppDir/usr/bin", "PdfCraft.AppDir/usr/share/pdfcraft/models"),
+            ("appimage", "BDF.AppDir/usr/bin", "BDF.AppDir/usr/share/pdfcraft/models"),
             ("flatpak", "app/bin", "app/share/pdfcraft/models"),
             ("freebsd", "usr/local/bin", "usr/local/share/pdfcraft/models"),
         ];
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn missing_models_message_is_for_end_users() {
         let message = OcrError::NoModels.to_string();
-        assert!(!message.contains("cargo") && message.contains("PDFCRAFT_MODELS"), "{message}");
+        assert!(!message.contains("cargo") && message.contains("BDF_MODELS"), "{message}");
     }
 
     /// End to end on rendered text, when the models are installed (`cargo xtask models`).

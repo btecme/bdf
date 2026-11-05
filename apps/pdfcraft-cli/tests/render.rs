@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_bdf-cli");
 
 fn tmp(test: &str, name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("pdfcraft-cli-render-{test}-{}", std::process::id()));
@@ -15,7 +15,7 @@ fn tmp(test: &str, name: &str) -> PathBuf {
 /// A one-page PDF with some text, as `--out` would be given it.
 fn fixture(test: &str) -> PathBuf {
     let pdf = tmp(test, "in.pdf");
-    let bytes = pdfcraft_engine::Session::new().create_from_text("Render test", "Hello from PdfCraft").unwrap();
+    let bytes = pdfcraft_engine::Session::new().create_from_text("Render test", "Hello from BDF").unwrap();
     std::fs::write(&pdf, bytes.as_slice()).unwrap();
     pdf
 }

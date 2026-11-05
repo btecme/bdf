@@ -4047,6 +4047,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "win32job",
+ "winresource",
 ]
 
 [[package]]

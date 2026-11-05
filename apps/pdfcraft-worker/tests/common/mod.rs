@@ -10,7 +10,7 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
 use pdfcraft_worker::protocol::{Frame, Kind, Limits, read_frame, write_frame};
 use pdfcraft_worker::supervisor::Config;
 
-pub const WORKER: &str = env!("CARGO_BIN_EXE_pdfcraft-worker");
+pub const WORKER: &str = env!("CARGO_BIN_EXE_bdf-worker");
 
 /// Adapt a config for the platform the tests run on. Containment (the worker dies with its parent) is
 /// implemented only on Windows, and the production default refuses to start a worker that cannot be
