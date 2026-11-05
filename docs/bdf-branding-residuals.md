@@ -48,7 +48,6 @@ document, and opening the saved file in BDF. BDF has no import path from it by d
 | Hidden temporary names `.<name>.pdfcraft-tmp`, `.<name>.pdfcraft-<hex>.tmp` | pdfcraft | atomic-save staging files; stale ones are recognised by this pattern, tests plant it |
 | Linux/FreeBSD/macOS/Flatpak application id `ai.storyteller.pdfcraft`, the packaged icon theme name, desktop/mime/metainfo file names, `share/pdfcraft/models`, `pdfcraft-<v>-<platform>` artifact names | pdfcraft, storyteller | non-Windows packaging: binaries and visible names follow BDF, identifiers are internal and were not re-registered; this packaging is unchanged in behaviour and **not exercised** in this delivery |
 | `assets/demo/` (showcase PDF source), `docs/images/pdfcraft-*.png` and their entries | PdfCraft | demonstration content and screenshots of the inherited UI; to be replaced by `cargo xtask screenshots` runs |
-| `packaging/macos/dmg/background.tiff`, `dmg-layout.DS_Store` | the former icon and file names | rendered from `background.svg` (now BDF's icon and wordmark) by `generate.py`, which needs `resvg`; the raster and the Finder layout are **not yet regenerated** and still show the former art, so a macOS DMG must not ship from this tree until they are |
 | Translation values for languages that inflect a name (`BDFu`, `BDFban`, …) | — | the name was replaced mechanically; grammar of 22 catalogues is unreviewed |
 | `xtask/src/assets.rs` brand-licence allowance | `LicenseRef-Storyteller-Trademark` | code that now matches no asset; kept so a future accidental re-addition fails loudly |
 | Test fixtures, `pdfcraft.dev` and `pdfcraft-test.invalid` sample URLs, temp folder prefixes | pdfcraft | test data only |
@@ -59,3 +58,4 @@ document, and opening the saved file in BDF. BDF has no import path from it by d
 |---|---|
 | 2026-11-04 | BUILD-015 implemented: identity, executables, storage, Windows identity, links, artwork; this record. |
 | 2026-11-05 | Review corrections: the CLI help no longer links the upstream Discord (test added); Linux metadata drops the Discord contact and the former vendor name; the update-check capability note names the BDF repository; the DMG background SVG carries BDF's wordmark. |
+| 2026-11-05 | DMG background raster and Finder layout regenerated with resvg 0.49.0 through `generate.py` (two runs, identical bytes; `BDF.app` in the layout); rendered by the script, not yet seen in a mounted image on macOS. |
