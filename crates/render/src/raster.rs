@@ -4139,6 +4139,47 @@ trailer << /Root 1 0 R >>
         assert!(grey[0] == grey[1] && grey[1] == grey[2] && grey[0] < 255, "the image covers the page: {grey:?}");
     }
 
+    /// A 40 × 40 page whose content stream, written after `keyword` (`stream` and whatever follows
+    /// it up to and including the line break), paints the whole page black. The xref table is
+    /// correct; `/Length` is the real one, or `declared` when given.
+    fn stream_keyword_pdf(keyword: &str, declared: Option<usize>) -> Vec<u8> {
+        let content = "0 0 0 rg 0 0 40 40 re f";
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for body in [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << >> >>".to_string(),
+            format!("<< /Length {} >> {keyword}{content}\nendstream", declared.unwrap_or(content.len())),
+        ] {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        for offset in &offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        bytes
+    }
+
+    /// Blanks between `stream` and its line break are accepted by the parser, so the page is drawn
+    /// and not left blank: with the line break alone, with spaces or tabs before it, and with a
+    /// `/Length` that is right or wrong (the two paths that read a stream).
+    #[test]
+    fn blanks_after_the_stream_keyword_do_not_leave_the_page_blank() {
+        let pixel = |page: &RenderedPage| {
+            [page.rgba[(20 * 40 + 20) * 4], page.rgba[(20 * 40 + 20) * 4 + 1], page.rgba[(20 * 40 + 20) * 4 + 2], page.rgba[(20 * 40 + 20) * 4 + 3]]
+        };
+        for keyword in ["stream\n", "stream\r\n", "stream \n", "stream\t\n", "stream \t \r\n", "stream  \r"] {
+            for declared in [None, Some(5), Some(9999)] {
+                let page = nesting_render(stream_keyword_pdf(keyword, declared));
+                assert_eq!(pixel(&page), [0, 0, 0, 255], "{keyword:?} with /Length {declared:?} drew nothing");
+            }
+        }
+    }
+
     /// A one-page PDF whose content is the stream `stream`, with the entries `dict` in its
     /// dictionary.
     fn one_page_pdf(stream: &[u8], dict: &str) -> Vec<u8> {

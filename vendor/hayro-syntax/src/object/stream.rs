@@ -353,14 +353,29 @@ impl FilterResult<'_> {
     }
 }
 
+/// PdfCraft patch: the line break after the `stream` keyword.
+///
+/// ISO 32000-2 §7.3.8.1 wants `stream` followed by CRLF or LF and nothing else, but writers in the
+/// wild put spaces or tabs first (`stream \n`). Rejecting those made the whole stream vanish, so
+/// the page drawn from it was silently blank. Only blanks are skipped, and a line break must
+/// follow: any other byte still means this is no stream (which keeps the fallback path from
+/// latching onto a later object's `stream`), and the stream's own bytes start after the break,
+/// untouched.
+fn forward_stream_eol(r: &mut Reader<'_>) -> Option<()> {
+    r.forward_while(|byte| matches!(byte, b' ' | b'\t'));
+
+    r.forward_tag(b"\n")
+        .or_else(|| r.forward_tag(b"\r\n"))
+        // Technically not allowed, but no reason to not try it.
+        .or_else(|| r.forward_tag(b"\r"))
+}
+
 fn parse_proper<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
     let length = dict.get::<u32>(LENGTH)?;
 
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
-    r.forward_tag(b"\n")
-        .or_else(|| r.forward_tag(b"\r\n"))
-        .or_else(|| r.forward_tag(b"\r"))?;
+    forward_stream_eol(r)?;
     let data = r.read_bytes(length as usize)?;
     r.skip_white_spaces();
     r.forward_tag(b"endstream")?;
@@ -376,11 +391,7 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     // A wrong `/Length` still recovers, because that keyword sits directly after the dict.
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
-
-    r.forward_tag(b"\n")
-        .or_else(|| r.forward_tag(b"\r\n"))
-        // Technically not allowed, but no reason to not try it.
-        .or_else(|| r.forward_tag(b"\r"))?;
+    forward_stream_eol(r)?;
 
     let tail = r.tail()?;
     let endstream_offset = find_needle(tail, b"endstream")?;
@@ -455,6 +466,55 @@ mod tests {
             .unwrap();
 
         assert_eq!(stream.data, b"abcdefghij");
+    }
+
+    fn read_stream(data: &[u8]) -> Option<Stream<'_>> {
+        Reader::new(data).read_with_context::<Stream<'_>>(&ReaderContext::dummy())
+    }
+
+    /// PdfCraft patch: writers in the wild put blanks between `stream` and its line break. The
+    /// data is the bytes after the break, whichever of the two paths (a right `/Length`, a wrong
+    /// one) reads it.
+    #[test]
+    fn blanks_between_the_keyword_and_the_line_break_are_accepted() {
+        for eol in ["\n", "\r\n", "\r"] {
+            for blanks in ["", " ", "\t", "  ", "\t\t", " \t \t", &" ".repeat(5000)] {
+                for length in [10, 999, 0] {
+                    let data = format!("<< /Length {length} >> stream{blanks}{eol}abcdefghij\nendstream");
+                    let stream = read_stream(data.as_bytes()).unwrap_or_else(|| panic!("{} did not parse", data.len()));
+                    assert_eq!(stream.data, b"abcdefghij", "{} blanks {eol:?} /Length {length}", blanks.len());
+                }
+            }
+        }
+    }
+
+    /// The bytes of the stream are untouched: blanks that start the data (after the line break)
+    /// are not the keyword's and are kept, by both paths, and a right `/Length` keeps the blanks
+    /// that end the data too.
+    #[test]
+    fn the_stream_bytes_keep_their_own_blanks() {
+        for blanks in ["", " ", "\t"] {
+            let proper = format!("<< /Length 9 >> stream{blanks}\n \tab \tcd\t\nendstream");
+            assert_eq!(read_stream(proper.as_bytes()).unwrap().data, b" \tab \tcd\t", "{blanks:?}: right /Length");
+            // Recovering from a wrong `/Length` has always dropped the whitespace that ends the
+            // data before `endstream` (here the last tab); this patch does not change that.
+            let fallback = format!("<< /Length 999 >> stream{blanks}\n \tab \tcd\t\nendstream");
+            assert_eq!(read_stream(fallback.as_bytes()).unwrap().data, b" \tab \tcd", "{blanks:?}: wrong /Length");
+        }
+    }
+
+    /// Blanks are all that may come before the line break: any other byte means `stream` was not a
+    /// stream keyword, so no scanning reaches into what follows (a later object's `stream`, say).
+    #[test]
+    fn only_blanks_may_come_before_the_line_break() {
+        for junk in [" x", "\t endobj", " \x0c", " \0", "x", "endobj\n1 0 obj << >> stream"] {
+            for length in [10, 999] {
+                let data = format!("<< /Length {length} >> stream{junk}\nabcdefghij\nendstream");
+                assert!(read_stream(data.as_bytes()).is_none(), "{junk:?} /Length {length}");
+            }
+        }
+        // Blanks and then the end of the data: no line break is ever found.
+        assert!(read_stream(b"<< /Length 10 >> stream  \t ").is_none());
     }
 
     /// A dictionary followed by some other object's stream is not itself a stream.
