@@ -81,25 +81,43 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    /// Compare a panel with the document, not with its nearest split neighbor. In a
+    /// Tools/Inspector/Document layout the Inspector is right of Tools but left of the document.
+    fn canvas_side(&self, panel: Panel) -> Option<Zone> {
+        let mut layout = self.layout.clone();
+        // A hidden panel may be anchored to another hidden panel. Reconstruct those saved
+        // neighbors in a bounded probe; the live layout and its visibility remain unchanged.
+        for _ in 0..Panel::ALL.len() {
+            for (hidden, location) in &self.hidden {
+                if !layout.contains(hidden) {
+                    let _ = layout.restore(*hidden, location);
+                }
+            }
+        }
+        for other in Panel::ALL {
+            if *other != Panel::Canvas && *other != panel && layout.contains(other) {
+                layout.apply(Action::Close { panel: *other }).ok()?;
+            }
+        }
+        let location = layout.location(&panel).ok()?;
+        if location.floating.is_some() {
+            return None;
+        }
+        match location.placement {
+            Placement::Split(side @ (Zone::Left | Zone::Right)) => Some(side),
+            _ => None,
+        }
+    }
+
     /// Side of the Tools panel, including its saved position while closed.
     pub fn tools_on_right(&self) -> bool {
-        let location = self
-            .layout
-            .location(&Panel::Tools)
-            .ok()
-            .or_else(|| self.hidden.iter().find(|(panel, _)| *panel == Panel::Tools).map(|(_, location)| location.clone()));
-        location.is_some_and(|location| matches!(location.placement, Placement::Split(Zone::Right)))
+        self.canvas_side(Panel::Tools) == Some(Zone::Right)
     }
 
     /// Side of the Inspector, including its saved position while closed. Left unless it was put on
     /// the right: it is also the side of the icon rail that opens its panels.
     pub fn inspector_on_left(&self) -> bool {
-        let location = self
-            .layout
-            .location(&Panel::Inspector)
-            .ok()
-            .or_else(|| self.hidden.iter().find(|(panel, _)| *panel == Panel::Inspector).map(|(_, location)| location.clone()));
-        !location.is_some_and(|location| matches!(location.placement, Placement::Split(Zone::Right)))
+        self.canvas_side(Panel::Inspector) != Some(Zone::Right)
     }
 
     /// Place Tools at the outer left or right edge while preserving its open state.
@@ -520,6 +538,47 @@ mod tests {
         workspace.set_tools_on_right(false).unwrap();
         assert_eq!(order(&workspace)[0], Panel::Tools);
         workspace.validate().unwrap();
+    }
+
+    #[test]
+    fn tools_side_round_trip_keeps_the_document_between_the_panels() {
+        for inspector_left in [true, false] {
+            let mut workspace = Workspace::default();
+            if !inspector_left {
+                workspace.apply(Action::Move { panel: Panel::Inspector, anchor: Panel::Canvas, placement: Placement::Split(Zone::Right) }).unwrap();
+            }
+            workspace.set_tools_on_right(false).unwrap();
+            workspace.set_tools_on_right(true).unwrap();
+            let expected = if inspector_left {
+                vec![Panel::Inspector, Panel::Canvas, Panel::Tools]
+            } else {
+                vec![Panel::Canvas, Panel::Inspector, Panel::Tools]
+            };
+            assert_eq!(workspace.layout.panels().into_iter().copied().collect::<Vec<_>>(), expected);
+            for panel in [Panel::Inspector, Panel::Tools] {
+                workspace.set_visible(panel, false).unwrap();
+                workspace.set_visible(panel, true).unwrap();
+            }
+            assert_eq!(workspace.layout.panels().into_iter().copied().collect::<Vec<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn inspector_rail_side_is_relative_to_the_document_with_visible_and_hidden_neighbors() {
+        for inspector_left in [true, false] {
+            let mut workspace = Workspace::default();
+            if !inspector_left {
+                workspace.apply(Action::Move { panel: Panel::Inspector, anchor: Panel::Canvas, placement: Placement::Split(Zone::Right) }).unwrap();
+            }
+            workspace.set_tools_on_right(!inspector_left).unwrap();
+            assert_eq!(workspace.inspector_on_left(), inspector_left);
+            assert_eq!(workspace.tools_on_right(), !inspector_left);
+            for panel in [Panel::Inspector, Panel::Tools] {
+                workspace.set_visible(panel, false).unwrap();
+            }
+            assert_eq!(workspace.inspector_on_left(), inspector_left);
+            assert_eq!(workspace.tools_on_right(), !inspector_left);
+        }
     }
 
     #[test]

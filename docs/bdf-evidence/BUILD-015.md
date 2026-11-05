@@ -1,5 +1,7 @@
 # BUILD-015 — BDF product identity: implementation and verification record
 
+Current review: [Codex correction retest](BUILD-015-codex-review.md), [PR #15](https://github.com/btecme/bdf/pull/15). Both initial branding findings are closed. The panel-side follow-up has regression proof and passing local checks; final-head CI and package UI verification gate integration. The author record below describes its original verification state.
+
 Status: implemented and locally verified on Windows 11 x64 (2026-11-04). Hosted CI has not been read and no
 independent review has run. Branch `feat/build-015-bdf-branding`, stacked on `fix/open-cloud-provider-hint` (the
 Open-dialog finding, [windows-open-picker-issue.md](windows-open-picker-issue.md)). Spec:
