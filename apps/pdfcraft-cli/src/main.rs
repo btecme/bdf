@@ -79,7 +79,7 @@ bdf-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \
     "\
 bdf-cli ui     --control FILE <method> [key=value …] [--out shot.png]
                                                            drive a running app started with --control FILE
-help and feedback: https://discord.gg/artcraft"
+source and issues: https://github.com/btecme/bdf"
 );
 
 fn main() -> ExitCode {

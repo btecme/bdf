@@ -26,6 +26,17 @@ fn help_flags_print_full_usage_to_stdout() {
     }
 }
 
+/// The help names only BDF's own repository: no upstream community or support link.
+#[test]
+fn usage_links_only_to_the_bdf_repository() {
+    let usage = text(&run(&["--help"]).stdout);
+    assert!(!usage.to_lowercase().contains("discord"), "{usage}");
+    for url in usage.split_whitespace().filter(|w| w.starts_with("http")) {
+        assert!(url.starts_with("https://github.com/btecme/bdf"), "{url}");
+    }
+    assert!(usage.contains("https://github.com/btecme/bdf"), "{usage}");
+}
+
 #[test]
 fn no_command_fails_with_usage_on_stderr() {
     let out = run(&[]);

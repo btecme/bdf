@@ -8,7 +8,7 @@
   <name>BDF</name>
   <summary>Read, organize, combine, split and secure PDFs</summary>
   <developer id="ai.storyteller">
-    <name>Learning Machines LLC</name>
+    <name>BDF project</name>
   </developer>
   <description>
     <p>
@@ -22,7 +22,6 @@
   <url type="homepage">https://github.com/btecme/bdf</url>
   <url type="bugtracker">https://github.com/btecme/bdf/issues</url>
   <url type="help">https://github.com/btecme/bdf</url>
-  <url type="contact">https://discord.gg/artcraft</url>
   <categories>
     <category>Office</category>
     <category>Viewer</category>

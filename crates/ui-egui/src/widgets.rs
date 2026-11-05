@@ -499,7 +499,7 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
     cancel
 }
 
-/// Buttons for every community link (`pdfcraft_engine::links`), Discord first and prominent.
+/// Buttons for every community link (`pdfcraft_engine::links`).
 /// Returns the registry command of the one clicked.
 pub fn community_links(ui: &mut egui::Ui) -> Option<&'static str> {
     let mut clicked = None;

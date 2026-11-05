@@ -3152,19 +3152,19 @@ sha256 = "21808625578fe8d8cd10cb684be546dca077b27cd03a53a2f1ec11dc743c924c"
 
 [[asset]]
 path = "packaging/macos/dmg/background.svg"
-title = "PdfCraft macOS DMG window background"
+title = "BDF macOS DMG window background"
 author = "@XusBadia"
-source = "Original work for this repository, derived from the PdfCraft app icon (assets/app-icon/bdf.svg, referenced via an SVG image element, not copied)"
+source = "Layout from the PdfCraft DMG background by @XusBadia; the artwork and wordmark are BDF's own generic icon (assets/app-icon/bdf.svg, referenced via an SVG image element, not copied) and stroked letters, no font"
 licence = "MIT OR Apache-2.0"
 licence_file = "assets/app-icon/LICENSE.txt"
 kind = "image"
 usage = "Finder window of the macOS DMG; rendered to background.tiff by packaging/macos/dmg/generate.py"
-sha256 = "5aad46b970a1e2f955f545340aad3a26eefb6ffa61160fc8520c0e56d337001c"
+sha256 = "1698db90b95c3b9962c49d9fa0bda0630dd2194e9631519db7d2098a59cf5b26"
 
 
 [[asset]]
 path = "packaging/macos/dmg/background.tiff"
-title = "PdfCraft macOS DMG window background (rendered)"
+title = "BDF macOS DMG window background (rendered)"
 author = "@XusBadia"
 source = "Rendered from packaging/macos/dmg/background.svg by packaging/macos/dmg/generate.py"
 licence = "MIT OR Apache-2.0"
