@@ -513,6 +513,8 @@ pub struct PdfCraftApp {
     /// Resolved colours, including the current OS theme when following the system.
     pub theme: ThemeKind,
     pub theme_preference: ThemePreference,
+    /// Whether the person has picked a theme; until then the default (dark) is not saved as a choice.
+    theme_chosen: bool,
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,
@@ -889,8 +891,10 @@ impl PdfCraftApp {
             quick_tool: QuickTool::Select,
             space_hand: None,
             comment_prefs: Default::default(),
-            theme: ThemeKind::Light,
-            theme_preference: ThemePreference::Light,
+            // Dark until the person picks a preference (it is saved only once they have).
+            theme: ThemeKind::Dark,
+            theme_preference: ThemePreference::Dark,
+            theme_chosen: false,
             reading_colors: Default::default(),
             #[cfg(target_os = "linux")]
             desktop_theme: None,
@@ -1917,6 +1921,7 @@ impl PdfCraftApp {
     }
 
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
+        self.theme_chosen = true;
         self.theme_preference = preference;
         if let Some(ctx) = self.ctx.clone() {
             self.sync_theme(&ctx);
@@ -2123,7 +2128,9 @@ impl PdfCraftApp {
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
-            "theme": self.theme_preference,
+            // Null until the person picks one; the key is new, so a theme saved by an earlier build
+            // (which saved its default) is not mistaken for a choice.
+            "theme_choice": self.theme_chosen.then_some(self.theme_preference),
             "scroll_speed": self.scroll_speed,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
@@ -2211,7 +2218,7 @@ impl PdfCraftApp {
             self.reload_changed_files = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
-        if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
+        if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme_choice"].clone()) {
             self.set_theme_preference(preference);
         }
         if let Ok(speed) = serde_json::from_value::<scroll_speed::ScrollSpeed>(v["scroll_speed"].clone()) {

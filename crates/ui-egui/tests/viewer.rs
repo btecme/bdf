@@ -845,9 +845,10 @@ fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
     h
 }
 
-/// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons).
+/// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons). The Inspector, which
+/// holds it, is the strip at the window's left edge.
 fn thumbnail(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
-    h.get_all_by_label(label).find(|n| n.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect().center()
+    h.get_all_by_label(label).find(|n| n.rect().right() < 400.0).expect("the Pages panel thumbnail").rect().center()
 }
 
 /// Press and release `button` at `at`.

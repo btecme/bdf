@@ -51,12 +51,14 @@ fn open_view_menu(h: &mut Harness<'static, PdfCraftApp>) {
 #[test]
 fn toolbar_and_view_menu_share_three_state_preferences() {
     let mut h = harness();
-    // Explicit light wins even on a dark desktop, including egui's popup style.
-    assert_theme(&h, ThemePreference::Light, ThemeKind::Light);
-    click_toolbar(&mut h, "Light gray");
+    // The default is dark; an explicit light wins even on a dark desktop, including egui's popup style.
     assert_theme(&h, ThemePreference::Dark, ThemeKind::Dark);
     click_toolbar(&mut h, "Dark gray");
     assert_theme(&h, ThemePreference::System, ThemeKind::Dark);
+    click_toolbar(&mut h, "Use system setting");
+    assert_theme(&h, ThemePreference::Light, ThemeKind::Light);
+    click_toolbar(&mut h, "Light gray");
+    assert_theme(&h, ThemePreference::Dark, ThemeKind::Dark);
 
     open_view_menu(&mut h);
     h.get_by_label("Light gray").click();
@@ -83,7 +85,7 @@ fn toolbar_and_view_menu_share_three_state_preferences() {
 }
 
 #[test]
-fn saved_preferences_restore_with_legacy_light_dark_settings() {
+fn saved_preferences_restore_the_chosen_theme() {
     for (value, preference) in [("light", ThemePreference::Light), ("dark", ThemePreference::Dark), ("system", ThemePreference::System)] {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -96,14 +98,14 @@ fn saved_preferences_restore_with_legacy_light_dark_settings() {
     }
     let mut app = PdfCraftApp::new();
     app.set_option("language", "en").unwrap();
-    app.restore(r#"{"theme":"Dark"}"#);
+    app.restore(r#"{"theme_choice":"Dark"}"#);
     assert_eq!(app.theme_preference, ThemePreference::Dark);
     assert_eq!(app.theme, ThemeKind::Dark);
-    app.restore(r#"{"theme":"Light"}"#);
+    app.restore(r#"{"theme_choice":"Light"}"#);
     assert_eq!(app.theme_preference, ThemePreference::Light);
     assert_eq!(app.theme, ThemeKind::Light);
-    app.restore(r#"{"theme":"System"}"#);
-    app.restore(r#"{"theme":"Purple"}"#);
+    app.restore(r#"{"theme_choice":"System"}"#);
+    app.restore(r#"{"theme_choice":"Purple"}"#);
     assert_eq!(app.theme_preference, ThemePreference::System);
 }
 
@@ -133,7 +135,7 @@ fn restored_system_tracks_native_input_without_rewriting_saved_preference() {
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.restore(r#"{"theme":"System"}"#);
+        app.restore(r#"{"theme_choice":"System"}"#);
         app
     });
     for (input, expected) in [
@@ -145,7 +147,7 @@ fn restored_system_tracks_native_input_without_rewriting_saved_preference() {
         h.input_mut().system_theme = input;
         h.run_steps(3);
         assert_theme(&h, ThemePreference::System, expected);
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["theme"], "System");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["theme_choice"], "System");
     }
     for (manual, expected) in [(ThemePreference::Light, ThemeKind::Light), (ThemePreference::Dark, ThemeKind::Dark)] {
         h.state_mut().set_theme_preference(manual);
@@ -163,7 +165,7 @@ fn unknown_system_uses_light_after_a_manual_dark_choice() {
     app.set_theme_preference(ThemePreference::Dark);
     app.set_theme_preference(ThemePreference::System);
     assert_eq!(app.theme, ThemeKind::Light);
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["theme"], "System");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["theme_choice"], "System");
 }
 
 #[test]
@@ -203,4 +205,27 @@ fn native_appearance_remains_inherited_for_every_saved_choice() {
         assert!(commands.iter().all(|theme| *theme == egui::SystemTheme::SystemDefault), "{commands:?}");
         assert_eq!(h.ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
     }
+}
+
+/// A new install is dark, and only a theme the person picked is saved as their choice, so the
+/// default never turns into a stored preference (and a theme saved by an earlier build, under the
+/// old key, is not taken for one).
+#[test]
+fn a_new_install_is_dark_and_only_a_picked_theme_is_saved() {
+    let app = PdfCraftApp::new();
+    assert_eq!(app.theme_preference, ThemePreference::Dark);
+    assert_eq!(app.theme, ThemeKind::Dark);
+    let saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    assert!(saved["theme_choice"].is_null(), "{saved}");
+
+    let mut older = PdfCraftApp::new();
+    older.restore(r#"{"theme":"light"}"#);
+    assert_eq!(older.theme_preference, ThemePreference::Dark, "an old saved default is not a choice");
+
+    let mut app = PdfCraftApp::new();
+    app.set_theme_preference(ThemePreference::Light);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert_eq!(restored.theme_preference, ThemePreference::Light);
+    assert_eq!(restored.theme, ThemeKind::Light);
 }

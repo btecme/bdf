@@ -33,8 +33,8 @@ impl Panel {
     fn default_side(self) -> Zone {
         match self {
             Self::Canvas => Zone::Right,
-            Self::Tools => Zone::Left,
-            Self::Inspector => Zone::Right,
+            Self::Tools => Zone::Right,
+            Self::Inspector => Zone::Left,
         }
     }
     fn parse(id: &str) -> Result<Self, String> {
@@ -66,11 +66,12 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             layout: Layout {
+                // The Inspector (with its icon rail) is on the left, the Tools on the right.
                 root: Some(split(
                     SplitAxis::Horizontal,
-                    SplitSize::FixedFirst(272.0),
-                    tabs(Panel::Tools),
-                    split(SplitAxis::Horizontal, SplitSize::FixedSecond(330.0), tabs(Panel::Canvas), tabs(Panel::Inspector)),
+                    SplitSize::FixedFirst(330.0),
+                    tabs(Panel::Inspector),
+                    split(SplitAxis::Horizontal, SplitSize::FixedSecond(272.0), tabs(Panel::Canvas), tabs(Panel::Tools)),
                 )),
                 floating: Vec::new(),
             },
@@ -90,11 +91,23 @@ impl Workspace {
         location.is_some_and(|location| matches!(location.placement, Placement::Split(Zone::Right)))
     }
 
+    /// Side of the Inspector, including its saved position while closed. Left unless it was put on
+    /// the right: it is also the side of the icon rail that opens its panels.
+    pub fn inspector_on_left(&self) -> bool {
+        let location = self
+            .layout
+            .location(&Panel::Inspector)
+            .ok()
+            .or_else(|| self.hidden.iter().find(|(panel, _)| *panel == Panel::Inspector).map(|(_, location)| location.clone()));
+        !location.is_some_and(|location| matches!(location.placement, Placement::Split(Zone::Right)))
+    }
+
     /// Place Tools at the outer left or right edge while preserving its open state.
     pub fn set_tools_on_right(&mut self, right: bool) -> Result<(), String> {
         let was_open = self.layout.contains(&Panel::Tools);
         self.set_visible(Panel::Tools, true)?;
-        let anchor = if right && self.layout.contains(&Panel::Inspector) { Panel::Inspector } else { Panel::Canvas };
+        // Outside the Inspector when it is on the same side, otherwise next to the document.
+        let anchor = if self.layout.contains(&Panel::Inspector) && self.inspector_on_left() != right { Panel::Inspector } else { Panel::Canvas };
         self.apply(Action::Move { panel: Panel::Tools, anchor, placement: Placement::Split(if right { Zone::Right } else { Zone::Left }) })?;
         if !was_open {
             self.set_visible(Panel::Tools, false)?;
@@ -462,16 +475,50 @@ mod tests {
     #[test]
     fn tools_side_moves_to_both_edges_and_survives_closed_restore() {
         let mut workspace = Workspace::default();
+        // By default the Inspector is on the left and the Tools on the right.
+        assert!(workspace.tools_on_right());
+        assert!(workspace.inspector_on_left());
+        workspace.set_tools_on_right(false).unwrap();
+        assert!(!workspace.tools_on_right());
+        workspace.set_visible(Panel::Tools, false).unwrap();
         assert!(!workspace.tools_on_right());
         workspace.set_tools_on_right(true).unwrap();
         assert!(workspace.tools_on_right());
-        workspace.set_visible(Panel::Tools, false).unwrap();
-        assert!(workspace.tools_on_right());
-        workspace.set_tools_on_right(false).unwrap();
-        assert!(!workspace.tools_on_right());
         assert!(!workspace.layout.contains(&Panel::Tools));
         workspace.set_visible(Panel::Tools, true).unwrap();
-        assert!(!workspace.tools_on_right());
+        assert!(workspace.tools_on_right());
+        workspace.validate().unwrap();
+    }
+
+    /// The default layout is the mirror of the old one: Inspector (and its rail) left, document,
+    /// Tools right; a closed panel reopens on its own side.
+    #[test]
+    fn the_default_layout_has_the_inspector_left_and_the_tools_right() {
+        let mut workspace = Workspace::default();
+        let order = |w: &Workspace| -> Vec<Panel> {
+            let mut out = Vec::new();
+            let mut stack: Vec<&Node<Panel>> = w.layout.root.iter().collect();
+            while let Some(node) = stack.pop() {
+                match node {
+                    Node::Split { first, second, .. } => {
+                        stack.push(second);
+                        stack.push(first);
+                    }
+                    Node::Tabs { panels, .. } => out.extend(panels.iter().copied()),
+                    Node::Stack { entries } => out.extend(entries.iter().map(|e| e.panel)),
+                }
+            }
+            out
+        };
+        assert_eq!(order(&workspace), [Panel::Inspector, Panel::Canvas, Panel::Tools]);
+        for panel in [Panel::Inspector, Panel::Tools] {
+            workspace.set_visible(panel, false).unwrap();
+            workspace.set_visible(panel, true).unwrap();
+        }
+        assert_eq!(order(&workspace), [Panel::Inspector, Panel::Canvas, Panel::Tools]);
+        // Tools on the left sits outside the Inspector; the Inspector on the right flips its rail.
+        workspace.set_tools_on_right(false).unwrap();
+        assert_eq!(order(&workspace)[0], Panel::Tools);
         workspace.validate().unwrap();
     }
 
