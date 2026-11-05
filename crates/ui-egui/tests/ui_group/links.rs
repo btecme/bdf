@@ -1,5 +1,6 @@
-//! Project links: the Help menu, the About dialog and the home screen open the BDF repository and
-//! its issue tracker, and nothing else: no Discord, no other product's website.
+//! Project links: the Help menu, the About dialog and the home screen open the BDF repository, its
+//! issue tracker and (About, Help) the two b-tec pages, and nothing else: no Discord, no other
+//! product's website.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -55,6 +56,42 @@ trailer << /Root 1 0 R >>
     h.get_by_label("Report an issue").click();
     h.run_steps(2);
     assert_eq!(h.state().last_opened_url.as_deref(), Some(links::ISSUES));
+}
+
+/// The "b-tec Built" note of the About dialog: the sentence, and one pill for each b-tec page that
+/// opens exactly that page. The home screen does not carry them.
+#[test]
+fn about_dialog_says_b_tec_built_and_links_the_two_b_tec_pages() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    for l in links::BTEC_LINKS {
+        let mut h = harness(move |app| {
+            app.open_bytes("one.pdf", None, pdf.to_vec()).unwrap();
+            app.dialog = Some(Dialog::About);
+        });
+        h.get_by_label("b-tec Built");
+        h.get_by_label("Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.");
+        h.get_by_label(l.label).click();
+        h.run_steps(2);
+        assert_eq!(h.state().last_opened_url.as_deref(), Some(l.url), "{}", l.label);
+    }
+    let h = harness(|_| {});
+    assert_eq!(h.query_all_by_label("b-tec Built").count(), 0, "not on the home screen");
+}
+
+#[test]
+fn help_commands_open_each_b_tec_link() {
+    for l in links::BTEC_LINKS {
+        let mut h = harness(|_| {});
+        assert!(h.state_mut().execute(l.command), "{}", l.command);
+        assert_eq!(h.state().last_opened_url.as_deref(), Some(l.url));
+        assert_eq!(pdfcraft_engine::commands::command(l.command).unwrap().menu, Some("Help"));
+        assert!(l.url == "https://www.b-tec.org/" || l.url == "https://www.b-tec.org/first-principles", "{}", l.url);
+    }
 }
 
 #[test]

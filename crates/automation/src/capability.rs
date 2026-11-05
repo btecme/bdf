@@ -393,6 +393,8 @@ pub static COMMANDS: &[CommandCap] = &[
     CommandCap { id: "help.check_updates", verdict: Verdict::Excluded, requirement: "", why: "Opens an external site or checks for updates; BDF has no support URL or update endpoint yet, and the network stays off by default." },
     CommandCap { id: "help.github", verdict: Verdict::Excluded, requirement: "", why: "Opens an external site or checks for updates; BDF has no support URL or update endpoint yet, and the network stays off by default." },
     CommandCap { id: "help.issues", verdict: Verdict::Excluded, requirement: "", why: "Opens an external site or checks for updates; BDF has no support URL or update endpoint yet, and the network stays off by default." },
+    CommandCap { id: "help.btec", verdict: Verdict::Excluded, requirement: "", why: "Opens a b-tec web page in the browser, on the person's click only; the network stays off by default." },
+    CommandCap { id: "help.principles", verdict: Verdict::Excluded, requirement: "", why: "Opens a b-tec web page in the browser, on the person's click only; the network stays off by default." },
     CommandCap { id: "help.shortcuts", verdict: Verdict::Core, requirement: "CORE-01", why: "Open and view." },
     CommandCap { id: "js.actions", verdict: Verdict::Excluded, requirement: "", why: "Document scripts are not supported in v1." },
     CommandCap { id: "js.console", verdict: Verdict::Excluded, requirement: "", why: "Document scripts are not supported in v1." },

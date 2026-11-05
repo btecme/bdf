@@ -54,3 +54,4 @@ MCP `serverInfo` name `bdf`, and the `open_worker` tests of the Open finding.
 | Date | Change |
 |---|---|
 | 2026-11-04 | Record of the BUILD-015 implementation and its local verification. |
+| 2026-11-05 | Review corrections (CLI help Discord line, Linux metadata, DMG artwork regenerated with resvg 0.49.0) and the owner-requested "b-tec Built" About note with its two links; scoped tests (engine, automation, ui-egui 1112 + the new About and Help link tests, cli help), clippy, fmt, layers, assets and wasm re-run green locally. Hosted CI not read. |

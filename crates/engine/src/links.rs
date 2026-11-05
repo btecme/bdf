@@ -1,6 +1,7 @@
-//! Where BDF lives on the web: its repository and its issue tracker. One table, so the Help menu,
-//! the About dialog, the home screen, the CLI and the README agree. There is no other community,
-//! support or download site: BDF has no Discord, web page or support address of its own.
+//! Where BDF lives on the web: its repository and its issue tracker, and the b-tec website that
+//! built it. One table, so the Help menu, the About dialog, the home screen, the CLI and the README
+//! agree. There is no other community, support or download site: no Discord, no web page or support
+//! address inherited from another project.
 
 use icu_properties::props::Script;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,11 @@ use std::path::{Path, PathBuf};
 pub const GITHUB: &str = "https://github.com/btecme/bdf";
 /// Where problems with BDF are reported.
 pub const ISSUES: &str = "https://github.com/btecme/bdf/issues";
+
+/// b-tec, who built BDF.
+pub const BTEC: &str = "https://www.b-tec.org/";
+/// The b-tec first principles, which say why BDF is agent first.
+pub const FIRST_PRINCIPLES: &str = "https://www.b-tec.org/first-principles";
 
 /// A link and the registry command that opens it.
 #[derive(Clone, Copy, Debug)]
@@ -26,8 +32,15 @@ pub const LINKS: &[Link] = &[
     Link { command: "help.issues", label: "Report an issue", url: ISSUES, icon: "circle-help" },
 ];
 
+/// The "b-tec Built" links of the About dialog. They are not in [`LINKS`] (the home screen shows
+/// that table), but every one is a registered Help command like the others.
+pub const BTEC_LINKS: &[Link] = &[
+    Link { command: "help.btec", label: "b-tec website", url: BTEC, icon: "globe" },
+    Link { command: "help.principles", label: "b-tec first principles", url: FIRST_PRINCIPLES, icon: "book-open" },
+];
+
 pub fn for_command(id: &str) -> Option<&'static Link> {
-    LINKS.iter().find(|l| l.command == id)
+    LINKS.iter().chain(BTEC_LINKS).find(|l| l.command == id)
 }
 
 /// The kinds of address a document may ask BDF to open: web pages and email. Anything
@@ -524,6 +537,18 @@ mod tests {
             assert!(l.url == super::GITHUB || l.url.starts_with(&format!("{}/", super::GITHUB)), "{}", l.url);
             assert!(l.url.starts_with("https://"), "{}", l.url);
             assert!(crate::commands::command(l.command).is_some(), "{} is a registered command", l.command);
+        }
+    }
+
+    #[test]
+    fn the_btec_links_are_the_two_owner_pages_and_registered_commands() {
+        assert_eq!(super::BTEC, "https://www.b-tec.org/");
+        assert_eq!(super::FIRST_PRINCIPLES, "https://www.b-tec.org/first-principles");
+        let urls: Vec<&str> = super::BTEC_LINKS.iter().map(|l| l.url).collect();
+        assert_eq!(urls, [super::BTEC, super::FIRST_PRINCIPLES]);
+        for l in super::BTEC_LINKS {
+            assert!(crate::commands::command(l.command).is_some(), "{} is a registered command", l.command);
+            assert_eq!(super::for_command(l.command).map(|f| f.url), Some(l.url));
         }
     }
 

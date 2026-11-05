@@ -1149,6 +1149,13 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             .small(),
                         );
                         ui.add_space(12.0);
+                        ui.label(egui::RichText::new(tl!("b-tec Built")).font(theme::semibold(15.0)));
+                        ui.label(tl!("Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why."));
+                        ui.add_space(6.0);
+                        if let Some(cmd) = widgets::link_pills(ui, pdfcraft_engine::links::BTEC_LINKS) {
+                            link_command = Some(cmd);
+                        }
+                        ui.add_space(12.0);
                         ui.label(egui::RichText::new("Based on PdfCraft by the ArtCraft team.").color(t.text_muted));
                         ui.add_space(6.0);
                         if let Some(cmd) = widgets::community_links(ui) {

@@ -359,6 +359,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.github", "BDF on GitHub", HELP, None, Nothing, "code-xml"),
     c("help.issues", "Report an issue", HELP, None, Nothing, "circle-help"),
+    c("help.btec", "b-tec website", HELP, None, Nothing, "globe"),
+    c("help.principles", "b-tec first principles", HELP, None, Nothing, "book-open"),
     c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
     c("help.about", "About BDF", HELP, None, Nothing, "info"),
 ];

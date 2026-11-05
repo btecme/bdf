@@ -1367,6 +1367,7 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            "b-tec Built",
         ];
         let (entries, errors) = parse_entries(cs.0.source, cs.0.plural_forms());
         assert!(errors.is_empty(), "{errors:?}");
@@ -1479,6 +1480,7 @@ mod tests {
             "−Bin",
             "Model",
             "Home / End",
+            "b-tec Built",
         ];
         let (entries, errors) = parse_entries(tr_lang.0.source, tr_lang.0.plural_forms());
         assert!(errors.is_empty(), "Turkish catalog errors: {errors:?}");
@@ -2694,6 +2696,7 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            "b-tec Built",
         ];
         let unchanged: Vec<_> = entries
             .iter()
@@ -2772,6 +2775,7 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            "b-tec Built",
         ];
         let unchanged: Vec<_> = entries
             .iter()
