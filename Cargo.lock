@@ -3658,6 +3658,7 @@ dependencies = [
  "pdfcraft-organize",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-update",
  "pdfcraft-xfa",
  "png 0.18.1",
  "serde_json",

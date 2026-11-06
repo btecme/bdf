@@ -14,6 +14,11 @@ pub fn trust() -> Trust {
     crate::trust::testkeys::trust(1, Channel::Stable)
 }
 
+/// The test trust on `channel` (a development build trusts the same throwaway key).
+pub fn trust_for(channel: Channel) -> Trust {
+    crate::trust::testkeys::trust(1, channel)
+}
+
 /// An installed managed copy of `files` at `version` in `root/app`, with the user's data and a stranger's file.
 pub fn installed_copy(root: &Path, version: &str, files: &[(&str, &[u8])]) -> PathBuf {
     let app = root.join("app");
