@@ -324,20 +324,7 @@ impl Updater {
         }
         let copy = helper_dir.join(format!("bdf-updater-{}{}", std::process::id(), if cfg!(windows) { ".exe" } else { "" }));
         std::fs::copy(&source, &copy).map_err(crate::io_err("couldn't copy the updater"))?;
-        let mut command = std::process::Command::new(&copy);
-        command
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .current_dir(&helper_dir);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW: it must outlive the program that started it.
-            command.creation_flags(0x0000_0008 | 0x0000_0200 | 0x0800_0000);
-        }
-        command.spawn().map(|_| ()).map_err(crate::io_err("couldn't start the updater"))
+        spawn_detached(&copy, args, &helper_dir)
     }
 
     /// What the last update attempt reported, once: reading removes it.
@@ -503,5 +490,64 @@ mod tests {
         assert!(!s.managed && s.managed_note.as_deref().is_some_and(|n| n.contains("portable package")), "{s:?}");
         assert!(u.launch_apply(&[]).is_err() && u.launch_rollback(&[]).is_err());
         assert!(u.prepare(&mut |_, _| true).is_err());
+    }
+}
+
+/// Start `exe` so that it outlives this process and shares nothing with it.
+///
+/// On Windows that means **no inherited handles**: `std::process::Command` inherits every inheritable handle of the
+/// parent, including the pipe a caller reads this program's output from, so a helper started that way keeps the
+/// caller waiting for end-of-output until the helper (and the BDF it starts) exits. `CreateProcess` with
+/// `bInheritHandles = FALSE`, detached and without a window, does not.
+#[cfg(windows)]
+fn spawn_detached(exe: &Path, args: &[String], dir: &Path) -> Result<()> {
+    use winsafe::{STARTUPINFO, co};
+    let text = |p: &Path| p.to_str().map(str::to_string).ok_or_else(|| UpdateError::Malformed("a path is not valid text".into()));
+    let exe_text = text(exe)?;
+    let mut command_line = quote_arg(&exe_text)?;
+    for a in args {
+        command_line.push(' ');
+        command_line.push_str(&quote_arg(a)?);
+    }
+    let flags = co::CREATE::DETACHED_PROCESS | co::CREATE::NEW_PROCESS_GROUP | co::CREATE::NO_WINDOW;
+    winsafe::CreateProcess(Some(&exe_text), Some(&command_line), None, None, false, flags, &[], Some(&text(dir)?), &mut STARTUPINFO::default())
+        .map(|_| ())
+        .map_err(|e| UpdateError::Io { what: "couldn't start the updater".into(), source: std::io::Error::from_raw_os_error(e.raw() as i32) })
+}
+
+#[cfg(not(windows))]
+fn spawn_detached(exe: &Path, args: &[String], dir: &Path) -> Result<()> {
+    std::process::Command::new(exe)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .current_dir(dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(crate::io_err("couldn't start the updater"))
+}
+
+/// One argument of a Windows command line, quoted for `CommandLineToArgvW`. Quotes and control characters cannot
+/// be in a Windows path, so an argument that has one is refused instead of escaped.
+#[cfg(any(windows, test))]
+fn quote_arg(arg: &str) -> Result<String> {
+    if arg.is_empty() || arg.chars().any(|c| c == '"' || c.is_control()) {
+        return Err(UpdateError::Malformed("an argument for the updater has a quote or control character".into()));
+    }
+    let trailing = arg.chars().rev().take_while(|&c| c == '\\').count();
+    // Backslashes before the closing quote are doubled so they do not escape it.
+    Ok(format!("\"{arg}{}\"", "\\".repeat(trailing)))
+}
+
+#[cfg(test)]
+mod quote_tests {
+    use super::quote_arg;
+
+    #[test]
+    fn arguments_are_quoted_for_the_command_line() {
+        assert_eq!(quote_arg(r"C:\Program Files\BDF\bdf.exe").unwrap(), r#""C:\Program Files\BDF\bdf.exe""#);
+        assert_eq!(quote_arg(r"C:\dir\").unwrap(), r#""C:\dir\\""#);
+        assert!(quote_arg("a\"b").is_err() && quote_arg("").is_err() && quote_arg("a\nb").is_err());
     }
 }
