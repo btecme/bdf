@@ -29,8 +29,10 @@ function Say([string]$m) { Write-Output $m; [void]$lines.Add($m) }
 function Check([bool]$ok, [string]$what) { if ($ok) { Say "ok   $what" } else { Say "FAIL $what"; $script:failures++ } }
 function Xtask { Push-Location $Repo; try { & cargo run -q -p xtask -- @args | Out-Null; if ($LASTEXITCODE) { throw "xtask $($args[0]) failed" } } finally { Pop-Location } }
 function BdfCli([string]$Dir, [string[]]$a) {
-    $o = & (Join-Path $Dir 'bdf-cli.exe') @a 2>&1 | Out-String
-    [pscustomobject]@{ Code = $LASTEXITCODE; Out = $o }
+    # A failing command writes to stderr, which Windows PowerShell 5.1 turns into a terminating error under 'Stop'.
+    $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $o = & (Join-Path $Dir 'bdf-cli.exe') @a 2>&1 | Out-String; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $previous }
+    [pscustomobject]@{ Code = $code; Out = $o }
 }
 function Json([string]$text) { $text | ConvertFrom-Json }
 function Wait-Until([scriptblock]$Cond, [int]$Seconds = 60) {
@@ -52,13 +54,13 @@ try {
     New-Item -ItemType Directory -Path $feedRoot | Out-Null
     $zips = @{}
     foreach ($v in '0.8.0', '0.8.1', '0.8.2') {
-        $out = Join-Path $Work "rel-$v"
-        Xtask portable-package --bin-dir (Join-Path $BinRoot $v) --version $v --out $out
-        Xtask update-sign --zip (Join-Path $out "bdf-$v-windows-x64-portable.zip") --version $v --key $KeyFile --out $out --channel dev --url-base "http://127.0.0.1:$port/v$v" --notes (Join-Path $Repo 'packaging\windows\PORTABLE-README.txt')
+        $relDir = Join-Path $Work "rel-$v"
+        Xtask portable-package --bin-dir (Join-Path $BinRoot $v) --version $v --out $relDir
+        Xtask update-sign --zip (Join-Path $relDir "bdf-$v-windows-x64-portable.zip") --version $v --key $KeyFile --out $relDir --channel dev --url-base "http://127.0.0.1:$port/v$v" --notes (Join-Path $Repo 'packaging\windows\PORTABLE-README.txt')
         New-Item -ItemType Directory -Path (Join-Path $feedRoot "v$v") | Out-Null
-        Copy-Item (Join-Path $out "bdf-$v-windows-x64-portable.zip") (Join-Path $feedRoot "v$v")
-        $zips[$v] = Join-Path $out "bdf-$v-windows-x64-portable.zip"
-        Copy-Item (Join-Path $out 'bdf-update.json') (Join-Path $Work "release-$v.json")
+        Copy-Item (Join-Path $relDir "bdf-$v-windows-x64-portable.zip") (Join-Path $feedRoot "v$v")
+        $zips[$v] = Join-Path $relDir "bdf-$v-windows-x64-portable.zip"
+        Copy-Item (Join-Path $relDir 'bdf-update.json') (Join-Path $Work "release-$v.json")
     }
     function Publish([string]$v) { Copy-Item (Join-Path $Work "release-$v.json") (Join-Path $feedRoot 'release.json') -Force }
     Publish '0.8.0'
@@ -145,11 +147,22 @@ try {
     Check ($c.Code -ne 0 -and $c.Out -match 'failed verification') 'a tampered package fails verification and is discarded'
     Check (-not (Get-ChildItem (Join-Path $app2 'BDFUpdate\downloads') -Filter *.zip -ErrorAction SilentlyContinue)) 'no tampered package is left to install'
     [IO.File]::WriteAllBytes($pkg, $good)
+    # A forged signature, on a fresh copy that has never seen a genuine release (an earlier verified offer would rightly stay).
+    $app3 = Join-Path $Work 'BDF3'
+    Expand-Archive -Path $zips['0.8.0'] -DestinationPath $Work
+    Move-Item (Join-Path $Work 'bdf-0.8.0-windows-x64') $app3
     $forged = (Get-Content (Join-Path $Work 'release-0.8.2.json') -Raw) -replace '"signature": "', '"signature": "0'
-    Set-Content (Join-Path $feedRoot 'release.json') $forged -Encoding utf8
-    $c = BdfCli $app2 @('update', 'check')
+    [IO.File]::WriteAllText((Join-Path $feedRoot 'release.json'), $forged, (New-Object System.Text.UTF8Encoding $false))
+    $c = BdfCli $app3 @('update', 'check')
     Check ($c.Code -ne 0 -and $c.Out -match 'verification') 'a release with a forged signature is rejected'
-    Check (-not (Json (BdfCli $app2 @('update', 'status')).Out).update_available) 'and nothing is offered'
+    Check (-not (Json (BdfCli $app3 @('update', 'status')).Out).update_available) 'and nothing is offered'
+    # A release whose payload was changed after signing (the signature no longer matches).
+    $env0 = Get-Content (Join-Path $Work 'release-0.8.2.json') -Raw | ConvertFrom-Json
+    $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env0.payload)) -replace '"size": (\d+)', '"size": 1$1'
+    $env0.payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+    [IO.File]::WriteAllText((Join-Path $feedRoot 'release.json'), ($env0 | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))
+    $c = BdfCli $app3 @('update', 'check')
+    Check ($c.Code -ne 0 -and $c.Out -match 'verification') 'a release whose signed information was altered is rejected'
 
     # ---- an older release is never installed ------------------------------------------------------------------------------
     Publish '0.8.0'

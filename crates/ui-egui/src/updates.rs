@@ -193,6 +193,13 @@ impl PdfCraftApp {
             if self.updates.next_auto.is_none() && self.auto_update_check && self.updates.started {
                 self.updates.next_auto = Some(now + AUTO_INTERVAL_SECS);
             }
+            // An idle window draws nothing, so wake it when the next automatic check is due.
+            if let (Some(due), Some(ctx)) = (self.updates.next_auto, &self.ctx)
+                && self.auto_update_check
+                && due > now
+            {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64((due - now).clamp(0.1, 3600.0)));
+            }
             match &self.updates.job {
                 Job::Checking { rx, manual } => {
                     let manual = *manual;
@@ -439,7 +446,12 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
                     }
                 });
             } else if s.ready_to_install {
-                ui.label(egui::RichText::new(tl!("BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.")).color(t.text_muted));
+                ui.label(
+                    egui::RichText::new(tl!(
+                        "BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept."
+                    ))
+                    .color(t.text_muted),
+                );
                 ui.add_space(8.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if widgets::pill_button(ui, tl!("Close BDF and update"), true).clicked() {
@@ -486,11 +498,9 @@ pub(crate) fn preferences(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if app.update_host.is_some() {
         ui.add(widgets::checkbox(&mut app.auto_update_check, tl!("Check for updates automatically")));
         ui.label(
-            egui::RichText::new(tl!(
-                "Asks BDF's release feed in the background. A failed check never interrupts your work."
-            ))
-            .small()
-            .color(t.text_muted),
+            egui::RichText::new(tl!("Asks BDF's release feed in the background. A failed check never interrupts your work."))
+                .small()
+                .color(t.text_muted),
         );
     }
     if cfg!(windows) {

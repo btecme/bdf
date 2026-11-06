@@ -108,10 +108,14 @@ fn pdf() -> Vec<u8> {
 }
 
 fn harness(host: Option<Arc<Fake>>) -> Harness<'static, PdfCraftApp> {
+    harness_with(host, false)
+}
+
+fn harness_with(host: Option<Arc<Fake>>, auto: bool) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.auto_update_check = false;
+        app.auto_update_check = auto;
         app.update_host = host.clone().map(|h| h as Arc<dyn UpdateHost>);
         app
     });
@@ -231,4 +235,19 @@ fn the_auto_check_preference_is_saved_and_restored() {
 #[test]
 fn the_portable_markers_match_the_update_crates() {
     assert_eq!(pdfcraft_ui_egui::portable::MARKERS, pdfcraft_update::layout::PORTABLE_MARKERS);
+}
+
+#[test]
+fn an_automatic_check_runs_on_its_own_a_few_seconds_after_start() {
+    let fake = Fake::new(status(true, true, true, false));
+    let mut h = harness_with(Some(fake.clone()), true);
+    assert_eq!(fake.checks.load(Ordering::Relaxed), 0, "not at the very start: opening documents comes first");
+    for _ in 0..600 {
+        h.run_steps(2);
+        if fake.checks.load(Ordering::Relaxed) > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(fake.checks.load(Ordering::Relaxed), 1, "the first automatic check ran by itself");
 }
