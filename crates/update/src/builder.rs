@@ -91,7 +91,10 @@ mod tests {
             let r = write_package(&dir.path().join("o.zip"), "0.8.1", "windows", "x64", &[Input { rel: rel.into(), source: f.clone() }]);
             assert!(r.is_err(), "{rel:?}");
         }
-        assert!(write_package(&dir.path().join("o.zip"), "0.8.1", "windows", "x64", &[Input { rel: "x".into(), source: dir.path().join("missing") }]).is_err());
+        assert!(
+            write_package(&dir.path().join("o.zip"), "0.8.1", "windows", "x64", &[Input { rel: "x".into(), source: dir.path().join("missing") }])
+                .is_err()
+        );
         assert!(write_package(&dir.path().join("o.zip"), "latest", "windows", "x64", &[]).is_err());
     }
 }

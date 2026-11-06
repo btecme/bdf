@@ -148,7 +148,7 @@ fn download_to(entry: &PackageEntry, part: &Path, progress: &mut dyn FnMut(u64, 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::net::TcpListener;
 
     use super::*;
@@ -156,10 +156,28 @@ mod tests {
     use crate::manifest::testing::manifest_json;
     use crate::trust::testkeys;
 
-    /// A one-shot-per-connection HTTP server on loopback serving `routes` (path to status, body).
-    pub(crate) fn serve(routes: Vec<(String, u16, Vec<u8>)>) -> (String, std::thread::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    /// An HTTP server on loopback, one response per connection, serving `routes(base)` (path to status, body);
+    /// the routes may name the server's own address.
+    pub(crate) type Routes = Vec<(String, u16, Vec<u8>)>;
+    pub(crate) struct TestServer {
+        pub base: String,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+        }
+    }
+
+    pub(crate) fn serve_with(routes: impl FnOnce(&str) -> Routes) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
+        let routes = routes(&base);
         listener.set_nonblocking(true).unwrap();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = stop.clone();
@@ -181,7 +199,11 @@ mod tests {
                 }
             }
         });
-        (base, handle, stop)
+        TestServer { base, stop, handle: Some(handle) }
+    }
+
+    fn serve(routes: Routes) -> TestServer {
+        serve_with(|_| routes)
     }
 
     #[test]
@@ -200,12 +222,13 @@ mod tests {
         let json = manifest_json("0.8.1", "dev", &"a".repeat(64), 10);
         let good = make_envelope(json.as_bytes(), &testkeys::sign(1, json.as_bytes()));
         let forged = make_envelope(json.as_bytes(), &testkeys::sign(2, json.as_bytes()));
-        let (base, handle, stop) = serve(vec![
+        let server = serve(vec![
             ("/good.json".into(), 200, good),
             ("/forged.json".into(), 200, forged),
             ("/junk.json".into(), 200, b"<html>".to_vec()),
             ("/err.json".into(), 500, vec![]),
         ]);
+        let base = server.base.clone();
         let trust = testkeys::trust(1, Channel::Dev);
         assert_eq!(fetch_release(&trust, &format!("{base}/good.json")).unwrap().version.to_string(), "0.8.1");
         assert!(matches!(fetch_release(&trust, &format!("{base}/forged.json")), Err(UpdateError::Tampered(_))));
@@ -213,18 +236,17 @@ mod tests {
         assert!(matches!(fetch_release(&trust, &format!("{base}/err.json")), Err(UpdateError::Network(_))));
         assert!(matches!(fetch_release(&trust, &format!("{base}/missing.json")), Err(UpdateError::Network(_))));
         assert!(matches!(fetch_release(&Trust::none(Channel::Dev), &format!("{base}/good.json")), Err(UpdateError::NoTrustRoot)));
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        handle.join().unwrap();
     }
 
     #[test]
     fn a_download_arrives_whole_or_not_at_all() {
         let body: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
-        let (base, handle, stop) = serve(vec![
+        let server = serve(vec![
             ("/ok.zip".into(), 200, body.clone()),
             ("/short.zip".into(), 200, body[..1000].to_vec()),
             ("/long.zip".into(), 200, [body.clone(), vec![0; 10]].concat()),
         ]);
+        let base = server.base.clone();
         let dir = tempfile::tempdir().unwrap();
         let entry = |name: &str| PackageEntry {
             os: "windows".into(),
@@ -255,7 +277,5 @@ mod tests {
         assert!(!dest.exists() && !dest.with_extension("part").exists());
         // A release build will not take a loopback address, signed or not.
         assert!(matches!(download(&entry("ok.zip"), Channel::Stable, &dir.path().join("x.zip"), &mut |_, _| true), Err(UpdateError::Malformed(_))));
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        handle.join().unwrap();
     }
 }

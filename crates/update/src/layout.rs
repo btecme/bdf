@@ -46,6 +46,36 @@ pub fn detect(app_dir: &Path) -> Result<Install> {
     Ok(Install { app_dir: app_dir.to_path_buf(), info, version })
 }
 
+/// The files that switch on portable mode (`crates/ui-egui/src/portable.rs` has the same pair, and a test there
+/// keeps the two in step).
+pub const PORTABLE_MARKERS: [&str; 2] = ["portable.txt", "BDF.portable"];
+
+/// Where this copy keeps the update cache and backoff. In portable mode (a marker beside the program) it is
+/// `BDFData/update` beside it, so the copy leaves nothing behind; otherwise the person's own folder
+/// (`%LOCALAPPDATA%/BDF/Update` on Windows). `env` reads the environment, so tests can supply one.
+pub fn state_dir_with(app_dir: &Path, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    let beside = || app_dir.join("BDFData").join("update");
+    if PORTABLE_MARKERS.iter().any(|m| app_dir.join(m).is_file()) {
+        return beside();
+    }
+    let absolute = |name: &str| env(name).map(PathBuf::from).filter(|p| p.is_absolute());
+    if cfg!(windows) {
+        absolute("LOCALAPPDATA").map(|d| d.join("BDF").join("Update")).unwrap_or_else(beside)
+    } else if cfg!(target_os = "macos") {
+        absolute("HOME").map(|d| d.join("Library").join("Application Support").join("BDF").join("Update")).unwrap_or_else(beside)
+    } else {
+        absolute("XDG_DATA_HOME")
+            .or_else(|| absolute("HOME").map(|h| h.join(".local").join("share")))
+            .map(|d| d.join("bdf").join("update"))
+            .unwrap_or_else(beside)
+    }
+}
+
+/// [`state_dir_with`] for the real environment.
+pub fn state_dir(app_dir: &Path) -> PathBuf {
+    state_dir_with(app_dir, &|n| std::env::var_os(n))
+}
+
 /// `<app>/BDFUpdate`.
 pub fn update_dir(app_dir: &Path) -> PathBuf {
     app_dir.join(UPDATE_DIR)
@@ -89,6 +119,28 @@ mod tests {
         assert!(matches!(detect(dir.path()), Err(UpdateError::Unmanaged(_))));
         std::fs::write(dir.path().join(PACKAGE_FILE), b"not json").unwrap();
         assert!(matches!(detect(dir.path()), Err(UpdateError::Unmanaged(_))));
+    }
+
+    #[test]
+    fn the_state_lives_beside_a_portable_copy_and_in_the_users_folder_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        let env = |name: &str| match name {
+            "LOCALAPPDATA" | "HOME" => Some(profile.clone().into_os_string()),
+            _ => None,
+        };
+        let app = dir.path().join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        let unmarked = state_dir_with(&app, &env);
+        assert!(unmarked.starts_with(&profile), "{unmarked:?}");
+        for marker in PORTABLE_MARKERS {
+            std::fs::write(app.join(marker), b"").unwrap();
+            assert_eq!(state_dir_with(&app, &env), app.join("BDFData").join("update"), "{marker}");
+            std::fs::remove_file(app.join(marker)).unwrap();
+        }
+        // No usable profile folder: beside the program, never a relative path.
+        let relative = |_: &str| Some(std::ffi::OsString::from("relative"));
+        assert_eq!(state_dir_with(&app, &relative), app.join("BDFData").join("update"));
     }
 
     #[test]

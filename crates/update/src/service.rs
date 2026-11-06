@@ -109,10 +109,11 @@ impl Updater {
         Updater { trust, app_dir, state_dir, current: Version::current(), feed }
     }
 
-    /// The updater for the running executable's folder, with the state kept in `state_dir`.
-    pub fn for_current_exe(state_dir: PathBuf) -> Result<Updater> {
+    /// The updater for the running executable's folder, with the state kept where [`layout::state_dir`] says.
+    pub fn for_current_exe() -> Result<Updater> {
         let exe = std::env::current_exe().map_err(|e| UpdateError::Io { what: "couldn't find the running program".into(), source: e })?;
         let app_dir = exe.parent().ok_or_else(|| UpdateError::Unmanaged("the program has no folder".into()))?.to_path_buf();
+        let state_dir = layout::state_dir(&app_dir);
         Ok(Updater::new(app_dir, state_dir))
     }
 
@@ -353,4 +354,154 @@ impl Updater {
 /// The folder an app that was started from `exe` runs from.
 pub fn app_dir_of(exe: &Path) -> Option<PathBuf> {
     exe.parent().map(Path::to_path_buf)
+}
+
+#[cfg(all(test, feature = "net"))]
+mod tests {
+    use super::*;
+    use crate::Channel;
+    use crate::feed::tests::{TestServer, serve_with};
+    use crate::manifest::make_envelope;
+    use crate::manifest::testing::manifest_json;
+    use crate::testing::{build, installed_copy, sign};
+    use crate::trust::testkeys;
+
+    const V0: &[(&str, &[u8])] = &[("bdf.exe", b"exe-0"), ("bdf-updater.exe", b"helper-0"), ("portable.txt", b"p")];
+    const V1: &[(&str, &[u8])] = &[("bdf.exe", b"exe-1"), ("bdf-updater.exe", b"helper-1"), ("portable.txt", b"p")];
+
+    /// A dev-channel release of `files` served over loopback at `/release.json`; the package is served
+    /// corrupted when asked.
+    fn release_server(root: &Path, version: &str, files: &[(&str, &[u8])], corrupt: bool) -> TestServer {
+        let pkg = build(root, &format!("srv-{version}.zip"), version, files);
+        let mut zip = std::fs::read(&pkg.zip).unwrap();
+        if corrupt {
+            let mid = zip.len() / 2;
+            zip[mid] ^= 0x42;
+        }
+        let path = format!("/v{version}/bdf-{version}-windows-x64-portable.zip");
+        serve_with(|base| {
+            let json = manifest_json(version, "dev", &pkg.entry.sha256, pkg.entry.size)
+                .replace("https://github.com/btecme/bdf/releases/download/v", &format!("{base}/v"));
+            vec![("/release.json".into(), 200, make_envelope(json.as_bytes(), &sign(1, json.as_bytes()))), (path, 200, zip)]
+        })
+    }
+
+    fn updater(root: &Path, app: &Path, current: Version, feed: Option<String>) -> Updater {
+        Updater { trust: testkeys::trust(1, Channel::Dev), app_dir: app.to_path_buf(), state_dir: root.join("state"), current, feed }
+    }
+
+    #[test]
+    fn a_build_without_a_trust_root_offers_nothing_and_refuses_to_check_or_download() {
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let u = Updater {
+            trust: Trust::none(Channel::Stable),
+            app_dir: app,
+            state_dir: root.path().join("state"),
+            current: Version(0, 8, 0),
+            feed: Some("https://example.test/x".into()),
+        };
+        let s = u.status();
+        assert_eq!((s.trust.as_str(), s.update_available.is_none(), s.managed), ("missing", true, true));
+        assert!(matches!(u.check(true), Err(UpdateError::NoTrustRoot)));
+        assert!(matches!(u.prepare(&mut |_, _| true), Err(UpdateError::NoTrustRoot)));
+        assert!(matches!(u.launch_apply(&[]), Err(UpdateError::NotApplicable(_))));
+    }
+
+    #[test]
+    fn check_download_and_prepare_work_and_the_offer_survives_going_offline() {
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let srv_root = tempfile::tempdir().unwrap();
+        let server = release_server(srv_root.path(), "0.8.1", V1, false);
+        let u = updater(root.path(), &app, Version(0, 8, 0), Some(format!("{}/release.json", server.base)));
+        let before = u.status();
+        assert!(before.update_available.is_none() && before.last_check.is_none() && before.managed && before.dev_build);
+
+        let after = u.check(true).unwrap();
+        let offer = after.update_available.clone().expect("a newer release is on offer");
+        assert_eq!((offer.version.as_str(), offer.notes.as_str()), ("0.8.1", "Fixes."));
+        assert!(!after.ready_to_install && after.last_check.is_some());
+
+        let mut last = (0, 0);
+        let prepared = u
+            .prepare(&mut |got, total| {
+                last = (got, total);
+                true
+            })
+            .unwrap();
+        assert_eq!(prepared.version, Version(0, 8, 1));
+        assert_eq!(last.0, last.1, "progress ran to the end");
+        assert!(u.status().ready_to_install && u.prepared().is_some());
+
+        // Offline: the server is gone, yet the offer, its readiness and the downloaded package are still there.
+        drop(server);
+        let again = updater(root.path(), &app, Version(0, 8, 0), Some("http://127.0.0.1:9/release.json".into()));
+        let offline = again.status();
+        assert_eq!(offline.update_available.as_ref().map(|o| o.version.as_str()), Some("0.8.1"));
+        assert!(offline.ready_to_install);
+        // Preparing again reuses the verified package without the network.
+        assert_eq!(again.prepare(&mut |_, _| true).unwrap().version, Version(0, 8, 1));
+    }
+
+    #[test]
+    fn a_tampered_package_is_discarded_and_never_becomes_ready() {
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let srv_root = tempfile::tempdir().unwrap();
+        let server = release_server(srv_root.path(), "0.8.1", V1, true);
+        let u = updater(root.path(), &app, Version(0, 8, 0), Some(format!("{}/release.json", server.base)));
+        u.check(true).unwrap();
+        assert!(matches!(u.prepare(&mut |_, _| true), Err(UpdateError::Tampered(_))));
+        assert!(!u.status().ready_to_install && u.prepared().is_none());
+        let leftovers: Vec<_> =
+            std::fs::read_dir(layout::downloads_dir(&app)).map(|d| d.flatten().map(|e| e.file_name()).collect()).unwrap_or_default();
+        assert!(leftovers.iter().all(|n| n != "bdf-0.8.1-windows-x64-portable.zip"), "{leftovers:?}");
+    }
+
+    #[test]
+    fn a_failed_check_backs_off_and_an_automatic_check_waits_while_a_manual_one_does_not() {
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let u = updater(root.path(), &app, Version(0, 8, 0), Some("http://127.0.0.1:9/release.json".into()));
+        assert!(matches!(u.check(false), Err(UpdateError::Network(_))), "never checked: an automatic check runs");
+        let s = u.status();
+        assert!(s.last_error.is_some() && s.next_check > crate::now_unix() + 3000, "backed off for about an hour");
+        // The next automatic check does nothing and says nothing; a manual one tries (and fails) again.
+        assert!(u.check(false).unwrap().update_available.is_none());
+        assert!(matches!(u.check(true), Err(UpdateError::Network(_))));
+        assert_eq!(State::load(&u.state_dir).failures, 2);
+    }
+
+    #[test]
+    fn an_older_or_replayed_release_is_rejected_and_never_replaces_what_was_offered() {
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let srv_root = tempfile::tempdir().unwrap();
+        // The feed is behind this copy: nothing is offered and the reason is reported.
+        let old = release_server(srv_root.path(), "0.8.1", V1, false);
+        let ahead = updater(root.path(), &app, Version(0, 9, 0), Some(format!("{}/release.json", old.base)));
+        let s = ahead.check(true).unwrap();
+        assert!(s.update_available.is_none() && s.rejected.as_deref().is_some_and(|r| r.contains("older")), "{s:?}");
+        // A newer release is seen, then the feed serves an older, genuinely signed one: the newer offer stands.
+        let newer = release_server(srv_root.path(), "0.8.2", V1, false);
+        let u = updater(root.path(), &app, Version(0, 8, 0), Some(format!("{}/release.json", newer.base)));
+        assert_eq!(u.check(true).unwrap().update_available.map(|o| o.version), Some("0.8.2".into()));
+        let replay = updater(root.path(), &app, Version(0, 8, 0), Some(format!("{}/release.json", old.base)));
+        let s = replay.check(true).unwrap();
+        assert!(s.rejected.is_some(), "{s:?}");
+        assert_eq!(s.update_available.map(|o| o.version), Some("0.8.2".into()), "the replay did not replace the cached release");
+    }
+
+    #[test]
+    fn an_unmanaged_copy_says_so_and_applies_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let app = root.path().join("hand-built");
+        std::fs::create_dir_all(&app).unwrap();
+        let u = updater(root.path(), &app, Version(0, 8, 0), None);
+        let s = u.status();
+        assert!(!s.managed && s.managed_note.as_deref().is_some_and(|n| n.contains("portable package")), "{s:?}");
+        assert!(u.launch_apply(&[]).is_err() && u.launch_rollback(&[]).is_err());
+        assert!(u.prepare(&mut |_, _| true).is_err());
+    }
 }
