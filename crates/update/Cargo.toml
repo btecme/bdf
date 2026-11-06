@@ -17,6 +17,8 @@ net = ["dep:ureq", "dep:rustls-native-certs"]
 # Signing keys, package builders and installed-copy fixtures for tests of this crate and of the helper. Never a
 # default feature and never enabled by a build of the product.
 testing = []
+# Writing the portable package (`cargo xtask portable-package`); not part of a build of the product.
+release-tools = []
 
 [dependencies]
 # SHA-256 of files and of the signed bytes; already in the tree.

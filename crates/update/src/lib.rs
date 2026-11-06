@@ -34,6 +34,9 @@ pub mod version;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+#[cfg(any(test, feature = "release-tools"))]
+pub mod builder;
+
 #[cfg(feature = "net")]
 pub mod feed;
 

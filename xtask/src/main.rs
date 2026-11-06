@@ -12,6 +12,7 @@ mod layers;
 mod macos_integration;
 mod parity;
 mod pins;
+mod release;
 mod screenshots;
 mod version;
 
@@ -41,6 +42,14 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("bdf-corpus", "Generate the BUILD-002 fixture corpus and manifest into target/bdf-corpus/ (--list, --only ID, --write-manifest)", bdf::corpus),
     ("bdf-oracle", "Compare the engine with MuPDF and the generator's expectations over target/bdf-corpus/ (BUILD-002)", bdf::oracle),
     ("bdf-bench", "Measure latency and memory of the engine and desktop app on the BUILD-002 corpus (--ui, --runs N, --cores N)", bdf::bench),
+    ("update-keygen", "Make an update signing key pair (--out FILE outside the repository); prints the public key", release::keygen),
+    (
+        "portable-package",
+        "Build the portable ZIP with its package list (--bin-dir DIR --version X.Y.Z --out DIR) (BUILD-018)",
+        release::portable_package,
+    ),
+    ("update-sign", "Write the signed bdf-update.json and SHA256SUMS.txt for a package (--zip --version --key --out) (BUILD-018)", release::sign),
+    ("update-verify", "Verify a release's signature and package like the app does (--release --zip --pubkey)", release::verify),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];
 
