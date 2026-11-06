@@ -1170,6 +1170,13 @@ fn saves_inside_the_root_still_work_including_new_subfolders() {
 
 // ---- MCP ---------------------------------------------------------------------------------------
 
+/// What a server started without the software authorisation lists: every tool except those that change the installed
+/// software or the Windows account (BUILD-018), which it neither lists nor runs.
+#[cfg(feature = "mcp")]
+fn listed_count() -> usize {
+    tools().iter().filter(|t| !t.needs_software_authorisation()).count()
+}
+
 #[cfg(feature = "mcp")]
 fn rpc(server: &mut McpServer, id: u64, method: &str, params: Value) -> Value {
     let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
@@ -1199,7 +1206,7 @@ fn mcp_session_over_stdio() {
 
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "bdf");
-    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), tools().len());
+    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), listed_count());
     assert_eq!(replies[2]["result"]["structuredContent"]["pages"], 3);
     assert_eq!(replies[2]["result"]["isError"], false);
     let img = &replies[3]["result"]["content"][0];
@@ -1400,7 +1407,7 @@ fn tool_names(reply: &Value) -> Vec<String> {
 fn mcp_default_lists_every_tool_and_has_no_meta_tools() {
     let mut s = McpServer::new(Automation::new());
     let names = tool_names(&rpc(&mut s, 1, "tools/list", json!({})));
-    assert_eq!(names.len(), tools().len());
+    assert_eq!(names.len(), listed_count());
     assert!(!names.iter().any(|n| n == "tool_search" || n == "tool_call"));
     assert!(!rpc(&mut s, 2, "initialize", json!({}))["result"]["instructions"].as_str().unwrap().contains("tool_search"));
     // Without --compact the meta tools do not exist.
@@ -1439,7 +1446,7 @@ fn mcp_compact_tool_search_filters_by_query_and_category() {
 
     let everything = search(json!({}));
     assert_eq!(everything["result"]["isError"], false);
-    assert_eq!(everything["result"]["structuredContent"]["count"], tools().len());
+    assert_eq!(everything["result"]["structuredContent"]["count"], listed_count());
     let first = &everything["result"]["structuredContent"]["tools"][0];
     assert!(first["name"].is_string() && first["description"].is_string() && first["read_only"].is_boolean(), "{first}");
 

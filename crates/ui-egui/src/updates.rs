@@ -309,6 +309,15 @@ pub(crate) fn button(app: &PdfCraftApp, ui: &mut egui::Ui, height: f32) -> bool 
     theme::hand(resp.on_hover_text(tip)).clicked()
 }
 
+/// The width the strip keeps free for the "b-tec Built" mark and, when it is showing, the Update button.
+pub(crate) fn reserved_width(app: &PdfCraftApp, ui: &mut egui::Ui) -> f32 {
+    let t = theme::Tokens::get(ui.ctx());
+    let measure = |text: &str, font: egui::FontId| ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, t.text).size().x);
+    let brand = measure(tl!("b-tec Built"), theme::medium(12.0)) + 8.0 + 4.0;
+    let update = if app.update_button_shown() { measure(tl!("Update"), theme::semibold(12.5)) + 38.0 + 4.0 } else { 0.0 };
+    brand + update
+}
+
 /// The "b-tec Built" mark beside it, linking to the BDF page on b-tec's site. Returns whether it was clicked.
 pub(crate) fn brand_link(ui: &mut egui::Ui) -> bool {
     let t = theme::Tokens::get(ui.ctx());

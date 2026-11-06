@@ -1,0 +1,41 @@
+﻿ok   the extracted folder runs as is (portable.txt present)
+ok   bdf-cli reports 0.8.0 (bdf-cli 0.8.0
+Source:  https://github.com/btecme/bdf
+Issues:  https://github.com/btecme/bdf/issues)
+ok   a managed dev copy with a trust key and nothing on offer
+ok   package contains bdf.exe
+ok   package contains bdf-cli.exe
+ok   package contains bdf-worker.exe
+ok   package contains bdf-updater.exe
+ok   package contains portable.txt
+ok   package contains LICENSE-MIT
+ok   package contains NOTICE
+ok   package contains README.txt
+ok   package contains bdf-package.json
+ok   the package ships no user data
+ok   a feed at the same version offers nothing
+ok   check finds 0.8.1
+ok   download verifies the package
+ok   apply hands over to the updater
+ok   the updater reports "updated"
+ok   bdf-cli now reports 0.8.1
+ok   BDFData, recovery file and the user file are byte-identical after update 1
+ok   the previous version is kept (BDFPrevious)
+ok   the installed list is 0.8.1
+ok   second successive upgrade: 0.8.2
+ok   user data is byte-identical after update 2
+ok   BDFPrevious now holds 0.8.1
+ok   rollback returns to 0.8.1
+ok   user data is byte-identical after rollback
+ok   a tampered package fails verification and is discarded
+ok   no tampered package is left to install
+ok   a release with a forged signature is rejected
+ok   and nothing is offered
+ok   a release whose signed information was altered is rejected
+ok   an older release in the feed is rejected, not offered
+ok   offline: the offer found earlier is still shown
+ok   offline: a manual check fails cleanly
+ok   offline: opening and rendering a PDF still works
+ok   while a CLI job runs, the update waits: nothing replaced, the job is not ended
+ok   once the job finished, the update applied
+ok   a copy without its package list says it cannot update itself

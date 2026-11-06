@@ -4033,6 +4033,7 @@ name = "pdfcraft-update"
 version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
+ "getrandom 0.4.3",
  "log",
  "p256",
  "rustls-native-certs",

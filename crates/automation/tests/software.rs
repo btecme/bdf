@@ -113,7 +113,7 @@ fn status_tools_work_without_any_authorisation_and_change_nothing() {
     assert_eq!(status["dev_build"], true);
     assert!(status["update_available"].is_null());
     let win = json_of(a.call("windows_integration_status", &json!({})).unwrap());
-    assert_eq!(win["registered"].as_bool().is_some(), true);
+    assert!(win["registered"].as_bool().is_some());
     assert!(win["summary"].as_str().is_some_and(|s| !s.is_empty()));
     assert_eq!(std::fs::read_dir(&app).unwrap().count(), before, "status created nothing in the copy");
 }

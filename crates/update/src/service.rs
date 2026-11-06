@@ -344,6 +344,7 @@ pub fn app_dir_of(exe: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(all(test, feature = "net"))]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code; clippy only exempts a plain `cfg(test)` module
 mod tests {
     use super::*;
     use crate::Channel;
