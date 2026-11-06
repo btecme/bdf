@@ -77,7 +77,30 @@ with the version, the release notes, a "development build" label and **Download 
 
 ## 5. Gates
 
-(filled in at the end of the work: see the pull request)
+Run locally on the final source (each gate is the repository's own command):
+
+* `cargo fmt --check`: clean.
+* `cargo clippy -D warnings --all-targets` on `pdfcraft-update`, `pdfcraft-updater`, `pdfcraft-platform`, `pdfcraft-automation`,
+  `pdfcraft-engine`, `pdfcraft-ui-egui`, `pdfcraft`, `pdfcraft-cli`, `xtask`: clean.
+* `cargo xtask layers`: 39 crates, no violations (`update` is L7 with sideways edges only from `ui-egui` and `automation`;
+  `updater` is an exempt app). `cargo xtask assets`: ok (the 21 catalogue hashes updated). `cargo xtask parity`: ok after two
+  evidence repairs: `view.check-for-updates` now cites the new tests, and `view.theme-system` cited a test renamed in PR #15
+  (so that entry was already stale on `main`). `cargo xtask wasm`: ok (`pdfcraft-update` needed the same
+  `getrandom/wasm_js` setting as `pdfcraft-sign`).
+* Scoped test sweeps with `--no-fail-fast`: update, updater, platform, automation, engine, cli, xtask: no failure;
+  `pdfcraft-ui-egui` and `pdfcraft` (every target): no failure after two repairs described below.
+* Not run locally: `cargo xtask deny` and the full workspace sweep (CI's job).
+
+Existing tests that had to change, and why:
+
+* `automation/tests/automation.rs`: the default MCP server listed every tool; it now lists every tool except the ones that need
+  the software authorisation (`listed_count()`).
+* `ui-egui/tests/ui_group/links.rs`: the title bar now carries a "b-tec Built" mark (2 matches with the About note open, 1 on
+  the home screen), and `BTEC_LINKS` has a third link (the BDF page).
+* `ui-egui/tests/ui_group/updates.rs`: ported from the old GitHub-API `UpdateSource` to the new host; the "no check at start"
+  test became "with automatic checks off nothing is asked until the user checks" (automatic checks are now on by default).
+* `ui-egui/tests/ui.rs` (tab strip widths): passes unchanged once the strip reserves exactly the width of the mark and the
+  Update button instead of a fixed margin.
 
 ## 6. Decisions made (routine, reversible)
 
