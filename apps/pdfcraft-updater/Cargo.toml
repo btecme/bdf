@@ -23,9 +23,9 @@ winresource = "0.1"
 [dependencies]
 # Verification, staging, the journaled replacement and recovery. No network feature: this program never
 # connects to anything.
-pdfcraft-update = { path = "../../crates/update", version = "0.7.0" }
+pdfcraft-update = { path = "../../crates/update", version = "0.8.0" }
 
 [dev-dependencies]
 # Test signing key and package fixtures (never enabled in a build of the product).
-pdfcraft-update = { path = "../../crates/update", version = "0.7.0", features = ["testing"] }
+pdfcraft-update = { path = "../../crates/update", version = "0.8.0", features = ["testing"] }
 tempfile = "3"
