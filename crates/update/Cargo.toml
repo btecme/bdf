@@ -1,0 +1,42 @@
+[package]
+name = "pdfcraft-update"
+description = "BDF's signed portable updates: trust root, signed manifest, package verification, staged replacement with rollback, and the update state (BUILD-018)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# The HTTPS transport (ureq over rustls with the operating system's trusted roots). The
+# verification, staging and replacement code needs no network and is built without it, which is
+# what the small `bdf-updater` helper does.
+net = ["dep:ureq", "dep:rustls-native-certs"]
+# Signing keys, package builders and installed-copy fixtures for tests of this crate and of the helper. Never a
+# default feature and never enabled by a build of the product.
+testing = []
+
+[dependencies]
+# SHA-256 of files and of the signed bytes; already in the tree.
+sha2 = "0.11"
+# ECDSA P-256 verification of the signed release manifest; already in the tree through pdfcraft-sign.
+# Verification only: no signing key ever enters the product (`cargo xtask update-sign` signs).
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The release envelope carries the signed manifest as base64 (already in the tree).
+base64 = "0.22"
+log = { workspace = true }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"], optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# Safe Win32 bindings, already in the tree (pdfcraft-platform): `MoveFileEx`-style renames are plain std,
+# this is only for waiting on another process by id.
+winsafe = { version = "0.0.29", default-features = false, features = ["kernel"] }
+
+[dev-dependencies]
+tempfile = "3"
