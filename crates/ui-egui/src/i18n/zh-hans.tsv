@@ -2320,3 +2320,24 @@ animation effects	Off	关
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	由 b-tec 打造，是面向编程智能体时代、以智能体优先的 PDF 应用。原因见我们的第一性原理。
 	b-tec website	b-tec 网站
 	b-tec first principles	b-tec 第一性原理
+	Update to BDF {v}	更新到 BDF {v}
+	Downloading and checking the update…	正在下载并检查更新…
+	Couldn't update: {e}	无法更新：{e}
+	You have version {c}.	您当前的版本是 {c}。
+	Releases page	发布页面
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF 会询问未保存的内容，然后关闭、更新并重新打开您的文档。您的设置会保留。
+	Close BDF and update	关闭 BDF 并更新
+	Download update	下载更新
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	此版本无法验证更新，因此不会安装任何更新。请从发布页面获取最新的便携版压缩包。
+	Update postponed. Choose Update again when you are ready.	更新已推迟。准备好后请再次选择“更新”。
+	Check for updates automatically	自动检查更新
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	在后台查询 BDF 的发布源。检查失败绝不会打断您的工作。
+	Windows integration	Windows 集成
+	Refresh Windows integration	刷新 Windows 集成
+	Make BDF my default PDF app	将 BDF 设为默认 PDF 应用
+	Remove Windows integration	移除 Windows 集成
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF 已注册。要将其设为默认，请在 Windows 的“默认应用”中选择它。
+	Windows integration removed. Other apps' settings were not touched.	已移除 Windows 集成。其他应用的设置未受影响。
+	Development build: updates come from a test feed.	开发版：更新来自测试源。
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	更新仅来自 BDF 的已签名发布。不会发送任何关于您或您文档的信息。
+	b-tec Built: BDF	b-tec Built: BDF

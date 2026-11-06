@@ -877,6 +877,10 @@ impl PdfCraftApp {
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
+        // An update the person asked for starts its helper as BDF closes; if it cannot start, BDF stays open.
+        if !self.launch_pending_update() {
+            return;
+        }
         self.allow_quit = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }

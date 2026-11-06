@@ -2600,3 +2600,24 @@ key	Space	Tarpas
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	Sukūrė b-tec kaip PDF programą, kurioje pirmiausia galvojama apie agentus, programavimo agentų amžiui. Kodėl, paaiškina mūsų pagrindiniai principai.
 	b-tec website	b-tec svetainė
 	b-tec first principles	b-tec pagrindiniai principai
+	Update to BDF {v}	Atnaujinti į BDF {v}
+	Downloading and checking the update…	Atnaujinimas atsisiunčiamas ir tikrinamas…
+	Couldn't update: {e}	Atnaujinti nepavyko: {e}
+	You have version {c}.	Turite versiją {c}.
+	Releases page	Versijų puslapis
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF paklaus apie neįrašytus pakeitimus, užsidarys, atsinaujins ir vėl atvers jūsų dokumentus. Jūsų nustatymai išsaugomi.
+	Close BDF and update	Uždaryti BDF ir atnaujinti
+	Download update	Atsisiųsti atnaujinimą
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Ši versija negali tikrinti atnaujinimų, todėl jų neįdiegs. Naujausią nešiojamąjį paketą atsisiųskite versijų puslapyje.
+	Update postponed. Choose Update again when you are ready.	Atnaujinimas atidėtas. Kai būsite pasiruošę, dar kartą pasirinkite Atnaujinti.
+	Check for updates automatically	Atnaujinimų ieškoti automatiškai
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	Fone teiraujasi BDF leidimų kanalo. Nepavykęs patikrinimas niekada nepertraukia jūsų darbo.
+	Windows integration	Integracija su Windows
+	Refresh Windows integration	Atnaujinti integraciją su Windows
+	Make BDF my default PDF app	Padaryti BDF numatytąja PDF programa
+	Remove Windows integration	Pašalinti integraciją su Windows
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF užregistruotas. Pasirinkite jį Windows skiltyje Numatytosios programos, kad taptų numatytąja.
+	Windows integration removed. Other apps' settings were not touched.	Integracija su Windows pašalinta. Kitų programų nustatymai nepakeisti.
+	Development build: updates come from a test feed.	Kūrimo versija: atnaujinimai gaunami iš bandomojo kanalo.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Atnaujinimai gaunami tik iš pasirašytų BDF leidimų. Nieko apie jus ar jūsų dokumentus nesiunčiama.
+	b-tec Built: BDF	b-tec Built: BDF

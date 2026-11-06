@@ -2265,3 +2265,24 @@ animation effects	Off	ఆఫ్
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	కోడింగ్ ఏజెంట్ల యుగం కోసం b-tec దీన్ని ఏజెంట్-ఫస్ట్ PDF యాప్‌గా రూపొందించింది. ఎందుకో మా మొదటి సూత్రాలు వివరిస్తాయి.
 	b-tec website	b-tec వెబ్‌సైట్
 	b-tec first principles	b-tec మొదటి సూత్రాలు
+	Update to BDF {v}	BDF {v}కి అప్‌డేట్ చేయండి
+	Downloading and checking the update…	అప్‌డేట్‌ను డౌన్‌లోడ్ చేసి తనిఖీ చేస్తోంది…
+	Couldn't update: {e}	అప్‌డేట్ చేయడం సాధ్యం కాలేదు: {e}
+	You have version {c}.	మీ వద్ద వెర్షన్ {c} ఉంది.
+	Releases page	విడుదలల పేజీ
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF సేవ్ చేయని మార్పుల గురించి అడుగుతుంది, మూసివేసి, అప్‌డేట్ అయి, మీ పత్రాలను మళ్లీ తెరుస్తుంది. మీ సెట్టింగ్‌లు అలాగే ఉంటాయి.
+	Close BDF and update	BDF మూసివేసి అప్‌డేట్ చేయండి
+	Download update	అప్‌డేట్‌ను డౌన్‌లోడ్ చేయండి
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	ఈ బిల్డ్ అప్‌డేట్‌లను ధృవీకరించలేదు, కాబట్టి ఏదీ ఇన్‌స్టాల్ చేయదు. తాజా పోర్టబుల్ ప్యాకేజీని విడుదలల పేజీ నుండి పొందండి.
+	Update postponed. Choose Update again when you are ready.	అప్‌డేట్ వాయిదా పడింది. మీరు సిద్ధమైనప్పుడు మళ్లీ అప్‌డేట్ ఎంచుకోండి.
+	Check for updates automatically	అప్‌డేట్‌లను ఆటోమేటిక్‌గా తనిఖీ చేయండి
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	నేపథ్యంలో BDF విడుదల ఫీడ్‌ను అడుగుతుంది. విఫలమైన తనిఖీ మీ పనిని ఎప్పుడూ అడ్డుకోదు.
+	Windows integration	Windows ఇంటిగ్రేషన్
+	Refresh Windows integration	Windows ఇంటిగ్రేషన్‌ను రిఫ్రెష్ చేయండి
+	Make BDF my default PDF app	BDFని నా డిఫాల్ట్ PDF యాప్‌గా చేయండి
+	Remove Windows integration	Windows ఇంటిగ్రేషన్‌ను తొలగించండి
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF నమోదైంది. దీన్ని డిఫాల్ట్‌గా చేయడానికి Windowsలోని డిఫాల్ట్ యాప్‌లలో ఎంచుకోండి.
+	Windows integration removed. Other apps' settings were not touched.	Windows ఇంటిగ్రేషన్ తొలగించబడింది. ఇతర యాప్‌ల సెట్టింగ్‌లు మార్చబడలేదు.
+	Development build: updates come from a test feed.	డెవలప్‌మెంట్ బిల్డ్: అప్‌డేట్‌లు టెస్ట్ ఫీడ్ నుండి వస్తాయి.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	అప్‌డేట్‌లు BDF సంతకం చేసిన విడుదలల నుండి మాత్రమే వస్తాయి. మీ గురించి లేదా మీ పత్రాల గురించి ఏదీ పంపబడదు.
+	b-tec Built: BDF	b-tec Built: BDF

@@ -1,148 +1,52 @@
-//! Asks GitHub for the latest BDF release (Help ▸ Check for updates, issue #28).
+//! The desktop app's side of updates (BUILD-018): the [`UpdateHost`] the window uses, over the shared updater
+//! service. The window never touches the network; this is the only place that does, through the signed release
+//! feed in `pdfcraft-update` (HTTPS only, the operating system's certificates, every answer verified).
 
-use std::time::Duration;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use pdfcraft_ui_egui::updates::{RELEASES_PAGE, Release};
+use pdfcraft_ui_egui::updates::{LastResult, Status, UpdateHost};
+use pdfcraft_update::service::Updater;
 
-const LATEST: &str = "https://api.github.com/repos/btecme/bdf/releases/latest";
-
-/// What the update check says when BDF has published no release yet. It never offers anything
-/// from another project in its place.
-const NO_RELEASE: &str = "no BDF release has been published yet";
-
-/// The latest release. The answer is untrusted: its size is capped, and only a page under
-/// [`RELEASES_PAGE`] is ever offered for download (anything else falls back to that list).
-pub fn latest_release() -> Result<Release, String> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(10)))
-        .tls_config(ureq::tls::TlsConfig::builder().root_certs(os_roots()?).build())
-        .build()
-        .new_agent();
-    let mut response = agent
-        .get(LATEST)
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", concat!("BDF/", env!("CARGO_PKG_VERSION")))
-        // Read error statuses ourselves: a 403 from GitHub usually means its anonymous
-        // rate limit ran out, and the retry time rides along in a response header.
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .call()
-        .map_err(|e| format!("couldn't reach GitHub ({e})"))?;
-    let status = response.status().as_u16();
-    if status == 403 {
-        let reset = response.headers().get("x-ratelimit-reset").and_then(|v| v.to_str().ok());
-        return Err(rate_limited(reset, now_unix()));
-    }
-    if status == 404 {
-        // GitHub answers 404 for "latest" while a repository has published no release at all.
-        return Err(NO_RELEASE.into());
-    }
-    if !(200..300).contains(&status) {
-        return Err(format!("couldn't reach GitHub (http status: {status})"));
-    }
-    let body = response.body_mut().with_config().limit(1 << 20).read_to_string().map_err(|e| format!("unreadable answer ({e})"))?;
-    parse(&body)
+struct Host {
+    updater: Updater,
 }
 
-/// The certificate authorities the operating system trusts.
-fn os_roots() -> Result<ureq::tls::RootCerts, String> {
-    let found = rustls_native_certs::load_native_certs();
-    let certs: Vec<ureq::tls::Certificate<'static>> = found.certs.iter().map(|c| ureq::tls::Certificate::from_der(c.as_ref()).to_owned()).collect();
-    if certs.is_empty() {
-        return Err("no trusted certificates found on this system".into());
+impl UpdateHost for Host {
+    fn status(&self) -> Status {
+        self.updater.status()
     }
-    Ok(ureq::tls::RootCerts::new_with_certs(&certs))
-}
 
-/// The current Unix time in seconds (0 when the clock gives nothing usable).
-fn now_unix() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
+    fn check(&self, manual: bool) -> Result<Status, String> {
+        self.updater.check(manual).map_err(|e| e.to_string())
+    }
 
-/// What to tell the user when GitHub answers 403: its anonymous quota (60 checks an hour,
-/// shared by everyone behind the same address) ran out. `reset` is the `x-ratelimit-reset`
-/// header, the Unix time the quota refills; `now` is the current Unix time. Anything
-/// surprising (no header, not a number, already past) falls back to asking for patience.
-fn rate_limited(reset: Option<&str>, now: u64) -> String {
-    const FALLBACK: &str = "GitHub is limiting update checks for now (shared hourly quota); try again later";
-    let wait = reset.and_then(|r| r.trim().parse::<u64>().ok()).and_then(|reset| reset.checked_sub(now)).filter(|&wait| wait > 0);
-    match wait {
-        Some(wait) => {
-            let minutes = wait.div_ceil(60).max(1);
-            let plural = if minutes == 1 { "" } else { "s" };
-            format!("GitHub is limiting update checks for now (shared hourly quota); try again in about {minutes} minute{plural}")
-        }
-        None => FALLBACK.into(),
+    fn download(&self, progress: &mut dyn FnMut(u64, u64) -> bool) -> Result<(), String> {
+        self.updater.prepare(progress).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    fn install(&self, reopen: &[PathBuf]) -> Result<(), String> {
+        self.updater.launch_apply(reopen).map_err(|e| e.to_string())
+    }
+
+    fn take_last_result(&self) -> Option<LastResult> {
+        self.updater.take_last_result()
     }
 }
 
-fn parse(body: &str) -> Result<Release, String> {
-    let v: serde_json::Value = serde_json::from_str(body).map_err(|e| format!("unreadable answer ({e})"))?;
-    let version = v["tag_name"].as_str().filter(|t| !t.is_empty() && t.len() <= 64).ok_or("no release found")?.to_string();
-    let url = v["html_url"]
-        .as_str()
-        .filter(|u| u.strip_prefix(RELEASES_PAGE).is_some_and(|rest| rest.starts_with('/') && !rest.contains(['?', '#', '\\'])))
-        .unwrap_or(RELEASES_PAGE)
-        .to_string();
-    Ok(Release { version, url })
+/// The host for this running copy, or `None` when its folder cannot be determined.
+pub fn host() -> Option<Arc<dyn UpdateHost>> {
+    Updater::for_current_exe().ok().map(|updater| Arc::new(Host { updater }) as Arc<dyn UpdateHost>)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn answers_are_read_and_only_our_release_pages_are_offered() {
-        let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/btecme/bdf/releases/tag/v0.2.0"}"#).unwrap();
-        assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/btecme/bdf/releases/tag/v0.2.0".into() });
-        for elsewhere in [
-            "https://example.com/bdf.exe",
-            "https://github.com/btecme/bdf/releases.evil/x",
-            "https://github.com/storytold/pdfcraft/releases/tag/v0.7.1",
-            "javascript:alert(1)",
-        ] {
-            let r = parse(&format!(r#"{{"tag_name":"v9.9.9","html_url":"{elsewhere}"}}"#)).unwrap();
-            assert_eq!(r.url, RELEASES_PAGE, "{elsewhere}");
-        }
-        assert!(parse(r#"{"message":"Not Found"}"#).is_err());
-        assert!(parse("<html>").is_err());
-    }
-
-    #[test]
-    fn a_release_of_another_project_is_never_offered() {
-        let r = parse(r#"{"tag_name":"v0.7.1","html_url":"https://github.com/storytold/pdfcraft/releases/tag/v0.7.1"}"#).unwrap();
-        assert_eq!(r.url, RELEASES_PAGE);
-        assert_eq!(RELEASES_PAGE, "https://github.com/btecme/bdf/releases");
-        assert!(LATEST.starts_with("https://api.github.com/repos/btecme/bdf/"));
-    }
-
-    #[test]
-    fn rate_limit_messages_name_the_wait() {
-        let limited = "GitHub is limiting update checks for now (shared hourly quota); try again in about 20 minutes";
-        assert_eq!(rate_limited(Some("1800001200"), 1800000000), limited);
-        // Rounds up: 61 seconds out reads as 2 minutes.
-        assert_eq!(
-            rate_limited(Some("1800000061"), 1800000000),
-            "GitHub is limiting update checks for now (shared hourly quota); try again in about 2 minutes"
-        );
-        assert_eq!(
-            rate_limited(Some("1800000060"), 1800000000),
-            "GitHub is limiting update checks for now (shared hourly quota); try again in about 1 minute"
-        );
-        // No header, not a number, or already past: ask for patience instead of a time.
-        let later = "GitHub is limiting update checks for now (shared hourly quota); try again later";
-        for bad in [None, Some(""), Some("soon"), Some("1799999999"), Some("1800000000")] {
-            assert_eq!(rate_limited(bad, 1800000000), later);
-        }
-    }
-
-    /// Live: asks GitHub over TLS with the OS's roots (`cargo test -p pdfcraft -- --ignored`).
-    #[test]
-    #[ignore = "needs network access"]
-    fn github_answers_with_the_latest_release() {
-        let r = latest_release().unwrap();
-        assert!(pdfcraft_ui_egui::updates::is_newer(&r.version, "0.0.0"), "{r:?}");
-        assert!(r.url.starts_with(RELEASES_PAGE), "{r:?}");
+/// Undo an update that was interrupted (a power cut, a killed updater), before anything else runs: the old launcher
+/// is the first file put back. Cheap when nothing was interrupted: one file check, nothing created.
+pub fn recover_interrupted() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let Some(dir) = exe.parent() else { return };
+    match pdfcraft_update::apply::recover(dir) {
+        Ok(pdfcraft_update::apply::Recovery::Nothing | pdfcraft_update::apply::Recovery::Busy) => {}
+        Ok(other) => log::warn!("an interrupted update was dealt with: {other:?}"),
+        Err(e) => log::error!("couldn't undo an interrupted update: {e}"),
     }
 }

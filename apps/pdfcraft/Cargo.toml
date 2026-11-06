@@ -13,10 +13,10 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-# Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
-# trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
-ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
-rustls-native-certs = "0.8"
+# Signed portable updates (BUILD-018): the only place the desktop app reaches the network. HTTPS over rustls with the
+# OS's trusted roots (no bundled root list: webpki-roots and webpki-root-certs are CDLA-licensed), only BDF's own
+# release feed, every answer verified against the key compiled in.
+pdfcraft-update = { workspace = true, features = ["net"] }
 pdfcraft-ui-egui = { workspace = true }
 pdfcraft-platform = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.

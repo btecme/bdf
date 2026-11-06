@@ -2319,3 +2319,24 @@ animation effects	Off	Изключени
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	Създадено от b-tec като PDF приложение, ориентирано първо към агентите, за ерата на агентите за програмиране. Нашите първи принципи обясняват защо.
 	b-tec website	Уебсайт на b-tec
 	b-tec first principles	Първите принципи на b-tec
+	Update to BDF {v}	Актуализиране до BDF {v}
+	Downloading and checking the update…	Изтегляне и проверка на актуализацията…
+	Couldn't update: {e}	Актуализацията не успя: {e}
+	You have version {c}.	Имате версия {c}.
+	Releases page	Страница с версиите
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF ще попита за незапазените промени, ще се затвори, ще се актуализира и ще отвори отново документите ви. Настройките ви се запазват.
+	Close BDF and update	Затваряне на BDF и актуализиране
+	Download update	Изтегляне на актуализацията
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Тази версия не може да проверява актуализации, затова няма да инсталира такива. Изтеглете най-новия преносим пакет от страницата с версиите.
+	Update postponed. Choose Update again when you are ready.	Актуализацията е отложена. Изберете отново Актуализиране, когато сте готови.
+	Check for updates automatically	Автоматична проверка за актуализации
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	Проверява във фонов режим канала за версии на BDF. Неуспешна проверка никога не прекъсва работата ви.
+	Windows integration	Интеграция с Windows
+	Refresh Windows integration	Обновяване на интеграцията с Windows
+	Make BDF my default PDF app	Направи BDF моето приложение по подразбиране за PDF
+	Remove Windows integration	Премахване на интеграцията с Windows
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF е регистриран. Изберете го в „Приложения по подразбиране“ на Windows, за да стане приложение по подразбиране.
+	Windows integration removed. Other apps' settings were not touched.	Интеграцията с Windows е премахната. Настройките на други приложения не са засегнати.
+	Development build: updates come from a test feed.	Версия за разработка: актуализациите идват от тестов канал.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Актуализациите идват само от подписаните версии на BDF. Нищо за вас или документите ви не се изпраща.
+	b-tec Built: BDF	b-tec Built: BDF

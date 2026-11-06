@@ -86,6 +86,10 @@ source and issues: https://github.com/btecme/bdf"
 );
 
 fn main() -> ExitCode {
+    // An update that was interrupted is undone before the command runs (cheap when none was: one file check).
+    if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)) {
+        let _ = pdfcraft_update::apply::recover(&dir);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     // `<command> --help` too; only right after the command, so a later `-h` (a value) still reaches it.
     let command = match args.get(1).map(String::as_str) {

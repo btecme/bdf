@@ -2430,3 +2430,24 @@ animation effects	Off	Vypnuto
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	Vytvořeno společností b-tec jako PDF aplikace s agenty na prvním místě pro věk kódovacích agentů. Proč, vysvětlují naše základní principy.
 	b-tec website	Web b-tec
 	b-tec first principles	Základní principy b-tec
+	Update to BDF {v}	Aktualizovat na BDF {v}
+	Downloading and checking the update…	Stahuje se a kontroluje aktualizace…
+	Couldn't update: {e}	Aktualizace se nezdařila: {e}
+	You have version {c}.	Máte verzi {c}.
+	Releases page	Stránka s verzemi
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF se zeptá na neuložené změny, zavře se, aktualizuje a znovu otevře vaše dokumenty. Vaše nastavení zůstane zachováno.
+	Close BDF and update	Zavřít BDF a aktualizovat
+	Download update	Stáhnout aktualizaci
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Tato verze nemůže ověřovat aktualizace, a proto žádnou nenainstaluje. Stáhněte si nejnovější přenosný balíček ze stránky s verzemi.
+	Update postponed. Choose Update again when you are ready.	Aktualizace odložena. Až budete připraveni, zvolte Aktualizovat znovu.
+	Check for updates automatically	Automaticky vyhledávat aktualizace
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	Na pozadí se dotazuje na kanál verzí BDF. Neúspěšná kontrola nikdy nepřeruší vaši práci.
+	Windows integration	Integrace s Windows
+	Refresh Windows integration	Obnovit integraci s Windows
+	Make BDF my default PDF app	Nastavit BDF jako výchozí aplikaci pro PDF
+	Remove Windows integration	Odebrat integraci s Windows
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF je zaregistrován. Vyberte ho ve Windows v části Výchozí aplikace, aby se stal výchozí.
+	Windows integration removed. Other apps' settings were not touched.	Integrace s Windows odebrána. Nastavení jiných aplikací nebyla změněna.
+	Development build: updates come from a test feed.	Vývojová verze: aktualizace přicházejí z testovacího kanálu.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Aktualizace přicházejí jen z podepsaných verzí BDF. Nic o vás ani o vašich dokumentech se neodesílá.
+	b-tec Built: BDF	b-tec Built: BDF

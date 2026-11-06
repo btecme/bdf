@@ -2357,3 +2357,24 @@ animation effects	Off	Aus
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	Von b-tec als Agent-first-PDF-App für das Zeitalter der Coding-Agenten gebaut. Unsere Grundprinzipien erklären, warum.
 	b-tec website	b-tec-Website
 	b-tec first principles	Grundprinzipien von b-tec
+	Update to BDF {v}	Auf BDF {v} aktualisieren
+	Downloading and checking the update…	Update wird heruntergeladen und geprüft…
+	Couldn't update: {e}	Aktualisierung nicht möglich: {e}
+	You have version {c}.	Du hast Version {c}.
+	Releases page	Seite mit den Versionen
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF fragt nach ungespeicherten Änderungen, schließt sich, aktualisiert und öffnet deine Dokumente wieder. Deine Einstellungen bleiben erhalten.
+	Close BDF and update	BDF schließen und aktualisieren
+	Download update	Update herunterladen
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Diese Version kann Updates nicht prüfen und installiert deshalb keine. Lade das neueste portable Paket von der Versionsseite.
+	Update postponed. Choose Update again when you are ready.	Update verschoben. Wähle Aktualisieren erneut, wenn du bereit bist.
+	Check for updates automatically	Automatisch nach Updates suchen
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	Fragt im Hintergrund den Release-Feed von BDF ab. Eine fehlgeschlagene Prüfung unterbricht nie deine Arbeit.
+	Windows integration	Windows-Integration
+	Refresh Windows integration	Windows-Integration erneuern
+	Make BDF my default PDF app	BDF zu meiner Standard-PDF-App machen
+	Remove Windows integration	Windows-Integration entfernen
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF ist registriert. Wähle es unter „Standard-Apps“ in Windows aus, um es zum Standard zu machen.
+	Windows integration removed. Other apps' settings were not touched.	Windows-Integration entfernt. Die Einstellungen anderer Apps wurden nicht angetastet.
+	Development build: updates come from a test feed.	Entwicklungsversion: Updates kommen aus einem Test-Feed.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Updates kommen nur aus den signierten Veröffentlichungen von BDF. Über dich und deine Dokumente wird nichts gesendet.
+	b-tec Built: BDF	b-tec Built: BDF

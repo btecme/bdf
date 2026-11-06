@@ -15,7 +15,7 @@ Copy the whole folder to move BDF with its settings.
 
 Make BDF your default PDF app (optional)
 ----------------------------------------
-Help > Windows integration > "Make BDF my default PDF app" registers this copy with
+Preferences > Windows integration > "Make BDF my default PDF app" registers this copy with
 Windows for your account only and opens Windows' Default apps page, where you confirm
 the choice. "Remove Windows integration" undoes it. If you move this folder, use
 "Refresh Windows integration" there. A copy that was only extracted never touches the
