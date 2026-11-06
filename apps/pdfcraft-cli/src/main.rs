@@ -34,7 +34,7 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, in
 macro_rules! mcp_usage {
     () => {
         "\
-bdf-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+bdf-cli mcp    [--root DIR] [--compact] [--allow-software]   MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
 bdf-cli mcp    --client NAME [--state-dir DIR]       MCP server limited by a grant (secret in BDF_CLIENT_SECRET): without a
                                                            valid grant it serves help only; with one, what the grant allows
@@ -71,8 +71,11 @@ bdf-cli grant issue --client NAME [--allow CAPS] [--read DIR] [--write DIR] [--t
 bdf-cli grant list|prune [--state-dir DIR]            the grants you have issued; remove revoked and expired ones
 bdf-cli grant revoke <GRANT-ID> [--state-dir DIR]     withdraw a grant (a running service notices at once)
 bdf-cli activity verify|show [--last N] [--state-dir DIR]   check, or print, the record of what clients did
+bdf-cli update  status|check|download|apply|rollback   update BDF (signed releases; apply waits for BDF to close, nothing is ended)
+bdf-cli windows status|register [--open-settings]|unregister|open-settings
+                                                           optional per-user Windows integration; never sets the default PDF app
 bdf-cli tools                                       automation tools and their JSON Schemas
-bdf-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
+bdf-cli run    <tool> [key=value …] [--root DIR] [--out image.png] [--allow-software]
 bdf-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
 ",
     mcp_usage!(),
@@ -105,6 +108,8 @@ fn main() -> ExitCode {
         Some("tools") => tools(),
         Some("run") => run(&args[1..]),
         Some("batch") => batch::run(&args[1..]),
+        Some("update") => software_command("update", &args[1..]),
+        Some("windows") => software_command("windows", &args[1..]),
         Some("grant") => access::grant(&args[1..]),
         Some("activity") => access::activity(&args[1..]),
         Some("ui") => ui(&args[1..]),
@@ -258,6 +263,7 @@ const CHECK_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--json", takes_value: true },
 ];
 const RUN_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--allow-software", takes_value: false },
     OptionSpec { name: "--root", takes_value: true },
     OptionSpec { name: "--script", takes_value: true },
     OptionSpec { name: "--out", takes_value: true },
@@ -266,6 +272,7 @@ const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value:
 
 #[cfg(feature = "mcp")]
 const MCP_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--allow-software", takes_value: false },
     OptionSpec { name: "--root", takes_value: true },
     OptionSpec { name: "--compact", takes_value: false },
     OptionSpec { name: "--client", takes_value: true },
@@ -751,11 +758,43 @@ fn run_child(exe: &Path, file: &Path, dpi: &str, timeout: Duration) -> serde_jso
 // ---- automation --------------------------------------------------------------------------------
 
 fn automation(args: &[String]) -> Result<pdfcraft_automation::Automation, String> {
-    let a = pdfcraft_automation::Automation::new();
+    // The tools that update BDF or register it with Windows need their own switch: --root and document grants never imply it.
+    let a = pdfcraft_automation::Automation::new().with_software_changes(args.iter().any(|a| a == "--allow-software"));
     match flag(args, "--root") {
         Some(root) => a.with_root(root).map_err(|e| format!("--root {root}: {e}")),
         None => Ok(a),
     }
+}
+
+/// `bdf-cli update status|check|download|apply|rollback` and `bdf-cli windows status|register|unregister|open-settings`.
+/// Typed by the person at their own terminal, so the software authorisation is implied; an agent reaches the same tools
+/// through `run` or `mcp` only with `--allow-software`.
+fn software_command(group: &str, args: &[String]) -> Result<(), CliError> {
+    let sub = args.first().map(String::as_str).unwrap_or("status");
+    let (tool, params) = match (group, sub) {
+        ("update", "status") => ("update_status", serde_json::json!({})),
+        ("update", "check") => ("update_check", serde_json::json!({})),
+        ("update", "download") => ("update_download", serde_json::json!({})),
+        ("update", "apply") => ("update_apply", serde_json::json!({})),
+        ("update", "rollback") => ("update_rollback", serde_json::json!({})),
+        ("windows", "status") => ("windows_integration_status", serde_json::json!({})),
+        ("windows", "register") => {
+            ("windows_integration_register", serde_json::json!({ "open_settings": args.iter().any(|a| a == "--open-settings") }))
+        }
+        ("windows", "unregister") => ("windows_integration_remove", serde_json::json!({})),
+        ("windows", "open-settings") => ("windows_open_default_apps", serde_json::json!({})),
+        _ => {
+            let choices = if group == "update" {
+                "status, check, download, apply, rollback"
+            } else {
+                "status, register [--open-settings], unregister, open-settings"
+            };
+            return Err(format!("{group}: unknown subcommand '{sub}' (expected one of: {choices})").into());
+        }
+    };
+    let mut auto = pdfcraft_automation::Automation::new().with_software_changes(true);
+    let content = auto.call(tool, &params).map_err(|e| e.to_string())?;
+    print_output(&auto, content, None)
 }
 
 fn tools() -> Result<(), CliError> {
@@ -791,6 +830,8 @@ fn print_output(auto: &pdfcraft_automation::Automation, content: Vec<pdfcraft_au
 fn run(args: &[String]) -> Result<(), CliError> {
     validate_options("run", args, RUN_OPTIONS)?;
     let mut auto = automation(args)?;
+    // A switch has no operand: take it out so it cannot swallow the tool name.
+    let args: &[String] = &args.iter().filter(|a| *a != "--allow-software").cloned().collect::<Vec<_>>();
     if let Some(script) = flag(args, "--script") {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
         let steps: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| format!("{script}: {e}"))?;
