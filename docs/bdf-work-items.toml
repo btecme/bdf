@@ -345,3 +345,18 @@ touch = ["apps/pdfcraft-web", "crates/ui-egui", "crates/app-service", "packaging
 deliverables = ["Host persistence acknowledgment bound to request/document revision, browser recovery/worker/backpressure and web-app/runtime CI."]
 acceptance = ["Dropped/failed/delayed host saves keep dirty state; obsolete acknowledgments cannot clear newer edits.", "Bounded acquisition/queues and local-first privacy pass actual Edge/Chrome runtime checks."]
 stop_conditions = ["Desktop not qualified: do not make this work part of its critical path."]
+
+[[work_item]]
+id = "BUILD-018"
+title = "Portable deployment, optional Windows integration and signed user-initiated updates"
+status = "pending_review"
+priority = "P1"
+depends_on = ["BUILD-015"]
+prd_milestone = "BDF-05"
+findings = []
+requirements = ["CORE-10"]
+touch = ["crates/update", "apps/pdfcraft-updater", "crates/platform", "crates/automation", "crates/ui-egui", "apps/pdfcraft", "apps/pdfcraft-cli", "xtask", "packaging/windows", "docs"]
+deliverables = ["Portable ZIP with a signed release feed, a verified journaled updater with rollback, a green Update button and the b-tec Built link.", "Optional per-user Windows integration that never sets the default, with removal and refresh.", "update_* and windows_* tools (CLI/MCP) behind a software authorisation separate from document grants.", "Action1 deployment script that verifies the signed release and installs per user profile."]
+acceptance = ["Tampered, older, replayed, unsigned and wrong-key releases never install; BDFData and unsaved work survive; interruption rolls back.", "A build without a signing key refuses every update (fail closed).", "Real-Windows flows (register, user selects default, double-click opens BDF; Local System deployment; standard user) pass on a disposable machine."]
+stop_conditions = ["Production verification would be weakened to pass a demo: stop."]
+decision = "Owner, 2026-11-06: portable ZIP first, Action1 distribution by script, no MSI/Intune/Company Portal. Implemented on feat/build-018-portable-updates (docs/bdf-portable-updates.md); local tests only, no signed release published."

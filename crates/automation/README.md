@@ -75,6 +75,21 @@ its other colours, fonts, values and unknown PDF dictionary keys. `"none"` remov
 or fill colour. Names, rectangles and rotations require the single-field form. Results keep
 `field` for single edits and return `fields` for batches. CLI and MCP use the same tool.
 
+## Software tools: updates and Windows integration (BUILD-018)
+
+`update_status`, `update_check`, `update_download`, `update_apply`, `update_rollback`, `windows_integration_status`,
+`windows_integration_register`, `windows_integration_remove` and `windows_open_default_apps` act on the installed copy of BDF
+and the Windows account, not on documents (`docs/bdf-portable-updates.md`). They have their own authorisation, separate from
+`--root` and from every document grant:
+
+* `update_status` and `windows_integration_status` only read state and are always available.
+* The rest are refused (`not authorised: … --allow-software`) unless the caller was given the software authorisation:
+  `Automation::with_software_changes(true)`, `bdf-cli run … --allow-software`, `bdf-cli mcp … --allow-software`. Typing
+  `bdf-cli update …` or `bdf-cli windows …` yourself implies it. The MCP server lists them only when it has the authorisation.
+* The grant-limited server (`bdf-cli mcp --client`) never lists them; a grant cannot carry them.
+* `update_apply` and `update_rollback` only hand over to the updater, which waits until BDF, the CLI and the worker have closed;
+  nothing is ended and nothing unsaved is saved. `windows_integration_register` never makes BDF the default PDF app.
+
 ## MCP server
 
 **Opt-in only.** Nothing starts it automatically, and it opens no port. It runs while `bdf-cli mcp [--root DIR]` runs, normally launched by an agent from its MCP configuration. It stops when stdin closes. The CLI's `mcp` Cargo feature (on by default) compiles it out entirely when disabled.

@@ -15,6 +15,8 @@
 > packaging scripts, which are unchanged, and the upstream process they were built for, which is not
 > active here.
 
+> **Portable ZIP and signed updates (BUILD-018, 2026-11-06):** the portable package, its signed `bdf-update.json`, the in-app updater and the Action1 deployment script are described in [bdf-portable-updates.md](bdf-portable-updates.md), including the release commands (`cargo xtask update-keygen`, `portable-package`, `update-sign`, `update-verify`) and the owner setup still needed (signing key, release hosting). `release.yml` has not yet been taught to build that package or to set `BDF_UPDATE_PUBKEY`.
+
 ## Upstream process (not active in BDF)
 
 Upstream, every push to the `release` branch ran a workflow that built installers for macOS, Windows,
