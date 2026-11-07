@@ -162,5 +162,8 @@ copy runs. The workflow then asserts the artifact holds exactly the MSI and the 
    code is in place; no secret has been added by this work). A protected `release` environment with a required reviewer is a
    sensible extra.
 2. **Release hosting**: publish releases on `btecme/bdf` (assumed), with the three files above.
-3. **A disposable Windows machine** (Windows Sandbox or a VM, or a standard test account) to run the remaining acceptance flows.
+3. **Two minutes at a Windows 11 desktop** for the one flow a hosted runner cannot do: in Preferences ▸ Windows integration choose
+   *Make BDF my default PDF app*, choose BDF for `.pdf` on the Settings page that opens, and double-click a PDF. The rest of the
+   acceptance flows run on disposable hosted Windows machines by `.github/workflows/qualify-windows.yml` (see
+   `docs/bdf-evidence/BUILD-018.md` section 8).
 4. Optional: an Authenticode certificate for the executables.

@@ -1,14 +1,15 @@
 # BUILD-018 evidence: portable deployment, optional Windows integration, signed user-initiated updates
 
 Status: **implemented 2026-11-06 on `feat/build-018-portable-updates` (version 0.8.0); corrected 2026-11-07 for the independent
-review's findings R18-1 to R18-4 (section 7); tested locally on Windows 11 x64; the hosted result for the head named in the pull
-request is read there, not asserted here; not independently accepted.** A signed release has not been published and no
-production signing key exists. The flows that need a disposable Windows machine were **not run** (sections 4 and 7). Design and
+review's findings R18-1 to R18-4 (section 7); qualified 2026-11-07 on disposable hosted Windows machines (section 8); the hosted
+result for the head named in the pull request is read there, not asserted here; not independently accepted.** A signed release
+has not been published and no production signing key exists. Still not shown: the default-app choice and PDF double-click on a
+Windows 11 desktop, a real power cut, production signing (section 8). Design and
 operator instructions: [bdf-portable-updates.md](../bdf-portable-updates.md).
 
 Machine: Windows 11 Pro 22631, standard (non-elevated) token, Rust 1.99.0, two build jobs. Synthetic documents and packages only;
 no sensitive PDF was used. Nothing outside a temp folder, the repository and a scratch registry area was changed; the real
-`HKCU\Software\Classes\BDF.Portable.Document` and `Software\BDF\PortableRegistration` keys were checked absent before and after.
+`HKCU\Software\Classes\BDF.Portable.Document` and `Software\BDF\PortableRegistration` keys were checked absent before and after (**corrected in section 8:** those are not all the keys registration writes, and a stale registration was found on this machine).
 
 ## 1. What was run
 
@@ -210,3 +211,76 @@ check advisories licenses bans sources` passes locally (the new `nix` transitive
 * Production signing: no key, no `BDF_UPDATE_PUBKEY` variable, no `BDF_UPDATE_SIGNING_KEY` secret, no release hosting. The
   signing step and the trust path were exercised only with throwaway keys.
 * Translations of the four new strings (machine-written, unreviewed), MSI interplay, other operating systems.
+
+## 8. Release qualification on disposable Windows machines (2026-11-07)
+
+The flows that section 4 and section 7 listed as needing a disposable Windows machine were run on **GitHub-hosted Windows runners**,
+which are thrown away after every job (workflow `qualify-windows.yml`, `packaging/windows/qualify-windows.ps1`, which refuses to run
+anywhere that is not a disposable machine). The programs under test were built in that run with a throwaway signing key made in the
+run (never uploaded; the packages are signed with it and only the public key travels), channel `dev`, loopback feed only. Nothing was
+signed with a real key, published or deployed. **Final run: [42409280729](https://github.com/btecme/bdf/actions/runs/42409280729)
+at `f678020c`, a fresh build and every stage, all passing; the other five workflows on that commit (CI, FreeBSD, Windows ARM64,
+Package, Packaging lint) also passed.** Windows Server 2025 build 26100 (x64) unless said; the owner's Windows 11 22631 machine was
+used for the same window flow locally (non-elevated, on a throwaway copy).
+
+### What the qualification overturned, and what was changed
+
+| Finding | Evidence | Change |
+|---|---|---|
+| **`-SkipLoggedOnUsers` closes the file-system race** (said in section 7) was wrong, and the race was not small | `test-deploy-race.ps1`: the previous in-place SYSTEM script was steered through a swapped junction (1 to 3 of 10 trials locally; 2 of 10 in one hosted run with a real second process running as a standard user; 0 of 10 in the final run: a race, not a certainty) | The switch is documented as not a security control. Local System no longer works in a folder the person can change: it publishes the verified release and the install runs as the person |
+| **A no-password task for another person cannot be started from Local System** (the first fix) | Hosted probe (`qualify-probe-system.ps1`): `Register-ScheduledTask` for another user with S4U is refused ("Access is denied") with or without the batch-logon right; .NET's S4U needs a domain; a task for the **Users group** runs in the session of whoever is signed in | The mechanism is a sign-in task for the Users group; signed-in people get it at once (and are waited for), the rest are **pending**, not failed |
+| An interrupted deployment lost data | `test-deploy-interrupt.ps1` ends the script at a swept series of moments: the previous script failed 10 of 10 (the displaced version was thrown away on resume; a half-done copy could be reported current) | A marker, a resumable swap by hash, the previous version kept whole; a first install that was interrupted is resumed; one that failed cleans up (it used to leave a folder every later run refused) |
+| Documents were not reopened after an update | Real window: after Don't save the restarted BDF opened nothing | The list is taken when the install begins (`updates.rs`; the test fails without the fix) |
+| A first install on a full volume left a folder later runs refused | Hosted disk stage | The folder it made goes again; tested on a full volume |
+| The update button's accessible name is its tooltip, not "Update"/"Test update" | Control-channel inspection | **Not fixed here**; handed off as a separate task |
+
+### Shown (hosted, Windows Server 2025 x64 unless noted)
+
+* **Local System deployment** (40 checks): `-WhatIf` registers nothing; the release is published to `C:\ProgramData\BDF\release\...` and
+  a sign-in task for the Users group is registered with a logon trigger; the signed-in account got its copy at once, in its own
+  session, and reported back; people not signed in are pending; the Default profile reaches a user created later, who owns the files
+  and updates themselves from the feed; standard users running the task's exact command line install into their own folder, own the
+  files, can modify them, and cannot write into another person's copy; a standard person can read the published release but not
+  change, delete or add to it, and cannot change another person's result file; a rerun costs a signature check; a person not among
+  `-Users` is left alone; a running copy is skipped (exit 4) then updated at the next sign-in with the old version kept in
+  `BDFPrevious`; a person's install ended part-way is finished by the next sign-in; the Local System run itself ended part-way leaves
+  nothing broken.
+* **Boundary** (real second process as the person swapping a folder for a junction, 10 trials each): previous script 0 to 2 of 10
+  steered through the link (informational); **current script 0 of 10 touched the administrators-only folder**, 3 or 4 of 10 updates
+  completed under attack, the others failed safely and rolled back, and a normal sign-in afterwards left a complete 0.8.2.
+* **Interruption** (real process kills at a swept series of moments, in the build job): deployment script, update over an installed copy
+  and first installs, always completed by the next run with BDFData untouched and the displaced version whole; the real
+  `bdf-updater`, 14 kills (locally: 8 rolled back exactly, 6 finished, 0 mixed).
+* **Full volume** (a 900 MB virtual disk; 22 checks): a download with no room fails with "the disk is full", leaves nothing and is never
+  offered as ready; an update with room for the download but not the replacement leaves the program, the data and the journal exactly
+  as they were; BDF starts and stays up on a completely full volume; the deployment script fails an update and a first install on a
+  nearly full volume cleanly and succeeds once there is room. Observed, not changed: when the disk is so full that even the result file
+  cannot be written, the person is told nothing after the failed update (the helper restarts BDF); and the helper's restart leaves a BDF
+  running from the folder, which a later update correctly waits for and never ends.
+* **The real window** (Server 2025, and the owner's Windows 11 locally): the test button says it is a test offer; Later changes nothing;
+  Download verifies; Close BDF and update asks about the unsaved work; Cancel withdraws the update and leaves BDF, the document and
+  its unsaved change as they were; Don't save: BDF closes, the program is replaced, BDF starts again from the same folder with the
+  document's file open, reports the new version; BDFData byte for byte as before; BDFPrevious holds the old version.
+* **Windows integration** (Server 2025 and Windows 11 Enterprise 26200 ARM64): registering is visible to Windows (`BDF.Portable.Document` is
+  offered for `.pdf`, `BDF Portable` is under RegisteredApplications); unregistering removes it; the real Settings page for the
+  registered app opens and lists `.pdf` with its current default.
+
+### Not shown
+
+* **The default-app choice and a PDF double-click.** Neither UI Automation's invoke nor a real mouse click on the `.pdf` row opened the
+  chooser on a hosted runner (its session does not appear to deliver OS-level input), so the choice, and the double-click that follows
+  it, still need a person on a Windows 11 desktop (about two minutes; steps in `docs/bdf-portable-updates.md`).
+* A real **power cut** (a process kill is not one), a second real **interactive sign-in** firing the sign-in trigger (the trigger was
+  registered and the task was started in the signed-in session; standard users were exercised by running the task's command line as
+  them), the window flow on **ARM64** (the feed server did not start there; integration was run), the **MSI** interplay, other
+  operating systems, and **production signing** (no key, no variable, no secret).
+* The four translated strings added in round 1 and the earlier 21 are machine-written and unreviewed; this round added no strings.
+
+### Found on the owner's machine (not changed)
+
+`HKCU` on the machine these builds were made on holds a complete BDF registration (`BDF Portable`, `BDF.Portable.Document`,
+`Applications\bdf.exe`, `.pdf` OpenWithProgids) pointing at a folder that no longer exists (`...\Temp\.tmp1tPr9G\app\bdf.exe`). It is
+not a default (the default is another application). Section "Machine" above said the real keys were checked absent before and after;
+that check named other keys than the ones registration writes, so it did not show this. No test or script in the repository registers an
+existing program against the real registry, and the platform tests include one that checks they do not, so the source is unexplained.
+`bdf-cli windows unregister` from any current copy removes it; the owner's registry was left alone.
