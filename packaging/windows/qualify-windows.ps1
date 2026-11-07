@@ -158,7 +158,7 @@ function Start-AsUser($User, [string]$ScriptPath, [string[]]$Arguments = @(), [s
 function Run-AsUser($User, [string]$ScriptText, [int]$TimeoutSec = 300) {
     $id = [guid]::NewGuid().ToString('N').Substring(0, 8)
     $script = Join-Path $Share "run-$id.ps1"
-    Set-Content -Path $script -Value ("$ErrorActionPreference = 'Stop'`n" + $ScriptText) -Encoding utf8
+    Set-Content -Path $script -Value ("`$ErrorActionPreference = 'Stop'`n" + $ScriptText) -Encoding utf8
     $out = Join-Path $Drop "out-$id.txt"
     New-Item -ItemType File -Path $out -Force | Out-Null
     & icacls.exe $out /grant '*S-1-5-32-545:(M)' /Q | Out-Null
@@ -324,6 +324,7 @@ function Stage-System {
     }
     Scenario 'The person''s own install is stopped part-way: the next sign-in finishes it' {
         $q6 = New-TestUser 'bdfq6'
+        [void](Deploy-AsSystem $Zip1 $Rel1 @())     # the task for everyone, at the newest release
         $task = Get-ScheduledTask -TaskName $ApplyTask -TaskPath '\BDF\'
         $p = Start-Process -FilePath $PS -Credential $q6.Cred -WorkingDirectory (Join-Path $env:SystemRoot 'System32') -ArgumentList $task.Actions[0].Arguments -PassThru -WindowStyle Hidden -LoadUserProfile
         $null = $p.Handle
@@ -357,6 +358,7 @@ function Stage-Boundary {
     $key = Join-Path $env:TEMP 'bdfq-boundary.key'
     $keygen = & cargo run --locked -q -p xtask -- update-keygen --out $key | Out-String
     $bpub = (($keygen -split "`n" | Where-Object { $_ -like 'public key*' }) -replace '.*: ', '').Trim()
+    $script:Pub = $bpub      # Deploy-AsSystem passes this key to the script under test
     $models = Join-Path $env:TEMP 'bdfq-models'; New-Item -ItemType Directory -Path (Join-Path $models 'models') -Force | Out-Null
     $bin = Join-Path $env:TEMP 'bdfq-fakebin'; New-Item -ItemType Directory -Path $bin -Force | Out-Null
     function Make-Rel([string]$v) {
@@ -532,8 +534,15 @@ function Stage-Disk {
             $st = BdfCli $app @('update', 'status')
             Info "the copy still starts: $($st.Code -eq 0)"
             [void](Fill-To $letter 400MB)
+            $st2 = BdfCli $app @('update', 'status')
             $ap = BdfCli $app @('update', 'apply')
             $end = (Get-Date).AddSeconds(120); while ((Get-Date) -lt $end -and (Version-Of $app) -ne $V1) { Start-Sleep -Milliseconds 500 }
+            if ((Version-Of $app) -ne $V1) {
+                Say "      status before apply: $(($st2.Out -replace '\s+', ' ').Trim())"
+                Say "      apply (exit $($ap.Code)): $(($ap.Out -replace '\s+', ' ').Trim())"
+                Say "      BDFUpdate holds: $((@(Get-ChildItem "$app\BDFUpdate" -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($app.Length + 1) }) | Select-Object -First 12) -join ', ')"
+                Say "      last result: $((Get-Content "$app\BDFUpdate\last-result.json" -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ')"
+            }
             Check ((Version-Of $app) -eq $V1) 'with room again the update completes'
         }
         Scenario 'A completely full volume' {
@@ -577,6 +586,7 @@ function Stage-Disk {
             Check ((-not (Test-Path $wapp)) -or @(Get-ChildItem $wapp -Force).Count -eq 0) 'and no half-made folder that a later run would refuse as not a managed copy'
             [void](Fill-To $letter 400MB)
             $r = Deploy-AsSystem $Zip1 $Rel1 @('-UsersRoot', $users, '-Users', 'wendy')
+            if (-not ($r.Code -eq 0 -and (Version-Of $wapp) -eq $V1)) { Say (($r.Log -split "`n" | ForEach-Object { "      $_" } | Out-String).TrimEnd()); Say "      folder holds: $((@(Get-ChildItem $wapp -Force -ErrorAction SilentlyContinue | ForEach-Object Name)) -join ', ')" }
             Check ($r.Code -eq 0 -and (Version-Of $wapp) -eq $V1) 'with room again the same person is installed'
         }
     } finally { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
@@ -675,6 +685,22 @@ function Stage-Desktop {
                 Info "names with BDF in them that appeared after choosing the row: $($newBdf -join ' ;; ')"
                 $newAll = @($afterNames | Where-Object { $beforeNames -notcontains $_ })
                 Info ("all $($newAll.Count) new names after choosing the row: " + (($newAll | Select-Object -First 40) -join ' ;; '))
+                if ($newAll.Count -eq 0) {
+                    # Invoke did nothing visible: click the row the way a person's mouse does.
+                    try {
+                        Add-Type -Namespace BdfQ -Name Mouse -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, System.UIntPtr e);'
+                        $rect = $rows[0].Current.BoundingRectangle
+                        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+                        Start-Sleep -Milliseconds 500
+                        [BdfQ.Mouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 100; [BdfQ.Mouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+                        Start-Sleep -Seconds 4
+                        Shot-Desktop 'default-app-2b-after-click'
+                        $afterNames = @(Dump-Elements 'default-app-chooser-elements.txt')
+                        $newAll = @($afterNames | Where-Object { $beforeNames -notcontains $_ })
+                        $newBdf = @($newAll | Where-Object { $_ -match 'BDF' })
+                        Info ("after a real mouse click at ({0},{1}): {2} new names; with BDF: {3}; first ones: {4}" -f [int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2), $newAll.Count, ($newBdf -join ' ;; '), (($newAll | Select-Object -First 40) -join ' ;; '))
+                    } catch { Info "the real click failed: $($_.Exception.Message)" }
+                }
                 $choice = $null
                 foreach ($e in $ae::RootElement.FindAll($ts::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
                     try { if ($e.Current.Name -match 'BDF' -and $e.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window -and $beforeNames -notcontains ('{0} | {1}' -f $e.Current.ControlType.ProgrammaticName, $e.Current.Name)) { $choice = $e; break } } catch { }
