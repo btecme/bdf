@@ -158,7 +158,7 @@ function Start-AsUser($User, [string]$ScriptPath, [string[]]$Arguments = @(), [s
 function Run-AsUser($User, [string]$ScriptText, [int]$TimeoutSec = 300) {
     $id = [guid]::NewGuid().ToString('N').Substring(0, 8)
     $script = Join-Path $Share "run-$id.ps1"
-    Set-Content -Path $script -Value $ScriptText -Encoding utf8
+    Set-Content -Path $script -Value ("$ErrorActionPreference = 'Stop'`n" + $ScriptText) -Encoding utf8
     $out = Join-Path $Drop "out-$id.txt"
     New-Item -ItemType File -Path $out -Force | Out-Null
     & icacls.exe $out /grant '*S-1-5-32-545:(M)' /Q | Out-Null
@@ -197,10 +197,26 @@ function Task-Exists { [bool](Get-ScheduledTask -TaskName $ApplyTask -TaskPath '
 function Run-TaskAs($User, [int]$TimeoutSec = 600) {
     $task = Get-ScheduledTask -TaskName $ApplyTask -TaskPath '\BDF\'
     $argLine = $task.Actions[0].Arguments
-    $p = Start-Process -FilePath $PS -Credential $User.Cred -WorkingDirectory (Join-Path $env:SystemRoot 'System32') -ArgumentList $argLine -PassThru -WindowStyle Hidden -LoadUserProfile
+    # A real sign-in gives the task the person's environment; a process started with their credential on a runner may not, so it is set.
+    $id = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $wrapper = Join-Path $Share "task-$id.ps1"
+    $wrapperText = @(
+        'param([string]$ProfilePath, [string]$Name, [string]$ArgLine)',
+        '$env:USERPROFILE = $ProfilePath; $env:USERNAME = $Name; $env:LOCALAPPDATA = Join-Path $ProfilePath ''AppData\Local''',
+        '$p = Start-Process -FilePath (Join-Path $env:SystemRoot ''System32\WindowsPowerShell\v1.0\powershell.exe'') -ArgumentList $ArgLine -Wait -PassThru -NoNewWindow',
+        'exit $p.ExitCode')
+    Set-Content -Path $wrapper -Encoding utf8 -Value $wrapperText
+    $out = Join-Path $Drop "task-$id.txt"
+    $wrapArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wrapper`"", '-ProfilePath', "`"$($User.Profile)`"", '-Name', $User.Name, '-ArgLine', ('"' + ($argLine -replace '"', '\"') + '"'))
+    $p = Start-Process -FilePath $PS -Credential $User.Cred -WorkingDirectory (Join-Path $env:SystemRoot 'System32') -ArgumentList $wrapArgs -PassThru -WindowStyle Hidden -LoadUserProfile -RedirectStandardOutput $out -RedirectStandardError "$out.err"
     $null = $p.Handle
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return -1 }
-    $p.ExitCode
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Info "the task as $($User.Name) did not finish in $TimeoutSec s"; return -1 }
+    $code = $p.ExitCode
+    if ($code -ne 0 -and $code -ne 4) {
+        $o = ((Get-Content $out -Raw -ErrorAction SilentlyContinue) + ' ' + (Get-Content "$out.err" -Raw -ErrorAction SilentlyContinue)) -replace '\s+', ' '
+        Info "the task as $($User.Name) exited $code; output: $($o.Trim().Substring(0, [Math]::Min(1500, $o.Trim().Length)))"
+    }
+    $code
 }
 function Result-Of([string]$Name) { $f = "C:\ProgramData\BDF\user-results\$Name.txt"; if (Test-Path $f) { (Get-Content $f -Raw) } else { '' } }
 function Show-Log($r) { Say (($r.Log -split "`n" | ForEach-Object { "      $_" } | Out-String).TrimEnd()) }
@@ -377,7 +393,8 @@ try { if (-not (Test-Path -LiteralPath $dir) -and (Test-Path -LiteralPath $real)
             Get-ChildItem $outside -Force | Remove-Item -Recurse -Force
             foreach ($i in 1..60) { Set-Content -Path (Join-Path $outside ('m{0:000}.bin' -f $i)) -Value "CANARY $i" -Encoding ascii }
             if (Test-Path $u.App) { Remove-Item $u.App -Recurse -Force }
-            [void](Deploy-AsSystem $a.Zip $a.Rel @('-Users', $UserName) $Script)
+            $r0 = Deploy-AsSystem $a.Zip $a.Rel @('-Users', $UserName) $Script
+            if ($AsTask -and -not (Task-Exists)) { Info ("$Label`: the first deployment did not register the task (exit $($r0.Code)): $(($r0.Log -replace '\s+', ' ').Trim())"); break }
             if ($AsTask) { [void](Run-TaskAs $u) }           # the person's sign-in installs the older release
             # the newer release is published; the update is applied while a second process, running as the person, swaps a folder for a junction
             if ($AsTask) { [void](Deploy-AsSystem $b.Zip $b.Rel @('-Users', $UserName) $Script) }
@@ -550,6 +567,17 @@ function Stage-Disk {
             [void](Fill-To $letter 400MB)
             $r = Deploy-AsSystem $Zip1 $Rel1 @('-UsersRoot', $users, '-Users', 'vic')
             Check ($r.Code -eq 0 -and (Version-Of $app) -eq $V1) 'with room again the next run updates it'
+            # a first install that runs out of room leaves nothing a later run would refuse
+            New-Item -ItemType Directory -Path "$users\wendy" | Out-Null
+            [void](Fill-To $letter 30MB)
+            $r = Deploy-AsSystem $Zip1 $Rel1 @('-UsersRoot', $users, '-Users', 'wendy')
+            Check ($r.Code -eq 1 -and $r.Log -match 'wendy: FAILED') 'a first install with no room fails and says so'
+            $wapp = "$users\wendy\AppData\Local\Programs\BDF"
+            Check (-not (Test-Path "$wapp\bdf.exe")) 'and leaves no program behind'
+            Check ((-not (Test-Path $wapp)) -or @(Get-ChildItem $wapp -Force).Count -eq 0) 'and no half-made folder that a later run would refuse as not a managed copy'
+            [void](Fill-To $letter 400MB)
+            $r = Deploy-AsSystem $Zip1 $Rel1 @('-UsersRoot', $users, '-Users', 'wendy')
+            Check ($r.Code -eq 0 -and (Version-Of $wapp) -eq $V1) 'with room again the same person is installed'
         }
     } finally { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
 }
@@ -645,6 +673,8 @@ function Stage-Desktop {
                 $afterNames = @(Dump-Elements 'default-app-chooser-elements.txt')
                 $newBdf = @($afterNames | Where-Object { $_ -match 'BDF' -and $beforeNames -notcontains $_ })
                 Info "names with BDF in them that appeared after choosing the row: $($newBdf -join ' ;; ')"
+                $newAll = @($afterNames | Where-Object { $beforeNames -notcontains $_ })
+                Info ("all $($newAll.Count) new names after choosing the row: " + (($newAll | Select-Object -First 40) -join ' ;; '))
                 $choice = $null
                 foreach ($e in $ae::RootElement.FindAll($ts::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
                     try { if ($e.Current.Name -match 'BDF' -and $e.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window -and $beforeNames -notcontains ('{0} | {1}' -f $e.Current.ControlType.ProgrammaticName, $e.Current.Name)) { $choice = $e; break } } catch { }

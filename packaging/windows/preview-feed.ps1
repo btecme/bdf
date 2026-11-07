@@ -21,15 +21,20 @@ Write-Output "Serving $root on http://127.0.0.1:$Port/  (feed: http://127.0.0.1:
 try {
     while ($listener.IsListening) {
         $ctx = $listener.GetContext()
-        $rel = [Uri]::UnescapeDataString($ctx.Request.Url.AbsolutePath.TrimStart('/'))
-        $path = [IO.Path]::GetFullPath((Join-Path $root $rel))
-        if ($path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $path -PathType Leaf)) {
-            $bytes = [IO.File]::ReadAllBytes($path)
-            $ctx.Response.ContentLength64 = $bytes.Length
-            $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
-        } else {
-            $ctx.Response.StatusCode = 404
+        try {
+            $rel = [Uri]::UnescapeDataString($ctx.Request.Url.AbsolutePath.TrimStart('/'))
+            $path = [IO.Path]::GetFullPath((Join-Path $root $rel))
+            if ($path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $ctx.Response.ContentLength64 = $bytes.Length
+                $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+            } else {
+                $ctx.Response.StatusCode = 404
+            }
+            $ctx.Response.Close()
+        } catch {
+            # A client that gave up part-way (a download that failed on a full disk, say) must not end the server.
+            try { $ctx.Response.Abort() } catch { }
         }
-        $ctx.Response.Close()
     }
 } finally { $listener.Stop() }

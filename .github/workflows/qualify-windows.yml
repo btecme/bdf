@@ -26,6 +26,7 @@ on:
       - packaging/windows/test-updater-interrupt.ps1
       - packaging/windows/test-update-gui.ps1
       - packaging/windows/preview-feed.ps1
+      - packaging/windows/.qualify-reuse-run
       - crates/update/**
       - apps/pdfcraft-updater/**
       - crates/ui-egui/src/updates.rs
@@ -65,35 +66,69 @@ jobs:
     name: build the throwaway-signed programs and run the tests that need the key
     runs-on: windows-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # While the stage scripts are being worked on, the programs do not change. If packaging/windows/.qualify-reuse-run holds the id of an
+      # earlier run of this workflow, its build material is taken from that run instead of being rebuilt (the build and the tests that need
+      # the key are then skipped, not passed). Empty or absent, everything is built and run, which is what a release qualification needs.
+      - name: Reuse the build material of an earlier run, if asked
+        id: reuse
+        shell: pwsh
+        run: |
+          $f = 'packaging/windows/.qualify-reuse-run'
+          $id = if (Test-Path $f) { (Get-Content $f -Raw).Trim() } else { '' }
+          if ($id -match '^[0-9]+$') {
+            "reuse=true" | Add-Content $env:GITHUB_OUTPUT
+            "run_id=$id" | Add-Content $env:GITHUB_OUTPUT
+            Write-Output "::notice title=Build reused::The programs and packages are those built by run $id; nothing was rebuilt and the build-job tests did not run."
+          } else {
+            "reuse=false" | Add-Content $env:GITHUB_OUTPUT
+          }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.reuse.outputs.reuse == 'true'
+        with:
+          name: qualify-material
+          path: ${{ runner.temp }}/qual
+          run-id: ${{ steps.reuse.outputs.run_id }}
+          github-token: ${{ github.token }}
       - name: Check out craft-fonts
+        if: steps.reuse.outputs.reuse != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
           path: craft-fonts
       - name: Point the build at craft-fonts
+        if: steps.reuse.outputs.reuse != 'true'
         shell: pwsh
         run: |
           "CRAFT_FONTS_DIR=$env:GITHUB_WORKSPACE\craft-fonts" | Add-Content -Path $env:GITHUB_ENV
           "CRAFT_FONTS_REQUIRED=1" | Add-Content -Path $env:GITHUB_ENV
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        if: steps.reuse.outputs.reuse != 'true'
         with:
           toolchain: 1.99.0 # keep in step with rust-toolchain.toml
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.reuse.outputs.reuse != 'true'
         with:
           key: qualify-windows
       - name: Build two versions with a throwaway key, package and sign them
+        if: steps.reuse.outputs.reuse != 'true'
         shell: pwsh
         run: ./packaging/windows/qualify-build.ps1 -Out "$env:RUNNER_TEMP\qual" -KeyFile "$env:RUNNER_TEMP\private\dev.key"
       - name: Deployment script tests (all of them, as the current user)
+        if: steps.reuse.outputs.reuse != 'true'
         shell: pwsh
         run: ./packaging/windows/test-deploy.ps1
       - name: Deployment script killed part-way, at a swept series of moments
+        if: steps.reuse.outputs.reuse != 'true'
         shell: pwsh
         run: ./packaging/windows/test-deploy-interrupt.ps1 -Rounds 12
       - name: The real updater killed part-way, at a swept series of moments
+        if: steps.reuse.outputs.reuse != 'true'
         shell: pwsh
         run: |
           $v0 = (Get-Content "$env:RUNNER_TEMP\qual\versions.txt")[0]
