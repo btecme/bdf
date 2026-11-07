@@ -531,6 +531,8 @@ function Stage-Disk {
             Check (-not (Test-Path "$app\BDFUpdate\journal.json")) 'no half-finished journal is left'
             $res = Get-Content "$app\BDFUpdate\last-result.json" -Raw -ErrorAction SilentlyContinue
             Info "last result: $(if ($res) { $res.Trim() -replace '\s+', ' ' } else { '(none written: no room even for that)' })"
+            Info "updater.log after the failed apply: $((Get-Content "$app\BDFUpdate\updater.log" -Tail 20 -ErrorAction SilentlyContinue) -join ' | ')"
+            Info "updater processes still running: $(@(Get-Process -Name 'bdf-updater*' -ErrorAction SilentlyContinue).Count)"
             $st = BdfCli $app @('update', 'status')
             Info "the copy still starts: $($st.Code -eq 0)"
             [void](Fill-To $letter 400MB)
@@ -542,6 +544,8 @@ function Stage-Disk {
                 Say "      apply (exit $($ap.Code)): $(($ap.Out -replace '\s+', ' ').Trim())"
                 Say "      BDFUpdate holds: $((@(Get-ChildItem "$app\BDFUpdate" -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($app.Length + 1) }) | Select-Object -First 12) -join ', ')"
                 Say "      last result: $((Get-Content "$app\BDFUpdate\last-result.json" -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ')"
+                Say "      updater.log: $((Get-Content "$app\BDFUpdate\updater.log" -Tail 30 -ErrorAction SilentlyContinue) -join ' | ')"
+                Say "      updater processes running: $((@(Get-Process -Name 'bdf-updater*' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $($_.Id)" })) -join ', ')"
             }
             Check ((Version-Of $app) -eq $V1) 'with room again the update completes'
         }
@@ -576,7 +580,8 @@ function Stage-Disk {
             [void](Fill-To $letter 400MB)
             $r = Deploy-AsSystem $Zip1 $Rel1 @('-UsersRoot', $users, '-Users', 'vic')
             Check ($r.Code -eq 0 -and (Version-Of $app) -eq $V1) 'with room again the next run updates it'
-            # a first install that runs out of room leaves nothing a later run would refuse
+            # a first install that runs out of room leaves nothing a later run would refuse (the earlier people's copies go first, for room)
+            Remove-Item "$users\vic" -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Path "$users\wendy" | Out-Null
             [void](Fill-To $letter 30MB)
             $r = Deploy-AsSystem $Zip1 $Rel1 @('-UsersRoot', $users, '-Users', 'wendy')
