@@ -93,6 +93,9 @@ pub(crate) struct Updates {
     pub(crate) install_pending: bool,
     /// The close flow was started for the install; a cancelled close withdraws the install.
     quit_asked: bool,
+    /// The files to open again once the update is in: taken when the install begins, because answering the unsaved-work
+    /// questions (Save, Don't save) closes those documents before the updater starts.
+    reopen: Vec<PathBuf>,
 }
 
 impl Updates {
@@ -238,6 +241,7 @@ impl PdfCraftApp {
             if self.updates.install_pending && self.updates.quit_asked && self.close_request.is_none() && !self.allow_quit {
                 self.updates.install_pending = false;
                 self.updates.quit_asked = false;
+                self.updates.reopen.clear();
                 self.notify(tl!("Update postponed. Choose Update again when you are ready."));
             }
         }
@@ -249,6 +253,7 @@ impl PdfCraftApp {
         self.updates.install_pending = true;
         self.updates.quit_asked = true;
         self.updates.open = false;
+        self.updates.reopen = self.views.iter().filter_map(|v| self.session.get(v.id)).filter_map(|d| d.path.clone().map(PathBuf::from)).collect();
         self.request_quit(&ctx);
     }
 
@@ -261,8 +266,8 @@ impl PdfCraftApp {
         self.updates.install_pending = false;
         self.updates.quit_asked = false;
         let Some(host) = self.update_host.clone() else { return true };
-        let reopen: Vec<PathBuf> =
-            self.views.iter().filter_map(|v| self.session.get(v.id)).filter_map(|d| d.path.clone().map(PathBuf::from)).collect();
+        // The list taken when the install began; a file that is gone by now (moved, deleted) is not asked for.
+        let reopen: Vec<PathBuf> = std::mem::take(&mut self.updates.reopen).into_iter().filter(|p| p.is_file()).collect();
         match host.install(&reopen) {
             Ok(()) => true,
             Err(e) => {

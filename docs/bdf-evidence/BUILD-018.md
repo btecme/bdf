@@ -153,15 +153,17 @@ back-slash names, traversal, duplicates, the list itself). The BDF folder is sca
 inside `BDFData`, which is never read or listed); every path is asserted inside the folder and link-free immediately before it is
 moved, created or deleted; deletes never follow a link; ownership is applied per top-level item with `/L`, never `/T` over
 `BDFData`; the working directory is System32; the log folder is used only if it is not a link and is owned by SYSTEM or
-Administrators; `-SkipLoggedOnUsers` closes the remaining race for deployments that can wait.
+Administrators. (**Corrected in section 8:** this round said `-SkipLoggedOnUsers` closes the remaining race. It does not, and the
+race was not small; the install now runs as the user instead.)
 
 *Shown.* `test-deploy.ps1`: 65 checks pass (25 before): 17 hostile installed lists, a non-JSON list, an honest list with a stale
 file, five planted junction locations (the target is untouched), a junction inside `BDFData` ignored, the helper functions on a
 tree holding a link and a read-only file, the log-folder rule. The `icacls` option set was run against a scratch tree holding a
 junction to confirm `/L` does not follow it.
 
-*Not shown.* A real Local System run and a real second profile (see section 4 and the list below). The residual race (a signed-in
-user replacing a folder with a link inside a window of milliseconds) is documented, not closed, except by `-SkipLoggedOnUsers`.
+*Not shown.* A real Local System run and a real second profile (see section 4 and the list below). The residual race (a user
+replacing a folder with a link between the script's check and its use) was described here as closed by `-SkipLoggedOnUsers`;
+that was wrong, see section 8.
 
 ### R18-3 (P1): the hosted package was not the new product
 

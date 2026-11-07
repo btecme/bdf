@@ -192,6 +192,42 @@ fn unsaved_work_is_asked_about_first_and_cancelling_withdraws_the_update() {
     h.get_by_label("Close BDF and update");
 }
 
+/// The dialog promises "reopen your documents". A document whose unsaved-work question was answered (Save, or Don't save) is
+/// closed by that answer before the updater starts, so the list to reopen has to be taken when the install begins. Found with
+/// the real window (qualification, 2026-11-07): after Don't save the restarted BDF opened nothing.
+#[test]
+fn documents_whose_unsaved_work_question_was_answered_are_still_reopened_after_the_update() {
+    for answer in ["Don't save", "Save"] {
+        let dir = std::env::temp_dir().join(format!("bdf-reopen-{}-{}", std::process::id(), answer.len()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clean = dir.join("clean.pdf");
+        let dirty = dir.join("dirty.pdf");
+        std::fs::write(&clean, pdf()).unwrap();
+        std::fs::write(&dirty, pdf()).unwrap();
+        let fake = Fake::new(status(true, true, true, true));
+        let mut h = harness(Some(fake.clone()));
+        h.state_mut().open_bytes("clean.pdf", Some(clean.to_string_lossy().into_owned()), pdf()).unwrap();
+        h.state_mut().open_bytes("dirty.pdf", Some(dirty.to_string_lossy().into_owned()), pdf()).unwrap();
+        h.run_steps(4);
+        let id = h.state().views[1].id;
+        h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "changed".into() }).unwrap();
+        h.run_steps(2);
+        h.get_by_label("Update to BDF 9.9.9").click();
+        h.run_steps(3);
+        h.get_by_label("Close BDF and update").click();
+        h.run_steps(4);
+        h.get_by_label_contains("Save changes to");
+        h.get_by_label(answer).click();
+        h.run_steps(8);
+        let installs = fake.installs.lock().unwrap().clone();
+        assert_eq!(installs.len(), 1, "{answer}: the updater starts once the question is answered");
+        let mut names: Vec<String> = installs[0].iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
+        names.sort();
+        assert_eq!(names, ["clean.pdf", "dirty.pdf"], "{answer}: both documents are handed to the updater to reopen");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn later_leaves_everything_as_it_was() {
     let fake = Fake::new(status(true, true, true, true));

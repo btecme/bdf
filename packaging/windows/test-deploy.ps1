@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Tests deploy-bdf.ps1 against synthetic packages and fake profile folders. Touches nothing outside a temp folder.
 .DESCRIPTION
@@ -263,6 +263,38 @@ try {
         $owner = (Get-Acl "$fakePd\BDF").Owner
         Check (($owner -match '^(NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators)$') -or ($null -eq (Initialize-LogDirectory))) 'a log folder owned by an ordinary user is not used'
     } finally { $env:ProgramData = $savedPd }
+
+    # 13. The person's own task (-AsUser): what Local System starts as the person. It installs with the rights of whoever runs it,
+    #     says what happened in the outcome file, verifies the release again, and never asks for an ownership or permission change.
+    $gina = Join-Path $users 'gina'; New-Item -ItemType Directory -Path $gina | Out-Null
+    $ginaApp = & $app 'gina'
+    $outFile = Join-Path $Work 'gina-outcome.txt'
+    function AsUser([string]$Zip, [string]$Rel, [string]$Folder = $gina) {
+        if (Test-Path $outFile) { Remove-Item $outFile }
+        $r = Deploy @('-PackageZip', $Zip, '-ReleaseFile', $Rel, '-PublicKey', $pub, '-Channel', 'dev', '-AsUser', $Folder, '-OutcomeFile', $outFile)
+        $text = if (Test-Path $outFile) { Get-Content $outFile -Raw } else { '' }
+        [pscustomobject]@{ Code = $r.Code; Outcome = $text }
+    }
+    $r = AsUser $zip1 $rel1
+    Check ($r.Code -eq 0 -and $r.Outcome -match 'RESULT: installed 0.8.1' -and (Get-Content (Join-Path $ginaApp 'bdf.exe')) -match 'one') '-AsUser installs and reports it in the outcome file'
+    $r = AsUser $zip1 $rel1
+    Check ($r.Code -eq 0 -and $r.Outcome -match 'RESULT: current') '-AsUser on a current copy reports current and exits 0'
+    $hold = [IO.File]::Open((Join-Path $ginaApp 'bdf-cli.exe'), 'Open', 'Read', 'Read')
+    $r = AsUser $zip2 $rel2
+    $hold.Dispose()
+    Check ($r.Code -eq 4 -and $r.Outcome -match 'RESULT: in-use' -and (Get-Content (Join-Path $ginaApp 'bdf.exe')) -match 'one') '-AsUser with BDF running exits 4 and changes nothing'
+    $r = AsUser $zip2 $rel2
+    Check ($r.Code -eq 0 -and $r.Outcome -match 'RESULT: updated 0.8.1 -> 0.8.2' -and (Get-Content (Join-Path $ginaApp 'bdf.exe')) -match 'two') '-AsUser updates'
+    New-Item -ItemType Directory -Path "$ginaApp\BDFUpdate" -Force | Out-Null
+    Set-Content "$ginaApp\BDFUpdate\deploy-pending.json" '{}'
+    $r = AsUser $zip2 $rel2
+    Check ($r.Code -eq 0 -and $r.Outcome -match 'RESULT: updated 0.8.2 -> 0.8.2' -and -not (Test-Path "$ginaApp\BDFUpdate\deploy-pending.json")) 'an unfinished-run marker makes a current-looking copy be finished, and the marker goes away'
+    $r = AsUser $bad $rel2
+    Check ($r.Code -eq 1 -and $r.Outcome -match 'STOP') '-AsUser verifies the release itself: a tampered package is refused (exit 1)'
+    $hank = Join-Path $users 'hank'; New-Item -ItemType Directory -Path "$hank\AppData\Local\Programs\BDF" -Force | Out-Null
+    Set-Content "$hank\AppData\Local\Programs\BDF\precious.txt" 'not BDF'
+    $r = AsUser $zip2 $rel2 $hank
+    Check ($r.Code -eq 1 -and $r.Outcome -match 'RESULT: FAILED' -and (Test-Path "$hank\AppData\Local\Programs\BDF\precious.txt")) '-AsUser on a folder that is not a managed copy fails and leaves it alone'
 } finally {
     Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
 }

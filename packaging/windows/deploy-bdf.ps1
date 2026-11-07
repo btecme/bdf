@@ -3,22 +3,30 @@
   Deploys the BDF portable package into each user's own profile (Action1 / any Local System deployment tool).
 
 .DESCRIPTION
-  Runs as Local System. It never starts BDF, never runs anything from the package or from a user's folder,
-  and never touches a user's BDFData folder. What it does:
+  Runs as Local System. It never starts BDF, never runs anything from the package or from a user's folder as
+  Local System, and never touches a user's BDFData folder. The person's folder is theirs and they can change it at any
+  moment, so Local System does not change anything inside it. What it does:
 
     1. Verifies the release exactly as the in-app updater does: the release file (bdf-update.json) is an
        envelope whose signature (ECDSA P-256 over SHA-256) is checked against -PublicKey, then the package's
        size and SHA-256 against that signed information, then every file in the ZIP against the package's own
        list. Nothing is read from an unauthenticated source. Unsigned or tampered input stops the run.
-    2. For each intended user profile, installs (or updates) the portable copy in
-       <profile>\AppData\Local\Programs\BDF, by renaming files, with the previous version kept in
-       BDFPrevious and a rollback if anything fails. A copy that is running, or any other open file, is
-       never replaced: that user is skipped and picked up by the next run.
-    3. Gives the user ownership and Modify rights on their own copy so BDF can update itself without
-       administrator rights. No other permission is changed.
+    2. Puts the verified release in a working folder only Local System and Administrators can change.
+    3. For each intended user profile, starts a short task that runs AS THAT PERSON (a scheduled task with that
+       person's own identity and no password: the Task Scheduler "S4U" logon, limited rights, no network). That
+       task verifies the release again and installs (or updates) the portable copy in
+       <profile>\AppData\Local\Programs\BDF by renaming files, with the previous version kept in BDFPrevious. Because
+       it runs with the person's own rights it can reach nothing the person cannot already change, whatever they
+       do to links and folders while it runs, and the files it writes are the person's own (no ownership or
+       permission change is needed). A copy that is running, or any other open file, is never replaced: that
+       user is skipped and picked up by the next run. If the task cannot be started as that person, that person
+       is reported as failed and nothing is changed: there is no fallback that works in their folder as Local System.
+    4. An interrupted run (the script or the machine stopped part-way) leaves a marker in the person's BDFUpdate
+       folder; the next run finishes the job from the verified package instead of treating the copy as current.
 
   New users: -IncludeDefaultProfile also installs into C:\Users\Default, which Windows copies into every
-  profile created later. Users who already exist are covered by running this script again (Action1 policy).
+  profile created later (only administrators can write there, so it is done directly). Users who already exist
+  are covered by running this script again (Action1 policy).
 
   Not done on purpose: no change to default apps or any registry (each person registers BDF in
   Preferences > Windows integration, if they want to), no shortcut, no firewall or service.
@@ -31,25 +39,36 @@
 .PARAMETER Channel      stable (default) or dev (test releases signed with a test key).
 .PARAMETER UsersRoot    Test hook: treat the subfolders of this folder as the profiles (no ownership changes).
 .PARAMETER LogDirectory Where the log is written (default C:\ProgramData\BDF, used only when it is safe: see Notes).
-.PARAMETER SkipLoggedOnUsers  Skip a person whose profile is loaded (they are signed in), so nobody can change their own folder while
-                        it is being updated. Without it a signed-in person's copy is still protected by the checks below.
+.PARAMETER SkipLoggedOnUsers  Skip a person whose profile is loaded (they appear to be signed in), so their BDF is not updated under them.
+                        This is about not disturbing a person at work. It is NOT a security control and it does not remove any
+                        file-system race: the check is made once, a person can sign in a moment later, and a profile can be
+                        loaded by things other than a sign-in. Safety comes from the install running as the person (above).
+.PARAMETER AsUser       Internal. The folder of one profile to install into, used by the task Local System starts as that person.
+                        Never needed by hand; run by hand it installs into the folder with the rights of whoever runs it.
+.PARAMETER OutcomeFile  Internal. Where an -AsUser run writes a one-line result for the Local System run to read (as text, never as an authority).
 .PARAMETER WhatIf       Verify and report what would happen without changing anything.
 
 .NOTES
-  Safety rules for a Local System run in folders the person can write to:
-    * The installed package list (bdf-package.json) belongs to the person, so it is never an authority. It is checked like
-      the new list before anything moves: version, schema, count, and every path (no BDFData, BDFUpdate or BDFPrevious, no
-      absolute, drive, stream, short (8.3) or back-slash names, no traversal, no duplicates). An installed copy whose list
-      fails is refused and left exactly as it is.
-    * Before any change the whole BDF folder is scanned for links (junctions, symbolic links); one anywhere, except inside
-      the person's own BDFData (which is never read, listed or changed), refuses that profile. Each path is also checked to
-      stay inside the folder, and free of links, immediately before it is moved, created or deleted.
-    * Deleting never follows a link (a link is removed, never what it points to), and ownership is applied per item
-      without following links, never across BDFData.
-    * Nothing from a profile is run, the working directory is System32, and the log folder is used only when it is not a
-      link and is owned by SYSTEM or Administrators (a new one is created readable by them only).
-    * What remains is a signed-in person racing the script inside a window of milliseconds; -SkipLoggedOnUsers closes it
-      for deployments that can wait until nobody is signed in.
+  The boundary. A script running as Local System must not work inside a folder a person can change: any check of a path
+  ("is this a link?") is out of date by the time the path is used, and the person can swap a folder for a junction in
+  between (measured: packaging\windows\test-deploy-race.ps1 steers the old in-place version through the swapped link). So:
+    * Local System verifies the release, copies it to a folder only it and Administrators can write, and starts the install
+      as the person (S4U scheduled task, limited rights, no network). The install can therefore only reach what that person can
+      already change. Local System itself does not read, list, create, move or delete anything inside a person's profile,
+      except that it reads the profile list from the registry and, for the Default profile (administrators only), installs directly.
+    * Inside the person's own task the older checks remain, because they protect the person from a damaged copy, not Local
+      System from the person: the installed package list (bdf-package.json) belongs to the person, so it is checked like the
+      new list before anything moves (version, schema, count, every path: no BDFData, BDFUpdate or BDFPrevious, no
+      absolute, drive, stream, short (8.3) or back-slash names, no traversal, no duplicates); the BDF folder is scanned for
+      links before any change and each path is checked immediately before it is moved, created or deleted; deleting never
+      follows a link; BDFData is never read, listed or changed.
+    * Nothing from a profile is run as Local System, the working directory is System32, and the log and working folders
+      are used only when they are not links and are owned by SYSTEM or Administrators (a new one is readable by them only).
+    * Limits, stated plainly: the person's task runs with the person's rights, so a person who wants to damage their own BDF
+      copy can. S4U needs the person's account to be allowed to run a batch task; where it is not (policy, or an account
+      type Task Scheduler cannot run without a password) that person is reported as failed, and the in-app updater and
+      the per-user ZIP still work for them. The window between "the script finished its checks" and "the file was moved"
+      is not closed by checking harder; it is made harmless by who does the moving.
 
   Exit codes: 0 done (or nothing to do; skipped users are listed and retried by the next run),
               1 verification or a deployment failed, 2 bad parameters.
@@ -66,6 +85,8 @@ param(
     [string]$UsersRoot,
     [string]$LogDirectory,
     [switch]$SkipLoggedOnUsers,
+    [string]$AsUser,
+    [string]$OutcomeFile,
     [switch]$WhatIf
 )
 
@@ -104,12 +125,14 @@ function Initialize-LogDirectory {
     & (Join-Path $System32 'icacls.exe') $dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
     $dir
 }
-try { $LogDir = Initialize-LogDirectory } catch { $LogDir = $null }
+if (-not $AsUser) { try { $LogDir = Initialize-LogDirectory } catch { $LogDir = $null } }
 
 function Write-Log([string]$Message) {
     $line = '{0:u} {1}' -f (Get-Date), $Message
     Write-Output $line
     if ($LogDir) { try { Add-Content -LiteralPath (Join-Path $LogDir 'deploy.log') -Value $line -Encoding UTF8 } catch { } }
+    # In the person's own task the only channel back is this file (text for the log, never an authority).
+    if ($AsUser -and $OutcomeFile) { try { Add-Content -LiteralPath $OutcomeFile -Value $line -Encoding UTF8 } catch { } }
 }
 
 function Stop-Run([string]$Message, [int]$Code = 1) {
@@ -359,10 +382,11 @@ function New-SafeDirectory([string]$App, [string]$Dir) {
 
 function Install-ForProfile($profile) {
     $app = Join-Path $profile.Path $AppSub
-    if ($SkipLoggedOnUsers -and $profile.Sid -and (Test-Path -LiteralPath "Registry::HKEY_USERS\$($profile.Sid)")) { return 'signed-in' }
     if (-not (Test-NoReparse $profile.Path $app)) { throw 'a link or junction is in the way of the BDF folder; refusing to write through it' }
     $installedVersion = $null
     $oldFiles = @()
+    $pendingMarker = Join-Path $app 'BDFUpdate\deploy-pending.json'
+    $interrupted = $false
     if (Test-Path -LiteralPath $app) {
         # Nothing below is trusted until it has been checked: the folder is the person's, and so is the list in it.
         $oldListPath = Join-Path $app $PackageFile
@@ -375,7 +399,9 @@ function Install-ForProfile($profile) {
             $oldFiles = @(Get-ValidatedPaths $oldInfo 'the installed package list')
             $installedVersion = [version][string]$oldInfo.version
         } catch { throw "the installed copy's package list cannot be trusted ($($_.Exception.Message)); leaving it exactly as it is" }
-        if ($installedVersion -ge $version) { return 'current' }
+        # A marker left by a run that did not finish means the copy may be part old, part new whatever its list says.
+        $interrupted = Test-Path -LiteralPath $pendingMarker -PathType Leaf
+        if ($installedVersion -ge $version -and -not $interrupted) { return 'current' }
     }
     if ($WhatIf) { return $(if ($installedVersion) { "would update $installedVersion -> $version" } else { "would install $version" }) }
 
@@ -396,10 +422,29 @@ function Install-ForProfile($profile) {
     New-Item -ItemType Directory -Path $app -Force | Out-Null
     $stage = Join-Path $app 'BDFUpdate\deploy-stage'
     $prev = Join-Path $app 'BDFUpdate\deploy-previous'
-    foreach ($d in @($stage, $prev)) { Assert-Inside $app $d -Internal; Remove-Tree $d }
+    # The staging folder is always rebuilt. The folder of displaced files is kept when an earlier run was interrupted: it holds the
+    # version the person had, which must not be thrown away by finishing the job.
+    Assert-Inside $app $stage -Internal; Remove-Tree $stage
+    if (-not $interrupted) { Assert-Inside $app $prev -Internal; Remove-Tree $prev }
     New-SafeDirectory $app $stage
     New-SafeDirectory $app $prev
 
+    # What every path must hash to once the update is in place (the package list itself is hashed as it is staged).
+    $expected = @{}
+    foreach ($f in $listed) { $expected[([string]$f.path).ToLowerInvariant()] = ([string]$f.sha256).ToLowerInvariant() }
+
+    # The paths the version the person had owned. After an interruption the live list may already be the new one, but the old list
+    # was set aside when it was replaced.
+    $oldSet = @{}
+    foreach ($r in $oldFiles) { $oldSet[([string]$r).ToLowerInvariant()] = $true }
+    $asideList = Join-Path $prev $PackageFile
+    if ($interrupted -and (Test-Path -LiteralPath $asideList -PathType Leaf)) {
+        try {
+            $ai = Get-Content -LiteralPath $asideList -Raw -Encoding UTF8 | ConvertFrom-Json
+            $oldSet = @{}
+            foreach ($r in @(Get-ValidatedPaths $ai 'the displaced package list')) { $oldSet[([string]$r).ToLowerInvariant()] = $true }
+        } catch { }
+    }
     $moved = New-Object System.Collections.ArrayList   # @(live, prev) pairs displaced, for rollback
     $placed = New-Object System.Collections.ArrayList  # live paths of new files put in place
     $zip = [System.IO.Compression.ZipFile]::OpenRead($zipInfo.FullName)
@@ -415,13 +460,16 @@ function Install-ForProfile($profile) {
             $in = $entry.Open()
             $out = [System.IO.File]::Create($target)
             try { $in.CopyTo($out) } finally { $out.Dispose(); $in.Dispose() }
+            $s = [System.IO.File]::OpenRead($target)
+            try { $h = Get-Sha256Hex $s } finally { $s.Dispose() }
             if ($f.sha256) {
-                $s = [System.IO.File]::OpenRead($target)
-                try { $h = Get-Sha256Hex $s } finally { $s.Dispose() }
                 if ($h -ne ([string]$f.sha256).ToLowerInvariant()) { throw "$rel changed while it was staged" }
-            }
+            } else { $expected[$PackageFile] = $h }
         }
-        # Swap: old files aside, new files in; the launcher last.
+        # From here the copy may be part old, part new. The marker tells the next run so, if this one does not finish.
+        [System.IO.File]::WriteAllText($pendingMarker, ('{{"version":"{0}","started":"{1:o}"}}' -f $version, (Get-Date)))
+        # Swap: old files aside, new files in; the launcher last. Resuming after an interruption, a path that already holds
+        # the new file is left alone and one whose old file is already aside is not displaced twice.
         $order = @($union | Where-Object { $_ -ne 'bdf.exe' -and $_ -ne $PackageFile }) + @($PackageFile) + @($union | Where-Object { $_ -eq 'bdf.exe' })
         foreach ($rel in $order) {
             $live = Join-Path $app ($rel -replace '/', '\')
@@ -430,12 +478,24 @@ function Install-ForProfile($profile) {
             Assert-Inside $app $live
             Assert-Inside $app $aside -Internal
             Assert-Inside $app $new -Internal
+            $inPlace = $false
             if (Test-Path -LiteralPath $live -PathType Leaf) {
-                New-SafeDirectory $app (Split-Path $aside -Parent)
-                Move-Item -LiteralPath $live -Destination $aside
-                [void]$moved.Add(@($live, $aside))
+                if ($interrupted -and $expected.ContainsKey($rel.ToLowerInvariant())) {
+                    $s = [System.IO.File]::OpenRead($live)
+                    try { $inPlace = (Get-Sha256Hex $s) -eq $expected[$rel.ToLowerInvariant()] } finally { $s.Dispose() }
+                }
+                if (-not $inPlace) {
+                    if (Test-Path -LiteralPath $aside) { throw "$rel has a file in the way and its earlier version is already aside; leaving it for the person to look at" }
+                    New-SafeDirectory $app (Split-Path $aside -Parent)
+                    Move-Item -LiteralPath $live -Destination $aside
+                    [void]$moved.Add(@($live, $aside))
+                } elseif (-not (Test-Path -LiteralPath $aside) -and $oldSet.ContainsKey($rel.ToLowerInvariant())) {
+                    # Identical in both versions and never displaced (an earlier run stopped first): the previous version still needs it.
+                    New-SafeDirectory $app (Split-Path $aside -Parent)
+                    Copy-Item -LiteralPath $live -Destination $aside
+                }
             }
-            if (Test-Path -LiteralPath $new -PathType Leaf) {
+            if (-not $inPlace -and (Test-Path -LiteralPath $new -PathType Leaf)) {
                 New-SafeDirectory $app (Split-Path $live -Parent)
                 Assert-Inside $app $live
                 Move-Item -LiteralPath $new -Destination $live
@@ -451,56 +511,164 @@ function Install-ForProfile($profile) {
         }
     } catch {
         $reason = $_.Exception.Message
+        if ($interrupted) {
+            # An earlier run's moves are not in this run's lists, so rolling back here would be half a rollback. The marker stays,
+            # the displaced files stay where they are, and the next run tries again from the verified package.
+            throw "not finished (an earlier run was also interrupted): $reason"
+        }
         foreach ($p in $placed) { try { Remove-Tree $p } catch { } }
         for ($i = $moved.Count - 1; $i -ge 0; $i--) { Move-Item -LiteralPath $moved[$i][1] -Destination $moved[$i][0] -Force -ErrorAction SilentlyContinue }
         try { Remove-Tree $stage } catch { }
         try { Remove-Tree $prev } catch { }
+        try { Remove-Tree $pendingMarker } catch { }
         throw "rolled back: $reason"
     } finally { $zip.Dispose() }
 
     # Keep the displaced version as BDFPrevious (what the in-app rollback uses), like the in-app updater.
     $keep = Join-Path $app 'BDFPrevious'
     Assert-Inside $app $keep -Internal
-    if ($moved.Count -gt 0) {
+    $displaced = @(Get-ChildItem -LiteralPath $prev -Recurse -File -Force | Select-Object -First 1).Count -gt 0
+    if ($displaced) {
         Remove-Tree $keep
         Move-Item -LiteralPath $prev -Destination $keep
     } else { Remove-Tree $prev }
     Remove-Tree $stage
-
-    if ($profile.Sid) {
-        # The person owns their copy and can modify it (so BDF updates itself without administrator rights). Item by item,
-        # without following links and never across BDFData; nothing else about the profile's permissions is touched.
-        $link = Find-Link $app
-        if ($link) { throw "BDF was installed, but a link appeared inside the folder ($link), so ownership was not changed" }
-        $sidArg = '*' + $profile.Sid
-        $icacls = Join-Path $System32 'icacls.exe'
-        & $icacls $app /setowner $sidArg /C /Q /L | Out-Null
-        & $icacls $app /grant "${sidArg}:(OI)(CI)M" /C /Q /L | Out-Null
-        foreach ($c in @(Get-ChildItem -LiteralPath $app -Force)) {
-            if ($c.Name -ieq 'BDFData') { continue }
-            if ($c.Attributes -band $ReparseAttr) { throw "BDF was installed, but a link appeared inside the folder ($($c.FullName)), so ownership was not changed" }
-            & $icacls $c.FullName /setowner $sidArg /T /C /Q /L | Out-Null
-            & $icacls $c.FullName /grant "${sidArg}:(OI)(CI)M" /T /C /Q /L | Out-Null
-        }
-    }
+    Remove-Tree $pendingMarker
     if ($installedVersion) { "updated $installedVersion -> $version" } else { "installed $version" }
 }
 
+# ---- 3. as the person: the install itself ---------------------------------------------------------------------------
+
+# This is what the task started as the person runs (and what a direct run does for the Default profile and for -UsersRoot).
+if ($AsUser) {
+    $me = [pscustomobject]@{ Name = (Split-Path $AsUser -Leaf); Path = $AsUser; Sid = $null }
+    try {
+        $o = Install-ForProfile $me
+        Write-Log "RESULT: $o"
+        if ($o -eq 'in-use') { exit 4 }
+        exit 0
+    } catch {
+        Write-Log "RESULT: FAILED: $($_.Exception.Message)"
+        exit 1
+    }
+}
+
+# ---- 4. as Local System: hand each person's install to that person ------------------------------------------------------
+
+# A folder only Local System and Administrators can change, holding the verified release the people's tasks read.
+function New-RunFolder {
+    if (-not $LogDir) { throw 'there is no safe working folder (the log folder is missing, is a link, or is not owned by SYSTEM or Administrators)' }
+    $run = Join-Path $LogDir ('run-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $run | Out-Null
+    & (Join-Path $System32 'icacls.exe') $run /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /Q | Out-Null
+    if ($LASTEXITCODE) { throw 'could not restrict the working folder' }
+    Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $run 'deploy-bdf.ps1')
+    Copy-Item -LiteralPath $zipInfo.FullName -Destination (Join-Path $run 'package.zip')
+    Copy-Item -LiteralPath $ReleaseFile -Destination (Join-Path $run 'release.json')
+    $run
+}
+
+# Text a person's task wrote, for the log only: a regular file, small, printable, a few lines.
+function Read-Outcome([string]$Path) {
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (($item.Attributes -band $ReparseAttr) -or $item.PSIsContainer -or $item.Length -gt 16384) { return @() }
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -Tail 4)
+        @($lines | ForEach-Object { (($_ -replace '[^\x20-\x7e]', '?')) } | ForEach-Object { if ($_.Length -gt 300) { $_.Substring(0, 300) } else { $_ } })
+    } catch { @() }
+}
+
+function Invoke-InstallAsUser($profile, [string]$Run) {
+    $account = ([System.Security.Principal.SecurityIdentifier]$profile.Sid).Translate([System.Security.Principal.NTAccount]).Value
+    $sidDir = Join-Path $Run $profile.Sid
+    New-Item -ItemType Directory -Path $sidDir | Out-Null
+    & (Join-Path $System32 'icacls.exe') $sidDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($profile.Sid):(OI)(CI)M" /Q | Out-Null
+    if ($LASTEXITCODE) { throw 'could not prepare the working folder for this person' }
+    $outcomeFile = Join-Path $sidDir 'outcome.txt'
+    $arguments = @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $Run 'deploy-bdf.ps1')`"",
+        '-PackageZip', "`"$(Join-Path $Run 'package.zip')`"", '-ReleaseFile', "`"$(Join-Path $Run 'release.json')`"",
+        '-PublicKey', $PublicKey, '-Channel', $Channel, '-AsUser', "`"$($profile.Path)`"", '-OutcomeFile', "`"$outcomeFile`""
+    )
+    if ($WhatIf) { $arguments += '-WhatIf' }
+    $taskName = 'BDF-deploy-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+    $taskPath = '\BDF\'
+    $action = New-ScheduledTaskAction -Execute (Join-Path $System32 'WindowsPowerShell\v1.0\powershell.exe') -Argument ($arguments -join ' ') -WorkingDirectory $System32
+    $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType S4U -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    try {
+        try {
+            Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+            Start-ScheduledTask -TaskName $taskName -TaskPath $taskPath
+        } catch { throw "could not start the install as $account ($($_.Exception.Message)); nothing was changed" }
+        $deadline = (Get-Date).AddMinutes(31)
+        $info = $null
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            $state = (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath).State
+            $info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath $taskPath
+            if ($state -eq 'Ready' -and $info.LastRunTime.Year -gt 2000) { break }
+            $info = $null
+        }
+        if (-not $info) {
+            Stop-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
+            throw "the install as $account did not finish in 30 minutes and was stopped; the next run will finish it"
+        }
+        $code = [int64]$info.LastTaskResult
+        $lines = @(Read-Outcome $outcomeFile)
+        $result = @($lines | Where-Object { $_ -match 'RESULT: ' } | Select-Object -Last 1)
+        $message = if ($result.Count -gt 0) { ($result[0] -replace '^.*RESULT: ', '') } else { ($lines -join ' | ') }
+        if ($code -eq 4) { return 'in-use' }
+        if ($code -ne 0) { throw "the install as $account failed (task result $code): $message" }
+        if ($message) { $message } else { 'done' }
+    } finally {
+        try { Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    }
+}
+
+# A run that was ended part-way (the deployment tool stopped it, the machine restarted) can leave its working folder and its
+# per-person tasks behind. Anything of ours older than an hour is stale: a normal run removes its own as it goes.
+function Clear-StaleRuns {
+    $cutoff = (Get-Date).AddHours(-1)
+    if ($LogDir) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $LogDir -Directory -Filter 'run-*' -Force -ErrorAction SilentlyContinue)) {
+            if ($d.LastWriteTime -lt $cutoff -and -not ($d.Attributes -band $ReparseAttr)) { try { Remove-Tree $d.FullName; Write-Log "removed a stale working folder from an earlier run: $($d.Name)" } catch { } }
+        }
+    }
+    try {
+        foreach ($t in @(Get-ScheduledTask -TaskPath '\BDF\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'BDF-deploy-*' -and $_.State -ne 'Running' })) {
+            $made = $null
+            try { $made = [datetime]$t.Date } catch { }
+            if ($made -and $made -lt $cutoff) { Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath '\BDF\' -Confirm:$false -ErrorAction SilentlyContinue; Write-Log "removed a stale task from an earlier run: $($t.TaskName)" }
+        }
+    } catch { }
+}
+if (-not $UsersRoot) { Clear-StaleRuns }
+
 $profiles = Get-TargetProfiles
 if (@($profiles).Count -eq 0) { Write-Log 'no user profiles to deploy to' }
-foreach ($p in $profiles) {
-    try {
-        $outcome = Install-ForProfile $p
-        switch -Wildcard ($outcome) {
-            'current' { Write-Log "$($p.Name): already has $version or newer; nothing to do"; [void]$Done.Add($p.Name) }
-            'signed-in' { Write-Log "$($p.Name): signed in; skipped by -SkipLoggedOnUsers (the next run will update it)"; [void]$Skipped.Add($p.Name) }
-            'in-use' { Write-Log "$($p.Name): BDF is running from its folder; skipped (the next run will update it)"; [void]$Skipped.Add($p.Name) }
-            default { Write-Log "$($p.Name): $outcome"; [void]$Done.Add($p.Name) }
+$run = $null
+try {
+    foreach ($p in $profiles) {
+        try {
+            if ($SkipLoggedOnUsers -and $p.Sid -and (Test-Path -LiteralPath "Registry::HKEY_USERS\$($p.Sid)")) { $outcome = 'signed-in' }
+            elseif ($p.Sid) {
+                if (-not $run) { $run = New-RunFolder }
+                $outcome = Invoke-InstallAsUser $p $run
+            } else { $outcome = Install-ForProfile $p }
+            switch -Wildcard ($outcome) {
+                'current' { Write-Log "$($p.Name): already has $version or newer; nothing to do"; [void]$Done.Add($p.Name) }
+                'signed-in' { Write-Log "$($p.Name): signed in; skipped by -SkipLoggedOnUsers (the next run will update it)"; [void]$Skipped.Add($p.Name) }
+                'in-use' { Write-Log "$($p.Name): BDF is running from its folder; skipped (the next run will update it)"; [void]$Skipped.Add($p.Name) }
+                default { Write-Log "$($p.Name): $outcome"; [void]$Done.Add($p.Name) }
+            }
+        } catch {
+            Write-Log "$($p.Name): FAILED: $($_.Exception.Message)"
+            [void]$Failed.Add($p.Name)
         }
-    } catch {
-        Write-Log "$($p.Name): FAILED: $($_.Exception.Message)"
-        [void]$Failed.Add($p.Name)
     }
+} finally {
+    if ($run) { try { Remove-Tree $run } catch { } }
 }
 Write-Log ("summary: done {0}, skipped (in use) {1}, failed {2}" -f $Done.Count, $Skipped.Count, $Failed.Count)
 if ($Failed.Count -gt 0) { exit 1 }
