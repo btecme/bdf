@@ -192,3 +192,5 @@ try {
 }
 if ($failures) { Write-Output "$failures check(s) failed"; exit 1 }
 Write-Output 'all GUI update checks passed'
+# Explicit: a native command above may have left $LASTEXITCODE non-zero, and a CI shell would report that instead.
+exit 0

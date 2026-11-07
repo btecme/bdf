@@ -67,3 +67,4 @@ Copy-Item (Join-Path $Out "packages\$Version1\bdf-update.json") (Join-Path $feed
 Copy-Item (Join-Path $Out "packages\$Version1\bdf-$Version1-windows-x64-portable.zip") (Join-Path $feed "v$Version1")
 Set-Content -Path (Join-Path $Out 'versions.txt') -Value "$Version0`n$Version1" -Encoding ascii
 Write-Output "qualification material for $Version0 and $Version1 is in $Out"
+exit 0

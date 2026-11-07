@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   Kills deploy-bdf.ps1 part-way through an update, over and over at different moments, and checks that the next run finishes the job.
 .DESCRIPTION
@@ -168,3 +168,5 @@ try {
 }
 if ($failures) { Write-Output "$failures check(s) failed"; exit 1 }
 Write-Output 'all interruption checks passed'
+# Explicit: a native command above may have left $LASTEXITCODE non-zero, and a CI shell would report that instead.
+exit 0

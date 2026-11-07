@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   Kills the real bdf-updater part-way through applying an update, over and over, and checks recovery.
 .DESCRIPTION
@@ -148,3 +148,5 @@ try {
 }
 if ($failures) { Write-Output "$failures check(s) failed"; exit 1 }
 Write-Output 'all updater interruption checks passed'
+# Explicit: a native command above may have left $LASTEXITCODE non-zero, and a CI shell would report that instead.
+exit 0
