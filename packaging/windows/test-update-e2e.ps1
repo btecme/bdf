@@ -178,6 +178,16 @@ try {
     Check ($st.update_available.version -eq '0.8.2') 'offline: the offer found earlier is still shown'
     $c = BdfCli $app2 @('update', 'check')
     Check ($c.Code -ne 0 -and $c.Out -match 'update server|couldn''t reach' -or $c.Code -ne 0) 'offline: a manual check fails cleanly'
+    # R18-1: the ordinary start of the same copy (no test feed configured) shows nothing of the demonstration, and
+    # what was downloaded for it cannot be applied.
+    $savedFeed = $env:BDF_UPDATE_FEED
+    Remove-Item Env:\BDF_UPDATE_FEED
+    try {
+        $st = Json (BdfCli $app2 @('update', 'status')).Out
+        Check ($null -eq $st.update_available -and -not $st.ready_to_install -and $st.check_state -eq 'no_feed') 'reopened without the test feed: no offer, nothing downloadable, and the state says there is no feed'
+        $c = BdfCli $app2 @('update', 'apply')
+        Check ($c.Code -ne 0 -and (Installed-Version $app2) -eq '0.8.2') 'reopened without the test feed: applying is refused and nothing changes'
+    } finally { $env:BDF_UPDATE_FEED = $savedFeed }
     $pdf = Join-Path $Work 'synthetic.pdf'
     $body = '0 0 0 rg 0 0 40 40 re f'
     $obj = @("<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << >> >>", "<< /Length $($body.Length) >>`nstream`n$body`nendstream")
