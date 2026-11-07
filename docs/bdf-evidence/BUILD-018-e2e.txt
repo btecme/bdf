@@ -35,6 +35,8 @@ ok   a release whose signed information was altered is rejected
 ok   an older release in the feed is rejected, not offered
 ok   offline: the offer found earlier is still shown
 ok   offline: a manual check fails cleanly
+ok   reopened without the test feed: no offer, nothing downloadable, and the state says there is no feed
+ok   reopened without the test feed: applying is refused and nothing changes
 ok   offline: opening and rendering a PDF still works
 ok   while a CLI job runs, the update waits: nothing replaced, the job is not ended
 ok   once the job finished, the update applied

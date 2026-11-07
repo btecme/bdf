@@ -436,7 +436,10 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
     {
         ui.label(egui::RichText::new(tl!("Development build: updates come from a test feed.")).color(t.text_muted).small());
     }
-    if let Some(error) = &app.updates.error {
+    // "Not configured" and "no feed" are states, not failures: the sentence below says it, so a check that could not
+    // even start does not also show its error.
+    let is_state_not_failure = matches!(status.map(|s| s.check_state.as_str()), Some("no_feed" | "not_configured"));
+    if let Some(error) = app.updates.error.as_ref().filter(|_| !is_state_not_failure) {
         ui.label(crate::i18n::fmt(tl!("Couldn't update: {e}"), &[("e", error)]));
         ui.add_space(6.0);
     }

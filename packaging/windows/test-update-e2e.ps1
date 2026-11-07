@@ -185,8 +185,10 @@ try {
     try {
         $st = Json (BdfCli $app2 @('update', 'status')).Out
         Check ($null -eq $st.update_available -and -not $st.ready_to_install -and $st.check_state -eq 'no_feed') 'reopened without the test feed: no offer, nothing downloadable, and the state says there is no feed'
+        $versionBefore = Installed-Version $app2
         $c = BdfCli $app2 @('update', 'apply')
-        Check ($c.Code -ne 0 -and (Installed-Version $app2) -eq '0.8.2') 'reopened without the test feed: applying is refused and nothing changes'
+        Start-Sleep -Seconds 3
+        Check ($c.Code -ne 0 -and $c.Out -match 'no verified update' -and (Installed-Version $app2) -eq $versionBefore) 'reopened without the test feed: applying is refused and nothing changes'
     } finally { $env:BDF_UPDATE_FEED = $savedFeed }
     $pdf = Join-Path $Work 'synthetic.pdf'
     $body = '0 0 0 rg 0 0 40 40 re f'

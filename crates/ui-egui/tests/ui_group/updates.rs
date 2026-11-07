@@ -37,11 +37,13 @@ fn status(offer: Option<&str>) -> Status {
 struct Host {
     answer: Result<Status, String>,
     calls: Arc<AtomicUsize>,
+    /// What `status()` says the last check found (`check_state`).
+    state: &'static str,
 }
 
 impl UpdateHost for Host {
     fn status(&self) -> Status {
-        status(None)
+        Status { check_state: self.state.into(), ..status(None) }
     }
     fn check(&self, _manual: bool) -> Result<Status, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -59,12 +61,16 @@ impl UpdateHost for Host {
 }
 
 fn harness(answer: Result<Status, String>, calls: Arc<AtomicUsize>) -> Harness<'static, PdfCraftApp> {
+    harness_in_state(answer, calls, "up_to_date")
+}
+
+fn harness_in_state(answer: Result<Status, String>, calls: Arc<AtomicUsize>, state: &'static str) -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         // Background checks are covered in tests/updates.rs; here only the person's own check runs.
         app.auto_update_check = false;
-        app.update_host = Some(Arc::new(Host { answer: answer.clone(), calls: calls.clone() }));
+        app.update_host = Some(Arc::new(Host { answer: answer.clone(), calls: calls.clone(), state }));
         app
     })
 }
@@ -118,6 +124,17 @@ fn an_up_to_date_or_failed_check_says_so() {
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     h.get_by_label_contains("Couldn't update: couldn't reach the update server");
+}
+
+/// A check that cannot even start (a development build with no feed) is a state, not a failure: the dialog says the
+/// state once, without the error that the attempt returned.
+#[test]
+fn a_check_that_could_not_start_shows_its_state_and_not_its_error() {
+    let mut h = harness_in_state(Err("couldn't reach the update server".into()), Arc::default(), "no_feed");
+    h.state_mut().execute("help.check_updates");
+    settle(&mut h);
+    h.get_by_label_contains("no update feed configured");
+    assert!(h.query_by_label_contains("Couldn't update").is_none(), "the error is not repeated");
 }
 
 #[test]
