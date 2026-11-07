@@ -56,7 +56,7 @@ try {
     foreach ($v in '0.8.0', '0.8.1', '0.8.2') {
         $relDir = Join-Path $Work "rel-$v"
         Xtask portable-package --bin-dir (Join-Path $BinRoot $v) --version $v --out $relDir
-        Xtask update-sign --zip (Join-Path $relDir "bdf-$v-windows-x64-portable.zip") --version $v --key $KeyFile --out $relDir --channel dev --url-base "http://127.0.0.1:$port/v$v" --notes (Join-Path $Repo 'packaging\windows\PORTABLE-README.txt')
+        Xtask update-sign --zip (Join-Path $relDir "bdf-$v-windows-x64-portable.zip") --version $v --key $KeyFile --out $relDir --channel dev --url-base "http://127.0.0.1:$port/v$v"
         New-Item -ItemType Directory -Path (Join-Path $feedRoot "v$v") | Out-Null
         Copy-Item (Join-Path $relDir "bdf-$v-windows-x64-portable.zip") (Join-Path $feedRoot "v$v")
         $zips[$v] = Join-Path $relDir "bdf-$v-windows-x64-portable.zip"

@@ -31,7 +31,7 @@ serde_json = { workspace = true }
 # The release envelope carries the signed manifest as base64 (already in the tree).
 base64 = "0.22"
 log = { workspace = true }
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"], optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 

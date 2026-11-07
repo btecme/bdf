@@ -30,6 +30,7 @@ fn status(offer: Option<&str>) -> Status {
         previous_version: None,
         last_result: None,
         feed: None,
+        check_state: "up_to_date".into(),
     }
 }
 

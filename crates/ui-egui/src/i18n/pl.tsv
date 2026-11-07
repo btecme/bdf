@@ -2353,3 +2353,7 @@ animation effects	Off	Wyłączone
 	Development build: updates come from a test feed.	Wersja deweloperska: aktualizacje pochodzą z kanału testowego.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Aktualizacje pochodzą tylko z podpisanych wersji BDF. Nic o Tobie ani Twoich dokumentach nie jest wysyłane.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Aktualizacja testowa
+	Test offer from a development feed. This is not a BDF release.	Oferta testowa z kanału deweloperskiego. To nie jest wydanie BDF.
+	This development build has no update feed configured, so there is nothing to check.	Ta wersja deweloperska nie ma skonfigurowanego kanału aktualizacji, więc nie ma czego sprawdzać.
+	BDF has not checked for updates yet.	BDF jeszcze nie sprawdzał aktualizacji.

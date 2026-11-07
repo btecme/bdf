@@ -85,8 +85,6 @@ pub(crate) struct Updates {
     pub(crate) job: Job,
     /// The last problem, shown in the dialog until the next try.
     pub(crate) error: Option<String>,
-    /// A manual check finished with nothing to offer: say so in the dialog.
-    pub(crate) checked_up_to_date: bool,
     /// Start-up work (first status, last result) has run.
     started: bool,
     /// When the next automatic check is due (egui time, seconds).
@@ -112,7 +110,6 @@ impl PdfCraftApp {
         }
         self.updates.open = true;
         self.updates.error = None;
-        self.updates.checked_up_to_date = false;
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_check(true);
     }
@@ -211,7 +208,6 @@ impl PdfCraftApp {
                     self.updates.job = Job::Idle;
                     match result {
                         Ok(status) => {
-                            self.updates.checked_up_to_date = manual && status.update_available.is_none();
                             self.updates.status = Some(status);
                             self.updates.error = None;
                         }
@@ -281,12 +277,16 @@ impl PdfCraftApp {
 /// The green Update button for the tab strip; returns whether it was clicked. The label says what it does and the
 /// colour is never the only cue.
 pub(crate) fn button(app: &PdfCraftApp, ui: &mut egui::Ui, height: f32) -> bool {
-    let Some(offer) = app.updates.status.as_ref().and_then(|s| s.update_available.as_ref()) else { return false };
-    let label = tl!("Update");
+    let Some((status, offer)) = app.updates.status.as_ref().and_then(|s| s.update_available.as_ref().map(|o| (s, o))) else { return false };
+    let label = button_label(status);
     let font = theme::semibold(12.5);
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE).size().x);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w + 38.0, (height - 4.0).max(22.0)), egui::Sense::click());
-    let tip = crate::i18n::fmt(tl!("Update to BDF {v}"), &[("v", &offer.version)]);
+    let tip = if status.dev_build {
+        tl!("Test offer from a development feed. This is not a BDF release.").to_string()
+    } else {
+        crate::i18n::fmt(tl!("Update to BDF {v}"), &[("v", &offer.version)])
+    };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &tip));
     // One green for both themes: white text on it is above 4.5:1.
     let base = Color32::from_rgb(0x1f, 0x7a, 0x3d);
@@ -309,12 +309,20 @@ pub(crate) fn button(app: &PdfCraftApp, ui: &mut egui::Ui, height: f32) -> bool 
     theme::hand(resp.on_hover_text(tip)).clicked()
 }
 
+/// What the green button says: a test offer from a development feed never reads as an ordinary update.
+fn button_label(status: &Status) -> &'static str {
+    if status.dev_build { tl!("Test update") } else { tl!("Update") }
+}
+
 /// The width the strip keeps free for the "b-tec Built" mark and, when it is showing, the Update button.
 pub(crate) fn reserved_width(app: &PdfCraftApp, ui: &mut egui::Ui) -> f32 {
     let t = theme::Tokens::get(ui.ctx());
     let measure = |text: &str, font: egui::FontId| ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, t.text).size().x);
     let brand = measure(tl!("b-tec Built"), theme::medium(12.0)) + 8.0 + 4.0;
-    let update = if app.update_button_shown() { measure(tl!("Update"), theme::semibold(12.5)) + 38.0 + 4.0 } else { 0.0 };
+    let update = match app.updates.status.as_ref() {
+        Some(s) if app.update_button_shown() => measure(button_label(s), theme::semibold(12.5)) + 38.0 + 4.0,
+        _ => 0.0,
+    };
     brand + update
 }
 
@@ -434,6 +442,11 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
     }
     match status.and_then(|s| s.update_available.as_ref().map(|o| (s, o))) {
         Some((s, offer)) => {
+            if s.dev_build {
+                let amber = if ui.visuals().dark_mode { Color32::from_rgb(0xfb, 0xbf, 0x24) } else { Color32::from_rgb(0x92, 0x40, 0x0e) };
+                ui.label(egui::RichText::new(tl!("Test offer from a development feed. This is not a BDF release.")).strong().color(amber));
+                ui.add_space(4.0);
+            }
             ui.label(egui::RichText::new(crate::i18n::fmt(tl!("BDF {v} is available."), &[("v", &offer.version)])).strong());
             ui.label(egui::RichText::new(crate::i18n::fmt(tl!("You have version {c}."), &[("c", current)])).color(t.text_muted));
             if !offer.notes.is_empty() {
@@ -482,12 +495,27 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
             }
         }
         None => {
-            if status.is_some_and(|s| s.trust != "configured") {
-                ui.label(tl!(
-                    "This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page."
-                ));
-            } else if app.updates.checked_up_to_date || app.updates.error.is_none() {
-                ui.label(crate::i18n::fmt(tl!("BDF {c} is up to date."), &[("c", current)]));
+            match status.map(|s| s.check_state.as_str()) {
+                _ if status.is_some_and(|s| s.trust != "configured") => {
+                    ui.label(tl!(
+                        "This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page."
+                    ));
+                }
+                Some("no_feed") => {
+                    ui.label(tl!("This development build has no update feed configured, so there is nothing to check."));
+                }
+                Some("never_checked") if app.updates.error.is_none() => {
+                    ui.label(tl!("BDF has not checked for updates yet."));
+                }
+                // A failed check says so (the error above, when this dialog asked); it is never reported as up to date.
+                Some("failed") if app.updates.error.is_none() => {
+                    let why = status.and_then(|s| s.last_error.clone()).unwrap_or_default();
+                    ui.label(crate::i18n::fmt(tl!("Couldn't update: {e}"), &[("e", &why)]));
+                }
+                _ if app.updates.error.is_none() => {
+                    ui.label(crate::i18n::fmt(tl!("BDF {c} is up to date."), &[("c", current)]));
+                }
+                _ => {}
             }
             ui.add_space(8.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

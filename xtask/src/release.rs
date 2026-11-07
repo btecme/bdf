@@ -54,6 +54,54 @@ pub fn keygen(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Every regular file under `dir` as an input named `<prefix>/<relative path>`. Links and unfinished downloads
+/// (`.part`) are never followed or packaged.
+fn add_tree(dir: &Path, prefix: &str, inputs: &mut Vec<Input>) -> Result<()> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir).with_context(|| format!("couldn't read {}", dir.display()))?.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let name = e.file_name().to_string_lossy().to_string();
+        let kind = e.file_type().with_context(|| format!("couldn't inspect {}", e.path().display()))?;
+        if kind.is_symlink() || name.ends_with(".part") {
+            continue;
+        }
+        let rel = format!("{prefix}/{name}");
+        if kind.is_dir() {
+            add_tree(&e.path(), &rel, inputs)?;
+        } else if kind.is_file() {
+            inputs.push(Input { rel, source: e.path() });
+        }
+    }
+    Ok(())
+}
+
+/// What every portable package carries: the four programs, portable mode, and the notices.
+const REQUIRED_FILES: [&str; 9] =
+    ["bdf.exe", "bdf-cli.exe", "bdf-worker.exe", "bdf-updater.exe", "portable.txt", "README.txt", "NOTICE", "LICENSE-MIT", "LICENSE-APACHE"];
+
+/// `portable-verify --zip FILE --version X.Y.Z [--arch x64]`: check a built package the way the updater will read it
+/// (one folder, safe names, every file against its own list) and that it is the whole product.
+pub fn portable_verify(args: &[String]) -> Result<()> {
+    let zip = PathBuf::from(required(args, "--zip")?);
+    let version = Version::parse(&required(args, "--version")?).context("--version must be MAJOR.MINOR.PATCH")?;
+    let arch = flag(args, "--arch").unwrap_or_else(|| "x64".into());
+    let (size, sha256) = package::hash_file(&zip).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let entry =
+        PackageEntry { os: "windows".into(), arch: arch.clone(), kind: "portable-zip".into(), url: String::new(), size, sha256: sha256.clone() };
+    let verified = package::verify_zip(&zip, &entry, version, "windows", &arch).map_err(|e| anyhow::anyhow!("{e}"))?;
+    for needed in REQUIRED_FILES {
+        if !verified.info.files.iter().any(|f| f.path == needed) {
+            bail!("the package does not contain {needed}");
+        }
+    }
+    let expected_top = format!("bdf-{version}-windows-{arch}");
+    if verified.top != expected_top {
+        bail!("the package folder is {}, expected {expected_top}", verified.top);
+    }
+    println!("{}: {} files, folder {}, {} bytes, sha256 {sha256}", zip.display(), verified.info.files.len(), verified.top, size);
+    Ok(())
+}
+
 fn load_key(path: &Path) -> Result<SigningKey> {
     let text = std::fs::read_to_string(path).with_context(|| format!("couldn't read the signing key {}", path.display()))?;
     let bytes = pdfcraft_update::unhex(text.trim()).context("the signing key file is not hex")?;
@@ -99,6 +147,14 @@ pub fn portable_package(args: &[String]) -> Result<()> {
             }
         }
     }
+    // OCR models, only when a build asks for them (the core package has none): every file of the folder, under models/.
+    if let Some(models) = flag(args, "--models-dir") {
+        let before = inputs.len();
+        add_tree(Path::new(&models), "models", &mut inputs)?;
+        if inputs.len() == before {
+            bail!("--models-dir {models} holds no files");
+        }
+    }
     let zip = out.join(format!("bdf-{version}-windows-{arch}-portable.zip"));
     let entry = write_package(&zip, &version, "windows", &arch, &inputs).map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("{}  {} bytes  sha256 {}", zip.display(), entry.size, entry.sha256);
@@ -125,8 +181,17 @@ pub fn sign(args: &[String]) -> Result<()> {
     let url_base = flag(args, "--url-base").unwrap_or_else(|| format!("https://github.com/btecme/bdf/releases/download/v{parsed}"));
     let notes = match flag(args, "--notes") {
         Some(p) => std::fs::read_to_string(&p).with_context(|| format!("couldn't read the notes {p}"))?,
+        // A development release is a test: its notes say so in a line, so nobody mistakes the dialog for a real release.
+        None if channel == "dev" => "Development test release for trying the update flow. Not a BDF release.".to_string(),
         None => String::new(),
     };
+    if notes.chars().count() > pdfcraft_update::manifest::MAX_NOTES_CHARS {
+        bail!(
+            "the release notes are {} characters; the window shows at most {}. Keep them short and put the full text on the release page",
+            notes.chars().count(),
+            pdfcraft_update::manifest::MAX_NOTES_CHARS
+        );
+    }
     let (size, sha256) = package::hash_file(&zip)?;
     let manifest = Manifest {
         schema: 1,
@@ -212,6 +277,59 @@ mod tests {
         assert!(s.starts_with("20") && s.ends_with('Z'), "{s}");
     }
 
+    /// R18-3: the package the hosted build ships is the four programs plus notices, optionally the OCR models, and the
+    /// check that gates it refuses a package that is missing a program.
+    #[test]
+    fn the_portable_package_is_the_whole_product_and_the_check_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for exe in ["bdf.exe", "bdf-cli.exe", "bdf-worker.exe", "bdf-updater.exe"] {
+            std::fs::write(bin.join(exe), exe).unwrap();
+        }
+        let models = dir.path().join("models");
+        std::fs::create_dir_all(models.join("sub")).unwrap();
+        std::fs::write(models.join("det.rten"), b"model").unwrap();
+        std::fs::write(models.join("sub").join("ATTRIBUTION.txt"), b"a").unwrap();
+        std::fs::write(models.join("half.rten.part"), b"unfinished").unwrap();
+        let s = |v: &str| v.to_string();
+        let out = dir.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        portable_package(&[s("--bin-dir"), bin.display().to_string(), s("--version"), s("0.8.3"), s("--out"), out.display().to_string()]).unwrap();
+        let zip = out.join("bdf-0.8.3-windows-x64-portable.zip");
+        portable_verify(&[s("--zip"), zip.display().to_string(), s("--version"), s("0.8.3")]).unwrap();
+        assert!(portable_verify(&[s("--zip"), zip.display().to_string(), s("--version"), s("0.8.4")]).is_err(), "another version is refused");
+        assert!(portable_verify(&[s("--zip"), zip.display().to_string(), s("--version"), s("0.8.3"), s("--arch"), s("arm64")]).is_err());
+
+        let with_models = dir.path().join("with-models");
+        std::fs::create_dir_all(&with_models).unwrap();
+        portable_package(&[
+            s("--bin-dir"),
+            bin.display().to_string(),
+            s("--version"),
+            s("0.8.3"),
+            s("--out"),
+            with_models.display().to_string(),
+            s("--models-dir"),
+            models.display().to_string(),
+        ])
+        .unwrap();
+        let zip2 = with_models.join("bdf-0.8.3-windows-x64-portable.zip");
+        let (size, sha256) = package::hash_file(&zip2).unwrap();
+        let entry = PackageEntry { os: "windows".into(), arch: "x64".into(), kind: "portable-zip".into(), url: String::new(), size, sha256 };
+        let listed = package::verify_zip(&zip2, &entry, Version(0, 8, 3), "windows", "x64").unwrap().info.files;
+        let names: Vec<&str> = listed.iter().map(|f| f.path.as_str()).collect();
+        assert!(names.contains(&"models/det.rten") && names.contains(&"models/sub/ATTRIBUTION.txt"), "{names:?}");
+        assert!(!names.iter().any(|n| n.ends_with(".part")), "an unfinished download is never shipped");
+
+        // A package without the updater is not the product: the check fails.
+        let partial = dir.path().join("partial.zip");
+        let src = bin.join("bdf.exe");
+        write_package(&partial, "0.8.3", "windows", "x64", &[Input { rel: "bdf.exe".into(), source: src }]).unwrap();
+        let err = portable_verify(&[s("--zip"), partial.display().to_string(), s("--version"), s("0.8.3")]).unwrap_err().to_string();
+        assert!(err.contains("does not contain"), "{err}");
+    }
+
     #[test]
     fn keys_and_releases_round_trip_through_the_tools() {
         let dir = tempfile::tempdir().unwrap();
@@ -263,5 +381,15 @@ mod tests {
         wrong.extend(["--expect-pubkey".into(), "04".repeat(65)]);
         assert!(sign(&wrong).is_err());
         assert!(out.join("SHA256SUMS.txt").is_file());
+
+        // A development release with no notes of its own says in one line that it is a test; real notes stay short.
+        let trust = Trust::from_hex(&public, Channel::Dev).unwrap();
+        let signed = SignedManifest::from_envelope(&std::fs::read(&release).unwrap(), &trust).unwrap();
+        assert!(signed.manifest.notes.contains("Not a BDF release") && signed.manifest.notes.len() < 200, "{}", signed.manifest.notes);
+        let long = dir.path().join("long-notes.txt");
+        std::fs::write(&long, "x".repeat(4001)).unwrap();
+        let mut too_long = args.clone();
+        too_long.extend(["--notes".into(), long.display().to_string()]);
+        assert!(sign(&too_long).unwrap_err().to_string().contains("release notes"));
     }
 }

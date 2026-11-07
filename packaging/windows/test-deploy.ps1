@@ -133,6 +133,136 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $users 'dave') -Force | Out-Null
     $r = Deploy (@('-PackageZip', $zip2, '-ReleaseFile', $rel2) + $common + @('-Users', 'dave', '-WhatIf'))
     Check ($r.Out -match 'would install' -and -not (Test-Path (Join-Path $users 'dave\AppData'))) '-WhatIf reports and changes nothing'
+
+    # 10. R18-2: the installed package list belongs to the person, so it is never an authority. A hostile list is refused
+    #     before anything moves, and the person's data stays exactly where it was.
+    $erin = Join-Path $users 'erin'; New-Item -ItemType Directory -Path $erin | Out-Null
+    $r = Deploy (@('-PackageZip', $zip1, '-ReleaseFile', $rel1) + $common + @('-Users', 'erin'))
+    $erinApp = & $app 'erin'
+    $erinData = Join-Path $erinApp 'BDFData'
+    New-Item -ItemType Directory -Path "$erinData\recovery" -Force | Out-Null
+    Set-Content "$erinData\settings.json" 'erin settings'
+    Set-Content "$erinData\recovery\doc.autosave" 'erin unsaved work'
+    $listPath = Join-Path $erinApp 'bdf-package.json'
+    $goodList = [IO.File]::ReadAllText($listPath)
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    function Hostile-List([scriptblock]$Edit) {
+        $o = $goodList | ConvertFrom-Json
+        & $Edit $o
+        [IO.File]::WriteAllText($listPath, ($o | ConvertTo-Json -Depth 6), $utf8)
+    }
+    function Add-Entry($o, [string]$Path) { $o.files = @($o.files) + [pscustomobject]@{ path = $Path; size = 1; sha256 = ('0' * 64) } }
+    $sentinels = { (Get-Content "$erinData\settings.json") -eq 'erin settings' -and (Get-Content "$erinData\recovery\doc.autosave") -eq 'erin unsaved work' }
+    $cases = [ordered]@{
+        'a native Windows path under BDFData'        = { param($o) Add-Entry $o 'BDFData\settings.json' }
+        'a slash path under BDFData'                 = { param($o) Add-Entry $o 'BDFData/settings.json' }
+        'BDFData in another letter case'             = { param($o) Add-Entry $o 'bdfdata/recovery/doc.autosave' }
+        'BDFData by its 8.3 short name'              = { param($o) Add-Entry $o 'BDFDAT~1/settings.json' }
+        'a traversal out of the folder'              = { param($o) Add-Entry $o '../../outside.txt' }
+        'a drive path'                               = { param($o) Add-Entry $o 'C:/Windows/win.ini' }
+        'an absolute path'                           = { param($o) Add-Entry $o '/Windows/win.ini' }
+        'an alternate data stream'                   = { param($o) Add-Entry $o 'bdf.exe:evil' }
+        'the update folder'                          = { param($o) Add-Entry $o 'BDFUpdate/x' }
+        'the previous-version folder'                = { param($o) Add-Entry $o 'BDFPrevious/x' }
+        'the package list itself'                    = { param($o) Add-Entry $o 'bdf-package.json' }
+        'the same file twice in another letter case' = { param($o) Add-Entry $o 'BDF.EXE' }
+        'no files at all'                            = { param($o) $o.files = @() }
+        'a wrong schema'                             = { param($o) $o.schema = 7 }
+        'another product'                            = { param($o) $o.product = 'other' }
+        'a version that is not a version'            = { param($o) $o.version = '9..x' }
+        'an impossible number of files'              = { param($o) $o.files = @(1..2001 | ForEach-Object { [pscustomobject]@{ path = "f$_.txt"; size = 1; sha256 = ('0' * 64) } }) }
+    }
+    foreach ($name in $cases.Keys) {
+        Hostile-List $cases[$name]
+        $before = (Get-Content (Join-Path $erinApp 'bdf.exe')) -join ''
+        $r = Deploy (@('-PackageZip', $zip2, '-ReleaseFile', $rel2) + $common + @('-Users', 'erin'))
+        $safe = $r.Code -eq 1 -and $r.Out -match 'cannot be trusted' -and (& $sentinels) -and (-not (Test-Path (Join-Path $erinApp 'BDFPrevious'))) `
+            -and ((Get-Content (Join-Path $erinApp 'bdf.exe')) -join '') -eq $before -and -not (Test-Path (Join-Path $erinApp 'BDFUpdate\deploy-stage'))
+        Check $safe "a hostile installed list ($name) is refused and BDFData stays where it was"
+    }
+    # A hostile list that is not even JSON.
+    [IO.File]::WriteAllText($listPath, '{ not json', $utf8)
+    $r = Deploy (@('-PackageZip', $zip2, '-ReleaseFile', $rel2) + $common + @('-Users', 'erin'))
+    Check ($r.Code -eq 1 -and (& $sentinels) -and -not (Test-Path (Join-Path $erinApp 'BDFPrevious'))) 'an installed list that is not JSON is refused and nothing moves'
+    # The same list, honest, with a stale file the old version owned: that file is displaced into BDFPrevious, the data is not.
+    Set-Content (Join-Path $erinApp 'stale.txt') 'old only'
+    Hostile-List { param($o) Add-Entry $o 'stale.txt' }
+    $r = Deploy (@('-PackageZip', $zip2, '-ReleaseFile', $rel2) + $common + @('-Users', 'erin'))
+    Check ($r.Code -eq 0 -and $r.Out -match 'updated 0.8.1 -> 0.8.2') 'an honest installed list still updates'
+    Check ((-not (Test-Path (Join-Path $erinApp 'stale.txt'))) -and (Test-Path (Join-Path $erinApp 'BDFPrevious\stale.txt'))) 'a file only the old version had is kept aside in BDFPrevious'
+    Check ((& $sentinels) -and -not (Test-Path (Join-Path $erinApp 'BDFPrevious\BDFData'))) 'BDFData was neither moved nor copied by the update'
+
+    # 11. R18-2: links inside the BDF folder are never followed by anything that changes it.
+    $frank = Join-Path $users 'frank'; New-Item -ItemType Directory -Path $frank | Out-Null
+    $r = Deploy (@('-PackageZip', $zip1, '-ReleaseFile', $rel1) + $common + @('-Users', 'frank'))
+    $frankApp = & $app 'frank'
+    $target = Join-Path $Work 'link-target'
+    New-Item -ItemType Directory -Path $target | Out-Null
+    Set-Content (Join-Path $target 'sentinel.txt') 'must survive'
+    function Target-Intact { @(Get-ChildItem $target -Force).Count -eq 1 -and (Get-Content (Join-Path $target 'sentinel.txt')) -eq 'must survive' }
+    foreach ($place in 'planted', 'BDFUpdate\deploy-stage', 'BDFUpdate\deploy-previous', 'BDFPrevious', 'BDFUpdate\downloads') {
+        $link = Join-Path $frankApp $place
+        New-Item -ItemType Directory -Path (Split-Path $link -Parent) -Force | Out-Null
+        cmd /c mklink /J "$link" "$target" | Out-Null
+        $r = Deploy (@('-PackageZip', $zip2, '-ReleaseFile', $rel2) + $common + @('-Users', 'frank'))
+        Check ($r.Code -eq 1 -and $r.Out -match 'link or junction' -and (Target-Intact) -and (Get-Content (Join-Path $frankApp 'bdf.exe')) -match 'one') "a junction at $place is refused and its target is untouched"
+        cmd /c rmdir "$link" | Out-Null
+    }
+    # A link inside the person's own BDFData is theirs: the script neither lists nor follows it.
+    $dataLink = Join-Path $frankApp 'BDFData\mine'
+    New-Item -ItemType Directory -Path (Split-Path $dataLink -Parent) -Force | Out-Null
+    cmd /c mklink /J "$dataLink" "$target" | Out-Null
+    $r = Deploy (@('-PackageZip', $zip2, '-ReleaseFile', $rel2) + $common + @('-Users', 'frank'))
+    Check ($r.Code -eq 0 -and (Target-Intact) -and (Get-Content (Join-Path $frankApp 'bdf.exe')) -match 'two') 'a junction inside BDFData is ignored: the update succeeds and the target is untouched'
+    cmd /c rmdir "$dataLink" | Out-Null
+
+    # 12. R18-2: the helpers themselves, loaded from the script, on a tree that holds a link.
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Deploy, [ref]$null, [ref]$null)
+    $wanted = 'Test-IsLink', 'Remove-Tree', 'Assert-Inside', 'Find-Link', 'Initialize-LogDirectory'
+    $ReparseAttr = [System.IO.FileAttributes]::ReparsePoint
+    $Reserved = @('bdfdata', 'bdfupdate', 'bdfprevious')
+    $System32 = Join-Path $env:SystemRoot 'System32'
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wanted -contains $n.Name }, $true)) {
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
+    $tree = Join-Path $Work 'tree'
+    New-Item -ItemType Directory -Path "$tree\a\b" -Force | Out-Null
+    Set-Content "$tree\a\b\file.txt" 'x'
+    (Get-Item "$tree\a\b\file.txt").Attributes = 'ReadOnly'
+    cmd /c mklink /J "$tree\a\link" "$target" | Out-Null
+    Remove-Tree $tree
+    Check ((-not (Test-Path $tree)) -and (Target-Intact)) 'Remove-Tree deletes a tree with a junction and a read-only file without touching the junction target'
+    $appDir = Join-Path $Work 'appdir'
+    New-Item -ItemType Directory -Path "$appDir\BDFData", "$appDir\sub" -Force | Out-Null
+    $threw = { param($sb) try { & $sb; $false } catch { $true } }
+    Check (-not (& $threw { Assert-Inside $appDir (Join-Path $appDir 'sub\x.txt') })) 'Assert-Inside accepts an ordinary file in the folder'
+    Check (& $threw { Assert-Inside $appDir (Join-Path $appDir 'BDFData\settings.json') }) 'Assert-Inside refuses BDFData'
+    Check (& $threw { Assert-Inside $appDir (Join-Path $appDir 'BDFData\settings.json') -Internal }) 'Assert-Inside refuses BDFData even for internal paths'
+    Check (& $threw { Assert-Inside $appDir (Join-Path $appDir 'BDFPrevious\x') }) 'Assert-Inside refuses BDFPrevious for payload paths'
+    Check (-not (& $threw { Assert-Inside $appDir (Join-Path $appDir 'BDFPrevious\x') -Internal })) 'Assert-Inside allows BDFPrevious for internal paths'
+    Check (& $threw { Assert-Inside $appDir (Join-Path $appDir '..\outside.txt') }) 'Assert-Inside refuses a path that climbs out of the folder'
+    Check (& $threw { Assert-Inside $appDir ($appDir + '2\x.txt') }) 'Assert-Inside refuses a sibling folder that shares the name prefix'
+    cmd /c mklink /J "$appDir\sub\hop" "$target" | Out-Null
+    Check (& $threw { Assert-Inside $appDir (Join-Path $appDir 'sub\hop\evil.txt') }) 'Assert-Inside refuses a path that goes through a link'
+    Check ((Find-Link $appDir) -like '*hop') 'Find-Link finds a link inside the folder'
+    cmd /c rmdir "$appDir\sub\hop" | Out-Null
+    cmd /c mklink /J "$appDir\BDFData\mine" "$target" | Out-Null
+    Check ($null -eq (Find-Link $appDir)) 'Find-Link does not look inside BDFData'
+    cmd /c rmdir "$appDir\BDFData\mine" | Out-Null
+    # The log folder: a link, or a folder owned by an ordinary user, is never written to.
+    $savedPd = $env:ProgramData
+    try {
+        $fakePd = Join-Path $Work 'ProgramData'
+        New-Item -ItemType Directory -Path $fakePd | Out-Null
+        $env:ProgramData = $fakePd
+        $LogDirectory = $null
+        cmd /c mklink /J "$fakePd\BDF" "$target" | Out-Null
+        Check ($null -eq (Initialize-LogDirectory)) 'a log folder that is a link is not used'
+        cmd /c rmdir "$fakePd\BDF" | Out-Null
+        New-Item -ItemType Directory -Path "$fakePd\BDF" | Out-Null
+        $owner = (Get-Acl "$fakePd\BDF").Owner
+        Check (($owner -match '^(NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators)$') -or ($null -eq (Initialize-LogDirectory))) 'a log folder owned by an ordinary user is not used'
+    } finally { $env:ProgramData = $savedPd }
 } finally {
     Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
 }

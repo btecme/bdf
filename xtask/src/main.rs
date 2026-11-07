@@ -48,6 +48,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         "Build the portable ZIP with its package list (--bin-dir DIR --version X.Y.Z --out DIR) (BUILD-018)",
         release::portable_package,
     ),
+    (
+        "portable-verify",
+        "Check a built portable ZIP: one folder, safe names, every file against its list, the whole product (--zip --version)",
+        release::portable_verify,
+    ),
     ("update-sign", "Write the signed bdf-update.json and SHA256SUMS.txt for a package (--zip --version --key --out) (BUILD-018)", release::sign),
     ("update-verify", "Verify a release's signature and package like the app does (--release --zip --pubkey)", release::verify),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),

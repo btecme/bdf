@@ -2247,3 +2247,7 @@ animation effects	Off	關
 	Development build: updates come from a test feed.	開發版：更新來自測試來源。
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	更新僅來自 BDF 的已簽署發行版。不會傳送任何關於您或您文件的資訊。
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	測試更新
+	Test offer from a development feed. This is not a BDF release.	來自開發來源的測試更新。這不是 BDF 的正式發行版。
+	This development build has no update feed configured, so there is nothing to check.	此開發版未設定更新來源，因此沒有可檢查的內容。
+	BDF has not checked for updates yet.	BDF 尚未檢查更新。

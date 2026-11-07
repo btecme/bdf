@@ -8,6 +8,12 @@
 #   * declares read-only repository permissions and is given no secrets, so it cannot sign or publish;
 #   * produces the MSI and the portable zip, checks the MSI statically (test-msi.ps1, inside
 #     package.ps1) and by really installing, running and uninstalling it (install-test.ps1);
+#   * the portable zip is the managed package the in-app updater and the Action1 script understand (BUILD-018): the
+#     four programs and bdf-package.json. package.ps1 builds it with `cargo xtask portable-package` and tests that exact
+#     file (test-portable-package.ps1): contents, programs, trust, a deployment of it; this workflow asserts the artifact;
+#   * the update trust root is the repository VARIABLE BDF_UPDATE_PUBKEY (a public key, not a secret). Without it the
+#     build carries no trust root, every update is refused, and the package says so (check_state not_configured): that is
+#     what an unconfigured run produces, and the artifact is labelled accordingly;
 #   * keeps the result as a workflow artifact with SHA256SUMS.txt, labelled unsigned.
 # A signed release job, a GitHub Release and other platforms come back as separate, reviewed work once a
 # signing identity and a distribution endpoint exist; until then package qualification is pending, not
@@ -16,11 +22,22 @@ name: Package (Windows x64, unsigned)
 
 on:
   workflow_dispatch:
+    inputs:
+      sign_release:
+        description: >-
+          Also sign the portable package's release information (bdf-update.json) with the update signing key kept in the
+          BDF_UPDATE_SIGNING_KEY secret. Produces an artifact only: nothing is published. Needs the secret and the
+          BDF_UPDATE_PUBKEY variable; runs on main only.
+        type: boolean
+        default: false
   pull_request:
     paths:
       - .github/workflows/release.yml
       - packaging/windows/**
       - rust-toolchain.toml
+      - crates/update/**
+      - apps/pdfcraft-updater/**
+      - xtask/src/release.rs
 
 concurrency:
   group: package-${{ github.ref }}
@@ -66,11 +83,32 @@ jobs:
       - name: Install WiX (hash-checked, from a source that offers nothing else)
         shell: pwsh
         run: ./packaging/windows/install-wix.ps1
+      - name: Say which update trust this build carries
+        shell: pwsh
+        env:
+          BDF_UPDATE_PUBKEY: ${{ vars.BDF_UPDATE_PUBKEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:BDF_UPDATE_PUBKEY)) {
+            Write-Output '::notice title=No update trust root::BDF_UPDATE_PUBKEY is not set, so this package cannot verify or install updates (it says so itself). Set the repository variable to the release public key to build a package that can.'
+          } else {
+            Write-Output 'BDF_UPDATE_PUBKEY is set: the package is built to trust updates signed by that key.'
+          }
       - name: Build and package (unsigned)
         shell: pwsh
         env:
           DIST: ${{ github.workspace }}\dist\x64
+          BDF_UPDATE_PUBKEY: ${{ vars.BDF_UPDATE_PUBKEY }}
         run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Assert the artifact is what the updater and the deployment script expect
+        shell: pwsh
+        run: |
+          $names = @(Get-ChildItem dist/x64 -File | ForEach-Object Name | Sort-Object)
+          Write-Output ($names -join "`n")
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $expected = @("bdf-$version-windows-x64-portable.zip", "bdf-$version-windows-x64.msi") | Sort-Object
+          if (($names -join '|') -ne ($expected -join '|')) { throw "dist/x64 holds [$($names -join ', ')], expected exactly [$($expected -join ', ')]" }
+          cargo run --locked --quiet -p xtask -- portable-verify --zip "dist/x64/bdf-$version-windows-x64-portable.zip" --version $version --arch x64
+          if ($LASTEXITCODE) { throw 'portable-verify failed' }
       - name: Install the MSI, check it, run it, uninstall it
         shell: pwsh
         run: |
@@ -89,5 +127,42 @@ jobs:
         with:
           name: bdf-windows-x64-UNSIGNED
           path: dist/x64/*
+          if-no-files-found: error
+          retention-days: 14
+
+      # Owner activation, off by default, publishes nothing. When the repository holds the signing key as the secret
+      # BDF_UPDATE_SIGNING_KEY and the matching public key as the variable BDF_UPDATE_PUBKEY, a manual run on main with
+      # `sign_release` set signs this exact package's release information and checks it the way the app will. The
+      # secret is visible to this step only, is written to a temporary file outside the workspace and is deleted after.
+      - name: Sign the release information (owner-activated)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && github.ref == 'refs/heads/main' && github.repository == 'btecme/bdf' }}
+        shell: pwsh
+        env:
+          BDF_UPDATE_SIGNING_KEY: ${{ secrets.BDF_UPDATE_SIGNING_KEY }}
+          BDF_UPDATE_PUBKEY: ${{ vars.BDF_UPDATE_PUBKEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:BDF_UPDATE_SIGNING_KEY) -or [string]::IsNullOrWhiteSpace($env:BDF_UPDATE_PUBKEY)) {
+            throw 'Signing needs the secret BDF_UPDATE_SIGNING_KEY and the variable BDF_UPDATE_PUBKEY (see docs/releasing.md). Nothing was signed.'
+          }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $zip = "dist/x64/bdf-$version-windows-x64-portable.zip"
+          $keyFile = Join-Path $env:RUNNER_TEMP 'bdf-update-signing.key'
+          try {
+            [IO.File]::WriteAllText($keyFile, $env:BDF_UPDATE_SIGNING_KEY.Trim() + "`n")
+            cargo run --locked --quiet -p xtask -- update-sign --zip $zip --version $version --key $keyFile --out dist/signed --channel stable --expect-pubkey $env:BDF_UPDATE_PUBKEY
+            if ($LASTEXITCODE) { throw 'update-sign failed' }
+            cargo run --locked --quiet -p xtask -- update-verify --release dist/signed/bdf-update.json --zip $zip --pubkey $env:BDF_UPDATE_PUBKEY
+            if ($LASTEXITCODE) { throw 'the signed release did not verify' }
+          } finally {
+            Remove-Item -LiteralPath $keyFile -Force -ErrorAction SilentlyContinue
+          }
+          Get-Content dist/signed/SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && github.ref == 'refs/heads/main' && github.repository == 'btecme/bdf' }}
+        with:
+          name: bdf-windows-x64-RELEASE-INFORMATION
+          path: |
+            dist/signed/bdf-update.json
+            dist/signed/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14

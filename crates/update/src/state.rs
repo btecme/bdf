@@ -40,6 +40,9 @@ pub struct State {
     pub skipped: Option<String>,
     /// The last verified release information (the envelope text), re-verified before use.
     pub release: Option<String>,
+    /// The feed that answered the last successful check. A development build only trusts what it remembers from the feed
+    /// it is configured with now, so a demonstration offer does not outlive the demonstration.
+    pub source: Option<String>,
 }
 
 impl State {
@@ -83,7 +86,20 @@ impl State {
         now >= self.next_check()
     }
 
-    pub fn record_success(&mut self, now: u64, release: &SignedManifest) {
+    /// Start remembering `source`'s answers. What was remembered from another feed is not an answer to this one, so it
+    /// goes (the highest version ever verified stays: it only guards against replays).
+    fn rebind(&mut self, source: Option<&str>) {
+        if self.source.as_deref() != source {
+            self.source = source.map(str::to_string);
+            self.release = None;
+            self.last_success = 0;
+            self.failures = 0;
+            self.last_error.clear();
+        }
+    }
+
+    pub fn record_success(&mut self, now: u64, release: &SignedManifest, source: Option<&str>) {
+        self.rebind(source);
         self.last_attempt = now;
         self.last_success = now;
         self.failures = 0;
@@ -95,14 +111,16 @@ impl State {
     }
 
     /// A check that reached the server but found nothing to offer (older or same release): the schedule moves on.
-    pub fn record_checked(&mut self, now: u64) {
+    pub fn record_checked(&mut self, now: u64, source: Option<&str>) {
+        self.rebind(source);
         self.last_attempt = now;
         self.last_success = now;
         self.failures = 0;
         self.last_error.clear();
     }
 
-    pub fn record_failure(&mut self, now: u64, error: &str) {
+    pub fn record_failure(&mut self, now: u64, error: &str, source: Option<&str>) {
+        self.rebind(source);
         self.last_attempt = now;
         self.failures = self.failures.saturating_add(1);
         self.last_error = error.chars().filter(|c| !c.is_control()).take(300).collect();
@@ -143,17 +161,17 @@ mod tests {
         let mut s = State::default();
         assert!(s.is_due(1_000_000), "never checked: due");
         let m = signed(1, &manifest_json("0.8.1", "stable", SHA, 10), Channel::Stable).unwrap();
-        s.record_success(1_000_000, &m);
+        s.record_success(1_000_000, &m, None);
         assert!(!s.is_due(1_000_000 + CHECK_INTERVAL - 1));
         assert!(s.is_due(1_000_000 + CHECK_INTERVAL));
-        s.record_failure(2_000_000, "offline");
+        s.record_failure(2_000_000, "offline", None);
         assert_eq!(s.failures, 1);
         assert!(!s.is_due(2_000_000 + 3599));
         assert!(s.is_due(2_000_000 + 3600));
-        s.record_failure(2_010_000, "offline");
+        s.record_failure(2_010_000, "offline", None);
         assert!(!s.is_due(2_010_000 + 7199));
         assert!(s.is_due(2_010_000 + 7200));
-        s.record_checked(3_000_000);
+        s.record_checked(3_000_000, None);
         assert_eq!((s.failures, s.last_error.as_str()), (0, ""));
     }
 
@@ -169,8 +187,8 @@ mod tests {
         let mut s = State::default();
         let m2 = signed(1, &manifest_json("0.8.2", "stable", SHA, 10), Channel::Stable).unwrap();
         let m1 = signed(1, &manifest_json("0.8.1", "stable", SHA, 10), Channel::Stable).unwrap();
-        s.record_success(10, &m2);
-        s.record_success(20, &m1);
+        s.record_success(10, &m2, None);
+        s.record_success(20, &m1, None);
         assert_eq!(s.floor(), Some(Version(0, 8, 2)), "a replay of an older release never lowers the floor");
         assert_eq!(s.cached_release(&trust).unwrap().version, Version(0, 8, 1));
         // The same cache under another build's key is nothing.
@@ -182,12 +200,29 @@ mod tests {
     }
 
     #[test]
+    fn what_a_feed_said_is_forgotten_when_another_feed_answers_but_the_floor_stays() {
+        let trust = testkeys::trust(1, Channel::Dev);
+        let m = signed(1, &manifest_json("0.8.2", "dev", SHA, 10), Channel::Dev).unwrap();
+        let mut s = State::default();
+        s.record_success(10, &m, Some("http://a"));
+        // The same feed finding nothing new keeps what it said; the cache is still verified against the trust root.
+        s.record_checked(20, Some("http://a"));
+        assert_eq!(s.cached_release(&trust).unwrap().version, Version(0, 8, 2));
+        assert_eq!((s.source.as_deref(), s.last_success), (Some("http://a"), 20));
+        // Another feed (even one that only failed) is not an answer from the first.
+        s.record_failure(30, "offline", Some("http://b"));
+        assert!(s.cached_release(&trust).is_none() && s.last_success == 0);
+        assert_eq!((s.failures, s.source.as_deref()), (1, Some("http://b")));
+        assert_eq!(s.floor(), Some(Version(0, 8, 2)), "the replay floor is never lowered by changing feeds");
+    }
+
+    #[test]
     fn a_damaged_state_file_is_an_empty_state() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(STATE_FILE), b"{ not json").unwrap();
         assert_eq!(State::load(dir.path()), State::default());
         let mut s = State::default();
-        s.record_failure(5, "x\u{0}y\nz");
+        s.record_failure(5, "x\u{0}y\nz", None);
         s.save(dir.path()).unwrap();
         let back = State::load(dir.path());
         assert_eq!(back.failures, 1);

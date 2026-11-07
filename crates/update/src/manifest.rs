@@ -37,7 +37,7 @@ pub const MAX_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
 pub const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/btecme/bdf/releases/download/";
 /// Where the release notes page may point.
 pub const RELEASE_PAGE_PREFIX: &str = "https://github.com/btecme/bdf/releases/";
-const MAX_NOTES_CHARS: usize = 4000;
+pub const MAX_NOTES_CHARS: usize = 4000;
 
 /// A package this release offers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,8 +279,9 @@ pub mod testing {
     pub const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     pub fn manifest_json(version: &str, channel: &str, sha: &str, size: u64) -> String {
+        let (os, arch) = crate::this_platform();
         format!(
-            r#"{{"schema":1,"product":"bdf","channel":"{channel}","version":"{version}","published":"2026-11-06T00:00:00Z","notes":"Fixes.","notes_url":"https://github.com/btecme/bdf/releases/tag/v{version}","packages":[{{"os":"windows","arch":"x64","kind":"portable-zip","url":"https://github.com/btecme/bdf/releases/download/v{version}/bdf-{version}-windows-x64-portable.zip","size":{size},"sha256":"{sha}"}}]}}"#
+            r#"{{"schema":1,"product":"bdf","channel":"{channel}","version":"{version}","published":"2026-11-06T00:00:00Z","notes":"Fixes.","notes_url":"https://github.com/btecme/bdf/releases/tag/v{version}","packages":[{{"os":"{os}","arch":"{arch}","kind":"portable-zip","url":"https://github.com/btecme/bdf/releases/download/v{version}/bdf-{version}-{os}-{arch}-portable.zip","size":{size},"sha256":"{sha}"}}]}}"#
         )
     }
 
@@ -296,7 +297,8 @@ mod tests {
     use crate::trust::testkeys;
 
     fn assess(m: &SignedManifest, current: Version, floor: Option<Version>) -> Result<Assessment> {
-        m.assess(current, floor, "windows", "x64", Channel::Stable)
+        let (os, arch) = crate::this_platform();
+        m.assess(current, floor, os, arch, Channel::Stable)
     }
 
     #[test]
@@ -374,9 +376,10 @@ mod tests {
     #[test]
     fn a_missing_platform_package_is_not_applicable() {
         let m = signed(1, &manifest_json("0.8.1", "stable", SHA, 1000), Channel::Stable).unwrap();
-        let r = m.assess(Version(0, 8, 0), None, "windows", "arm64", Channel::Stable);
+        let (os, arch) = crate::this_platform();
+        let r = m.assess(Version(0, 8, 0), None, os, "other-arch", Channel::Stable);
         assert!(matches!(r, Err(UpdateError::NotApplicable(_))));
-        let r = m.assess(Version(0, 8, 0), None, "linux", "x64", Channel::Stable);
+        let r = m.assess(Version(0, 8, 0), None, "other-os", arch, Channel::Stable);
         assert!(matches!(r, Err(UpdateError::NotApplicable(_))));
     }
 

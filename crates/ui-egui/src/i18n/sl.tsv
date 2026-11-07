@@ -2382,3 +2382,7 @@ animation effects	Off	Izklopljeni
 	Development build: updates come from a test feed.	Razvojna različica: posodobitve prihajajo iz testnega vira.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Posodobitve prihajajo samo iz podpisanih izdaj BDF. O vas ali vaših dokumentih se ne pošilja nič.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Preizkusna posodobitev
+	Test offer from a development feed. This is not a BDF release.	Preizkusna ponudba iz razvojnega vira. To ni izdaja BDF.
+	This development build has no update feed configured, so there is nothing to check.	Ta razvojna različica nima nastavljenega vira posodobitev, zato ni kaj preverjati.
+	BDF has not checked for updates yet.	BDF še ni preverjal posodobitev.

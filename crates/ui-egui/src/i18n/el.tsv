@@ -2383,3 +2383,7 @@ animation effects	Off	Ανενεργά
 	Development build: updates come from a test feed.	Έκδοση ανάπτυξης: οι ενημερώσεις προέρχονται από δοκιμαστική ροή.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Οι ενημερώσεις προέρχονται μόνο από υπογεγραμμένες εκδόσεις του BDF. Τίποτα για εσάς ή τα έγγραφά σας δεν αποστέλλεται.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Δοκιμαστική ενημέρωση
+	Test offer from a development feed. This is not a BDF release.	Δοκιμαστική προσφορά από ροή ανάπτυξης. Δεν είναι έκδοση του BDF.
+	This development build has no update feed configured, so there is nothing to check.	Αυτή η έκδοση ανάπτυξης δεν έχει ρυθμισμένη ροή ενημερώσεων, επομένως δεν υπάρχει τίποτα προς έλεγχο.
+	BDF has not checked for updates yet.	Το BDF δεν έχει ελέγξει ακόμη για ενημερώσεις.

@@ -249,8 +249,8 @@ pub(crate) mod tests {
         let base = server.base.clone();
         let dir = tempfile::tempdir().unwrap();
         let entry = |name: &str| PackageEntry {
-            os: "windows".into(),
-            arch: "x64".into(),
+            os: crate::this_platform().0.into(),
+            arch: crate::this_platform().1.into(),
             kind: "portable-zip".into(),
             url: format!("{base}/{name}"),
             size: body.len() as u64,

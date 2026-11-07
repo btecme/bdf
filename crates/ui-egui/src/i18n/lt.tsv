@@ -2621,3 +2621,7 @@ key	Space	Tarpas
 	Development build: updates come from a test feed.	Kūrimo versija: atnaujinimai gaunami iš bandomojo kanalo.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Atnaujinimai gaunami tik iš pasirašytų BDF leidimų. Nieko apie jus ar jūsų dokumentus nesiunčiama.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Bandomasis atnaujinimas
+	Test offer from a development feed. This is not a BDF release.	Bandomasis pasiūlymas iš kūrimo kanalo. Tai nėra BDF leidimas.
+	This development build has no update feed configured, so there is nothing to check.	Šioje kūrimo versijoje nenustatytas atnaujinimų kanalas, todėl nėra ką tikrinti.
+	BDF has not checked for updates yet.	BDF dar netikrino atnaujinimų.

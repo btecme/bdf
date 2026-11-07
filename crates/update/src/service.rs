@@ -76,6 +76,9 @@ pub struct Status {
     /// What the last update attempt reported (from the helper), if it has not been shown yet.
     pub last_result: Option<LastResult>,
     pub feed: Option<String>,
+    /// What a check found, in words a screen can switch on: `not_configured` (no trust root), `no_feed` (a development
+    /// build with no feed), `never_checked`, `failed`, `up_to_date` or `available`.
+    pub check_state: String,
 }
 
 /// A downloaded, verified package ready to hand to the helper.
@@ -127,8 +130,18 @@ impl Updater {
         }
     }
 
+    /// Whether what the state remembers may be shown now. A stable build asks one fixed feed, so its memory is always
+    /// good, offline included. A development build's feed is whatever it was started with: it only trusts what it
+    /// learned from that same feed, so an offer from a demonstration feed that is no longer configured is not shown.
+    fn remembers_this_feed(&self, state: &State) -> bool {
+        self.trust.channel() != crate::Channel::Dev || (self.feed.is_some() && state.source.as_deref() == self.feed.as_deref())
+    }
+
     /// The release on offer from what is cached (verified again now), unless it was skipped.
     fn offer(&self, state: &State) -> Option<(SignedManifest, Available)> {
+        if !self.remembers_this_feed(state) {
+            return None;
+        }
         let release = state.cached_release(&self.trust)?;
         let (os, arch) = this_platform();
         match release.assess(self.current, state.floor(), os, arch, self.trust.channel()) {
@@ -145,6 +158,20 @@ impl Updater {
             Err(e) => (false, Some(e.to_string())),
         };
         let offer = if self.trust.is_configured() { self.offer(&state) } else { None };
+        let known = self.remembers_this_feed(&state);
+        let check_state = if !self.trust.is_configured() {
+            "not_configured"
+        } else if offer.is_some() {
+            "available"
+        } else if self.feed.is_none() {
+            "no_feed"
+        } else if !known || (state.last_success == 0 && state.last_error.is_empty()) {
+            "never_checked"
+        } else if !state.last_error.is_empty() {
+            "failed"
+        } else {
+            "up_to_date"
+        };
         let previous_version =
             std::fs::read(layout::previous_dir(&self.app_dir).join(PACKAGE_FILE)).ok().and_then(|b| PackageInfo::parse(&b).ok()).map(|i| i.version);
         Status {
@@ -158,13 +185,14 @@ impl Updater {
             app_dir: self.app_dir.display().to_string(),
             ready_to_install: offer.as_ref().is_some_and(|(_, a)| self.prepared().is_some_and(|p| p.version == a.version)),
             update_available: offer.as_ref().map(|(_, a)| Offer::from(a)),
-            last_check: (state.last_success > 0).then_some(state.last_success),
-            next_check: state.next_check(),
-            last_error: (!state.last_error.is_empty()).then(|| state.last_error.clone()),
+            last_check: (known && state.last_success > 0).then_some(state.last_success),
+            next_check: if known { state.next_check() } else { 0 },
+            last_error: (known && !state.last_error.is_empty()).then(|| state.last_error.clone()),
             rejected: None,
             previous_version,
             last_result: apply::peek_result(&self.app_dir),
             feed: self.feed.clone(),
+            check_state: check_state.into(),
         }
     }
 
@@ -186,7 +214,7 @@ impl Updater {
         let release = match crate::feed::fetch_release(&self.trust, &feed) {
             Ok(r) => r,
             Err(e) => {
-                state.record_failure(now, &e.to_string());
+                state.record_failure(now, &e.to_string(), Some(&feed));
                 self.save(&state);
                 return Err(e);
             }
@@ -194,13 +222,13 @@ impl Updater {
         let (os, arch) = this_platform();
         let mut rejected = None;
         match release.assess(self.current, state.floor(), os, arch, self.trust.channel()) {
-            Ok(_) => state.record_success(now, &release),
+            Ok(_) => state.record_success(now, &release, Some(&feed)),
             Err(UpdateError::NotApplicable(why)) => {
-                state.record_checked(now);
+                state.record_checked(now, Some(&feed));
                 rejected = Some(why);
             }
             Err(e) => {
-                state.record_failure(now, &e.to_string());
+                state.record_failure(now, &e.to_string(), Some(&feed));
                 self.save(&state);
                 return Err(e);
             }
@@ -360,15 +388,20 @@ mod tests {
     /// A dev-channel release of `files` served over loopback at `/release.json`; the package is served
     /// corrupted when asked.
     fn release_server(root: &Path, version: &str, files: &[(&str, &[u8])], corrupt: bool) -> TestServer {
+        release_server_on(root, version, files, corrupt, "dev")
+    }
+
+    fn release_server_on(root: &Path, version: &str, files: &[(&str, &[u8])], corrupt: bool, channel: &str) -> TestServer {
         let pkg = build(root, &format!("srv-{version}.zip"), version, files);
         let mut zip = std::fs::read(&pkg.zip).unwrap();
         if corrupt {
             let mid = zip.len() / 2;
             zip[mid] ^= 0x42;
         }
-        let path = format!("/v{version}/bdf-{version}-windows-x64-portable.zip");
+        let (os, arch) = crate::this_platform();
+        let path = format!("/v{version}/bdf-{version}-{os}-{arch}-portable.zip");
         serve_with(|base| {
-            let json = manifest_json(version, "dev", &pkg.entry.sha256, pkg.entry.size)
+            let json = manifest_json(version, channel, &pkg.entry.sha256, pkg.entry.size)
                 .replace("https://github.com/btecme/bdf/releases/download/v", &format!("{base}/v"));
             vec![("/release.json".into(), 200, make_envelope(json.as_bytes(), &sign(1, json.as_bytes()))), (path, 200, zip)]
         })
@@ -402,7 +435,8 @@ mod tests {
         let app = installed_copy(root.path(), "0.8.0", V0);
         let srv_root = tempfile::tempdir().unwrap();
         let server = release_server(srv_root.path(), "0.8.1", V1, false);
-        let u = updater(root.path(), &app, Version(0, 8, 0), Some(format!("{}/release.json", server.base)));
+        let feed = format!("{}/release.json", server.base);
+        let u = updater(root.path(), &app, Version(0, 8, 0), Some(feed.clone()));
         let before = u.status();
         assert!(before.update_available.is_none() && before.last_check.is_none() && before.managed && before.dev_build);
 
@@ -424,7 +458,7 @@ mod tests {
 
         // Offline: the server is gone, yet the offer, its readiness and the downloaded package are still there.
         drop(server);
-        let again = updater(root.path(), &app, Version(0, 8, 0), Some("http://127.0.0.1:9/release.json".into()));
+        let again = updater(root.path(), &app, Version(0, 8, 0), Some(feed));
         let offline = again.status();
         assert_eq!(offline.update_available.as_ref().map(|o| o.version.as_str()), Some("0.8.1"));
         assert!(offline.ready_to_install);
@@ -444,7 +478,8 @@ mod tests {
         assert!(!u.status().ready_to_install && u.prepared().is_none());
         let leftovers: Vec<_> =
             std::fs::read_dir(layout::downloads_dir(&app)).map(|d| d.flatten().map(|e| e.file_name()).collect()).unwrap_or_default();
-        assert!(leftovers.iter().all(|n| n != "bdf-0.8.1-windows-x64-portable.zip"), "{leftovers:?}");
+        let zip_name = format!("bdf-0.8.1-{}-{}-portable.zip", crate::this_platform().0, crate::this_platform().1);
+        assert!(leftovers.iter().all(|n| *n != *zip_name), "{leftovers:?}");
     }
 
     #[test]
@@ -471,14 +506,17 @@ mod tests {
         let ahead = updater(root.path(), &app, Version(0, 9, 0), Some(format!("{}/release.json", old.base)));
         let s = ahead.check(true).unwrap();
         assert!(s.update_available.is_none() && s.rejected.as_deref().is_some_and(|r| r.contains("older")), "{s:?}");
-        // A newer release is seen, then the feed serves an older, genuinely signed one: the newer offer stands.
+        // A newer release is seen, then a feed serves an older, genuinely signed one: it is rejected and the floor stands.
         let newer = release_server(srv_root.path(), "0.8.2", V1, false);
         let u = updater(root.path(), &app, Version(0, 8, 0), Some(format!("{}/release.json", newer.base)));
         assert_eq!(u.check(true).unwrap().update_available.map(|o| o.version), Some("0.8.2".into()));
         let replay = updater(root.path(), &app, Version(0, 8, 0), Some(format!("{}/release.json", old.base)));
         let s = replay.check(true).unwrap();
         assert!(s.rejected.is_some(), "{s:?}");
-        assert_eq!(s.update_available.map(|o| o.version), Some("0.8.2".into()), "the replay did not replace the cached release");
+        // The feed changed, so the memory of the other feed's offer is gone, but the replay floor is not: an older release
+        // is never offered by any feed.
+        assert!(s.update_available.is_none(), "{s:?}");
+        assert_eq!(State::load(&replay.state_dir).floor(), Some(Version(0, 8, 2)));
     }
 
     #[test]
@@ -491,6 +529,100 @@ mod tests {
         assert!(!s.managed && s.managed_note.as_deref().is_some_and(|n| n.contains("portable package")), "{s:?}");
         assert!(u.launch_apply(&[]).is_err() && u.launch_rollback(&[]).is_err());
         assert!(u.prepare(&mut |_, _| true).is_err());
+    }
+
+    /// R18-1: a test offer belongs to the feed that made it. Reopening the same copy without that feed (the ordinary
+    /// way to start it) shows nothing to download, and a different feed does not inherit it either.
+    #[test]
+    fn a_development_offer_does_not_outlive_the_feed_it_came_from() {
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let srv_root = tempfile::tempdir().unwrap();
+        let server = release_server(srv_root.path(), "0.8.1", V1, false);
+        let feed = format!("{}/release.json", server.base);
+        let demo = updater(root.path(), &app, Version(0, 8, 0), Some(feed.clone()));
+        assert_eq!(demo.check(true).unwrap().check_state, "available");
+        demo.prepare(&mut |_, _| true).unwrap();
+        assert!(demo.status().ready_to_install);
+
+        // The ordinary start: same copy, same files and state, no feed configured.
+        let ordinary = updater(root.path(), &app, Version(0, 8, 0), None);
+        let s = ordinary.status();
+        assert!(s.update_available.is_none() && !s.ready_to_install && ordinary.prepared().is_none(), "{s:?}");
+        assert_eq!((s.check_state.as_str(), s.last_check, s.last_error.clone()), ("no_feed", None, None));
+        assert!(ordinary.launch_apply(&[]).is_err(), "nothing downloaded for another feed can be applied");
+        assert!(ordinary.prepare(&mut |_, _| true).is_err());
+
+        // Another feed does not inherit the offer, and says it has not asked yet.
+        let other = updater(root.path(), &app, Version(0, 8, 0), Some("http://127.0.0.1:9/other.json".into()));
+        let s = other.status();
+        assert!(s.update_available.is_none(), "{s:?}");
+        assert_eq!((s.check_state.as_str(), s.last_check), ("never_checked", None));
+
+        // Nothing was thrown away by looking: the demonstration feed still sees its own offer.
+        assert_eq!(demo.status().update_available.map(|o| o.version), Some("0.8.1".into()));
+        // A failing check against another feed forgets the first feed's offer for good.
+        assert!(other.check(true).is_err());
+        assert_eq!(other.status().check_state, "failed");
+        assert!(demo.status().update_available.is_none(), "the state now belongs to the other feed");
+    }
+
+    /// The states a screen shows are honest ones, not "up to date" for everything that is empty.
+    #[test]
+    fn the_check_state_says_what_actually_happened() {
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let none = Updater {
+            trust: Trust::none(Channel::Stable),
+            app_dir: app.clone(),
+            state_dir: root.path().join("s0"),
+            current: Version(0, 8, 0),
+            feed: None,
+        };
+        assert_eq!(none.status().check_state, "not_configured");
+        let dev_no_feed = Updater { state_dir: root.path().join("s1"), ..updater(root.path(), &app, Version(0, 8, 0), None) };
+        assert_eq!(dev_no_feed.status().check_state, "no_feed");
+
+        let srv_root = tempfile::tempdir().unwrap();
+        let server = release_server(srv_root.path(), "0.8.1", V1, false);
+        let feed = format!("{}/release.json", server.base);
+        let u = Updater { state_dir: root.path().join("s2"), ..updater(root.path(), &app, Version(0, 8, 0), Some(feed.clone())) };
+        assert_eq!(u.status().check_state, "never_checked");
+        // Up to date: the feed offers exactly what this copy is.
+        let same = Updater { state_dir: root.path().join("s3"), ..updater(root.path(), &app, Version(0, 8, 1), Some(feed.clone())) };
+        assert_eq!(same.check(true).unwrap().check_state, "up_to_date");
+        assert_eq!(same.status().check_state, "up_to_date");
+        assert_eq!(u.check(true).unwrap().check_state, "available");
+        // Failed: the feed went away.
+        drop(server);
+        let gone = Updater { state_dir: root.path().join("s4"), ..updater(root.path(), &app, Version(0, 8, 0), Some(feed)) };
+        assert!(gone.check(true).is_err());
+        assert_eq!(gone.status().check_state, "failed");
+    }
+
+    /// A release build asks one fixed feed, so what it learned stays valid offline, as before.
+    #[test]
+    fn a_stable_offer_is_still_shown_offline() {
+        use crate::manifest::testing::{SHA, signed};
+        let root = tempfile::tempdir().unwrap();
+        let app = installed_copy(root.path(), "0.8.0", V0);
+        let state_dir = root.path().join("state");
+        let release = signed(1, &manifest_json("0.8.1", "stable", SHA, 1000), Channel::Stable).unwrap();
+        let mut remembered = State::default();
+        remembered.record_success(crate::now_unix(), &release, Some("https://feed.example/release.json"));
+        remembered.save(&state_dir).unwrap();
+        let stable = |feed: Option<&str>| Updater {
+            trust: testkeys::trust(1, Channel::Stable),
+            app_dir: app.clone(),
+            state_dir: state_dir.clone(),
+            current: Version(0, 8, 0),
+            feed: feed.map(str::to_string),
+        };
+        // Whatever feed is configured now, a release build shows what it verified earlier, with no network.
+        for feed in [Some("https://feed.example/release.json"), Some("https://elsewhere.example/release.json"), None] {
+            let s = stable(feed).status();
+            assert_eq!((s.update_available.map(|o| o.version), s.check_state.as_str()), (Some("0.8.1".into()), "available"), "{feed:?}");
+        }
     }
 }
 

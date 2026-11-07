@@ -197,7 +197,8 @@ pub fn verify_zip(zip_path: &Path, expected: &PackageEntry, version: Version, os
     let mut declared: HashMap<String, u64> = HashMap::new();
     for i in 0..archive.len() {
         let entry = archive.by_index_raw(i).map_err(|e| UpdateError::Malformed(format!("the package is damaged ({e})")))?;
-        let name = entry.name().to_string();
+        let name =
+            entry.name().map(|n| n.to_string()).map_err(|_| UpdateError::Tampered("the package contains an entry with an unreadable name".into()))?;
         if entry.encrypted() || entry.is_symlink() {
             return Err(UpdateError::Tampered(format!(
                 "the package contains an encrypted or linked entry ({})",
@@ -355,8 +356,8 @@ pub mod testing {
                 schema: 1,
                 product: "bdf".into(),
                 version: version.into(),
-                os: "windows".into(),
-                arch: "x64".into(),
+                os: crate::this_platform().0.into(),
+                arch: crate::this_platform().1.into(),
                 files: files.iter().map(|(p, c)| FileEntry { path: (*p).into(), size: c.len() as u64, sha256: hex(&Sha256::digest(c)) }).collect(),
             },
             entries: files.iter().map(|(p, c)| (format!("top/{p}"), c.to_vec())).collect(),
@@ -375,7 +376,14 @@ pub mod testing {
         zip.finish().unwrap();
         let (size, sha256) = hash_file(&path).unwrap();
         Pkg {
-            entry: PackageEntry { os: "windows".into(), arch: "x64".into(), kind: "portable-zip".into(), url: String::new(), size, sha256 },
+            entry: PackageEntry {
+                os: crate::this_platform().0.into(),
+                arch: crate::this_platform().1.into(),
+                kind: "portable-zip".into(),
+                url: String::new(),
+                size,
+                sha256,
+            },
             zip: path,
         }
     }
@@ -391,11 +399,12 @@ pub mod testing {
 mod tests {
     use super::testing::*;
     use super::*;
+    use crate::this_platform;
 
     const V: Version = Version(0, 8, 1);
 
     fn verify(p: &Pkg) -> Result<Verified> {
-        verify_zip(&p.zip, &p.entry, V, "windows", "x64")
+        verify_zip(&p.zip, &p.entry, V, this_platform().0, this_platform().1)
     }
 
     #[test]
@@ -419,10 +428,10 @@ mod tests {
         let p = build(dir.path(), "a.zip", "0.8.1", &[("bdf.exe", b"exe")]);
         let mut wrong_hash = p.entry.clone();
         wrong_hash.sha256 = "0".repeat(64);
-        assert!(matches!(verify_zip(&p.zip, &wrong_hash, V, "windows", "x64"), Err(UpdateError::Tampered(_))));
+        assert!(matches!(verify_zip(&p.zip, &wrong_hash, V, this_platform().0, this_platform().1), Err(UpdateError::Tampered(_))));
         let mut wrong_size = p.entry.clone();
         wrong_size.size += 1;
-        assert!(matches!(verify_zip(&p.zip, &wrong_size, V, "windows", "x64"), Err(UpdateError::Tampered(_))));
+        assert!(matches!(verify_zip(&p.zip, &wrong_size, V, this_platform().0, this_platform().1), Err(UpdateError::Tampered(_))));
         // One flipped byte anywhere is caught by the whole-file hash.
         let mut bytes = std::fs::read(&p.zip).unwrap();
         let mid = bytes.len() / 2;
@@ -450,7 +459,7 @@ mod tests {
             ("unlisted file", Box::new(|s| s.entries.push(("top/extra.exe".into(), b"x".to_vec())))),
             ("missing file", Box::new(|s| s.info.files.push(FileEntry { path: "gone.dll".into(), size: 1, sha256: "a".repeat(64) }))),
             ("wrong version", Box::new(|s| s.info.version = "0.8.2".into())),
-            ("wrong arch", Box::new(|s| s.info.arch = "arm64".into())),
+            ("wrong arch", Box::new(|s| s.info.arch = "other-arch".into())),
             ("duplicate entry by letter case", Box::new(|s| s.entries.push(("top/BDF.EXE".into(), b"exe".to_vec())))),
             ("two top folders", Box::new(|s| s.entries.push(("other/x".into(), b"x".to_vec())))),
             ("file at the root", Box::new(|s| s.entries.push(("x.exe".into(), b"x".to_vec())))),
@@ -516,8 +525,8 @@ mod tests {
             schema: 1,
             product: "bdf".into(),
             version: "0.8.1".into(),
-            os: "windows".into(),
-            arch: "x64".into(),
+            os: crate::this_platform().0.into(),
+            arch: crate::this_platform().1.into(),
             files: vec![
                 FileEntry { path: "a".into(), size: 1, sha256: "a".repeat(64) },
                 FileEntry { path: "A/b".into(), size: 1, sha256: "b".repeat(64) },
@@ -532,8 +541,15 @@ mod tests {
         let path = dir.path().join("junk.zip");
         std::fs::write(&path, b"this is not a zip file at all").unwrap();
         let (size, sha256) = hash_file(&path).unwrap();
-        let entry = PackageEntry { os: "windows".into(), arch: "x64".into(), kind: "portable-zip".into(), url: String::new(), size, sha256 };
-        assert!(matches!(verify_zip(&path, &entry, V, "windows", "x64"), Err(UpdateError::Malformed(_))));
+        let entry = PackageEntry {
+            os: crate::this_platform().0.into(),
+            arch: crate::this_platform().1.into(),
+            kind: "portable-zip".into(),
+            url: String::new(),
+            size,
+            sha256,
+        };
+        assert!(matches!(verify_zip(&path, &entry, V, this_platform().0, this_platform().1), Err(UpdateError::Malformed(_))));
     }
 
     #[test]

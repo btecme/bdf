@@ -124,7 +124,7 @@ pub(crate) fn classify_io(what: String, source: std::io::Error) -> UpdateError {
 }
 
 /// The platform words the manifest uses for this build's package (`windows`, `x64`, ...).
-pub fn this_platform() -> (&'static str, &'static str) {
+pub const fn this_platform() -> (&'static str, &'static str) {
     let os = if cfg!(windows) {
         "windows"
     } else if cfg!(target_os = "macos") {
@@ -136,6 +136,8 @@ pub fn this_platform() -> (&'static str, &'static str) {
         "x64"
     } else if cfg!(target_arch = "aarch64") {
         "arm64"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
     } else {
         "other"
     };

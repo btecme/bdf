@@ -2286,3 +2286,7 @@ animation effects	Off	ఆఫ్
 	Development build: updates come from a test feed.	డెవలప్‌మెంట్ బిల్డ్: అప్‌డేట్‌లు టెస్ట్ ఫీడ్ నుండి వస్తాయి.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	అప్‌డేట్‌లు BDF సంతకం చేసిన విడుదలల నుండి మాత్రమే వస్తాయి. మీ గురించి లేదా మీ పత్రాల గురించి ఏదీ పంపబడదు.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	పరీక్ష అప్‌డేట్
+	Test offer from a development feed. This is not a BDF release.	డెవలప్‌మెంట్ ఫీడ్ నుండి పరీక్ష ఆఫర్. ఇది BDF విడుదల కాదు.
+	This development build has no update feed configured, so there is nothing to check.	ఈ డెవలప్‌మెంట్ బిల్డ్‌కు అప్‌డేట్ ఫీడ్ కాన్ఫిగర్ చేయలేదు, కాబట్టి తనిఖీ చేయడానికి ఏమీ లేదు.
+	BDF has not checked for updates yet.	BDF ఇంకా అప్‌డేట్‌ల కోసం తనిఖీ చేయలేదు.

@@ -2377,3 +2377,7 @@ animation effects	Off	オフ
 	Development build: updates come from a test feed.	開発ビルド: 更新はテスト用フィードから届きます。
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	更新は BDF の署名付きリリースからのみ届きます。あなたや書類に関する情報は送信されません。
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	テスト更新
+	Test offer from a development feed. This is not a BDF release.	開発用フィードからのテスト用の提供です。BDF のリリースではありません。
+	This development build has no update feed configured, so there is nothing to check.	この開発ビルドには更新フィードが設定されていないため、確認するものはありません。
+	BDF has not checked for updates yet.	BDF はまだ更新を確認していません。

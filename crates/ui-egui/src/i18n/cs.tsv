@@ -2451,3 +2451,7 @@ animation effects	Off	Vypnuto
 	Development build: updates come from a test feed.	Vývojová verze: aktualizace přicházejí z testovacího kanálu.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Aktualizace přicházejí jen z podepsaných verzí BDF. Nic o vás ani o vašich dokumentech se neodesílá.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Testovací aktualizace
+	Test offer from a development feed. This is not a BDF release.	Testovací nabídka z vývojového kanálu. Nejde o vydání BDF.
+	This development build has no update feed configured, so there is nothing to check.	Tato vývojová verze nemá nastaven žádný kanál aktualizací, takže není co kontrolovat.
+	BDF has not checked for updates yet.	BDF zatím nehledal aktualizace.

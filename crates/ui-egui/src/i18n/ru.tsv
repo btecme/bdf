@@ -2290,3 +2290,7 @@ animation effects	Off	Выкл
 	Development build: updates come from a test feed.	Сборка для разработки: обновления приходят из тестовой ленты.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Обновления приходят только из подписанных выпусков BDF. Ничего о вас и ваших документах не отправляется.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Тестовое обновление
+	Test offer from a development feed. This is not a BDF release.	Тестовое предложение из ленты разработчика. Это не выпуск BDF.
+	This development build has no update feed configured, so there is nothing to check.	В этой сборке для разработки не настроена лента обновлений, поэтому проверять нечего.
+	BDF has not checked for updates yet.	BDF ещё не проверял наличие обновлений.

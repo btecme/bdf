@@ -1,8 +1,9 @@
 # BDF portable deployment, Windows integration and updates (BUILD-018)
 
-Status: implemented 2026-11-06 on `feat/build-018-portable-updates` (version 0.8.0). Locally tested; **not** hosted-verified,
-not independently reviewed, and the real-Windows flows listed in [the evidence record](bdf-evidence/BUILD-018.md) that need a
-disposable machine have **not** been run. No signed release has been published: see [Owner setup](#owner-setup-to-activate-production-releases).
+Status: implemented 2026-11-06 on `feat/build-018-portable-updates` (version 0.8.0); corrected 2026-11-07 after the independent
+review (findings R18-1 to R18-4, listed in [the evidence record](bdf-evidence/BUILD-018.md)). Locally tested; hosted checks and
+the real-Windows flows that need a disposable machine are listed there with what has and has not been run. No signed release
+has been published: see [Owner setup](#owner-setup-to-activate-production-releases).
 
 ## What a person gets
 
@@ -21,6 +22,14 @@ disposable machine have **not** been run. No signed release has been published: 
   sets the default and never writes the protected `UserChoice`. *Remove Windows integration* removes only what this copy
   registered; *Refresh* re-points a registration after the folder moved. An extracted copy never touches the registry.
 * **The previous version is kept** in `BDFPrevious` (`bdf-cli update rollback` goes back to it).
+* **The dialog says what is true.** Not configured (a build with no trust root: it cannot verify, so it installs nothing), never
+  checked, failed (with the reason), up to date, or available: `bdf-cli update status` reports the same as `check_state`.
+  An empty state is never shown as "up to date".
+* **A test offer is labelled a test offer.** A development build's offer reads **Test update** on the button, the tooltip and the
+  dialog ("Test offer from a development feed. This is not a BDF release."), and a development release without notes of its own
+  carries one line saying so. A development build remembers an offer only for the feed it came from: start the same copy
+  without `BDF_UPDATE_FEED` (the ordinary way) and there is nothing on offer and nothing downloadable. A release build asks one
+  fixed feed, so what it last verified still shows offline, exactly as before.
 
 ## Trust model (what is verified, and what happens without a key)
 
@@ -67,6 +76,25 @@ Upload `bdf-0.8.0-windows-x64-portable.zip`, `bdf-update.json` and `SHA256SUMS.t
 is what people are offered, so publish last. Authenticode signing of the executables is separate and not required for updates
 (the update signature is the trust root); it is still worth doing so SmartScreen is quiet.
 
+### Hosted build
+
+`.github/workflows/release.yml` (manual, or on a pull request that touches packaging, `crates/update`, `apps/pdfcraft-updater` or
+`xtask/src/release.rs`) builds the MSI and this portable package through `packaging/windows/package.ps1`: the four programs
+(`bdf.exe`, `bdf-cli.exe`, `bdf-worker.exe`, `bdf-updater.exe`), `portable.txt`, the notices and `bdf-package.json`, written by
+`cargo xtask portable-package` and checked by `portable-verify`. `packaging/windows/test-portable-package.ps1` then tests **that
+exact ZIP**: contents against its own list, the four executables' machine type and subsystem, and (where the machine can run
+them) an extracted copy that reports its version, is a managed copy, carries the expected update trust, has nothing on offer,
+and whose `bdf-updater` runs; finally the Action1 script deploys the same ZIP under a throwaway test signature and the deployed
+copy runs. The workflow then asserts the artifact holds exactly the MSI and the ZIP.
+
+* The trust root is the repository **variable** `BDF_UPDATE_PUBKEY` (a public key). Unset, the artifact is built with no trust
+  root, says `not_configured`, refuses every update and is labelled unsigned; the test expects exactly that. Set, the test
+  expects `configured` and the key id of that key.
+* Signing is **owner-activated and publishes nothing**: a manual run on `main` with `sign_release` and the secret
+  `BDF_UPDATE_SIGNING_KEY` signs this package's `bdf-update.json`, verifies it like the app does, and uploads it as the artifact
+  `bdf-windows-x64-RELEASE-INFORMATION`. The secret is visible to that one step, is written outside the workspace and deleted.
+  No private key is in the repository and none is created by the workflow.
+
 ## Action1 deployment (Local System)
 
 `packaging/windows/deploy-bdf.ps1` is the script; `packaging/windows/test-deploy.ps1` tests it against synthetic packages.
@@ -80,10 +108,20 @@ is what people are offered, so publish last. Authenticode signing of the executa
    every file) and stops on anything unsigned or altered; then, for each real user profile (local, domain and Azure AD
    accounts from the profile list: never SYSTEM or service accounts), installs into `%LOCALAPPDATA%\Programs\BDF` of **that user**
    (not Action1's or SYSTEM's `LOCALAPPDATA`), gives that user ownership and Modify on their own copy so in-app updates need no
-   administrator rights, and changes no other permission. It refuses to write through a junction or link.
+   administrator rights, and changes no other permission.
+   **The folder is the user's, so nothing in it is trusted** (R18-2): the installed `bdf-package.json` is checked like the signed
+   one before anything moves (schema, version, count, and every path: no `BDFData`/`BDFUpdate`/`BDFPrevious`, no absolute, drive,
+   stream, 8.3-short or back-slash names, no traversal, no duplicates), and an installed copy whose list fails is refused and
+   left exactly as it is. The whole BDF folder is scanned for junctions and symbolic links first (the user's own `BDFData` is
+   never read or listed); one anywhere refuses that profile. Every path is checked to stay inside the folder and free of links just
+   before it is moved, created or deleted; deleting never follows a link; ownership is applied per top-level item without
+   following links and never across `BDFData`. The working directory is System32, nothing from a profile is run, and the log folder
+   is used only if it is not a link and is owned by SYSTEM or Administrators. What remains is a signed-in user racing the script
+   inside a window of milliseconds; `-SkipLoggedOnUsers` closes it for deployments that can wait until nobody is signed in.
 4. **Reruns are safe.** A user already on this version or newer is untouched. An older managed copy is updated by renaming files
    (previous version kept in `BDFPrevious`, rollback on failure) **only if nothing is running from it**; a running copy is skipped
-   and updated by the next run. `BDFData` and any file the user keeps in the folder are never touched. A folder at that path
+   and updated by the next run. `BDFData` and any file the user keeps in the folder are never touched (a regression test plants hostile installed lists, including a
+   native `BDFData\settings.json` path, and checks the data stays where it was). A folder at that path
    that is not a managed BDF copy is left alone and reported as a failure.
 5. **New users:** `-IncludeDefaultProfile` also installs into `C:\Users\Default`, which Windows copies into every profile
    created afterwards. Users who already exist are covered by running the Action1 policy on a schedule.
@@ -94,8 +132,10 @@ is what people are offered, so publish last. Authenticode signing of the executa
 ## Owner setup to activate production releases
 
 1. **Signing key**: run `cargo xtask update-keygen` once on a trusted machine; store the private key file securely (not in this
-   repository; the tool refuses a path inside it). Give builds the public key as `BDF_UPDATE_PUBKEY`
-   (`.github/workflows/release.yml` still needs that variable added; no signing secret has been added to the repository).
+   repository; the tool refuses a path inside it). In the repository settings add the public key as the **variable**
+   `BDF_UPDATE_PUBKEY` and, to let the workflow sign, the private key as the **secret** `BDF_UPDATE_SIGNING_KEY` (the workflow
+   code is in place; no secret has been added by this work). A protected `release` environment with a required reviewer is a
+   sensible extra.
 2. **Release hosting**: publish releases on `btecme/bdf` (assumed), with the three files above.
 3. **A disposable Windows machine** (Windows Sandbox or a VM, or a standard test account) to run the remaining acceptance flows.
 4. Optional: an Authenticode certificate for the executables.

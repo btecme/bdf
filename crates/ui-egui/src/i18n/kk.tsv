@@ -2375,3 +2375,7 @@ animation effects	Off	Өшірулі
 	Development build: updates come from a test feed.	Әзірлеу құрастыруы: жаңартулар сынақ арнасынан келеді.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Жаңартулар тек BDF қол қойылған шығарылымдарынан келеді. Сіз немесе құжаттарыңыз туралы ештеңе жіберілмейді.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Сынақ жаңартуы
+	Test offer from a development feed. This is not a BDF release.	Әзірлеу арнасынан келген сынақ ұсынысы. Бұл BDF шығарылымы емес.
+	This development build has no update feed configured, so there is nothing to check.	Бұл әзірлеу құрастыруында жаңарту арнасы бапталмаған, сондықтан тексеретін ештеңе жоқ.
+	BDF has not checked for updates yet.	BDF жаңартуларды әлі тексермеді.

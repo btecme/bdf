@@ -74,6 +74,9 @@ fn serve(routes: impl FnOnce(&str) -> Vec<(String, Vec<u8>)>) -> Server {
 }
 
 fn release_server(root: &Path) -> Server {
+    // The package, its manifest entry and the route all name the platform the test runs on, because the service offers
+    // only a package for the platform it runs on.
+    let (os, arch) = pdfcraft_update::this_platform();
     let pkg = build(root, "srv.zip", "0.8.1", V1);
     let zip = std::fs::read(&pkg.zip).unwrap();
     serve(|base| {
@@ -81,7 +84,7 @@ fn release_server(root: &Path) -> Server {
             .replace("https://github.com/btecme/bdf/releases/download/v", &format!("{base}/v"));
         vec![
             ("/release.json".into(), make_envelope(json.as_bytes(), &sign(1, json.as_bytes()))),
-            ("/v0.8.1/bdf-0.8.1-windows-x64-portable.zip".into(), zip),
+            (format!("/v0.8.1/bdf-0.8.1-{os}-{arch}-portable.zip"), zip),
         ]
     })
 }

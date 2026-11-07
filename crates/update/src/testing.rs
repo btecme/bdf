@@ -24,7 +24,7 @@ pub fn installed_copy(root: &Path, version: &str, files: &[(&str, &[u8])]) -> Pa
     let app = root.join("app");
     std::fs::create_dir_all(&app).unwrap();
     let pkg = build(root, "install.zip", version, files);
-    let v = package::verify_zip(&pkg.zip, &pkg.entry, Version::parse(version).unwrap(), "windows", "x64").unwrap();
+    let v = package::verify_zip(&pkg.zip, &pkg.entry, Version::parse(version).unwrap(), crate::this_platform().0, crate::this_platform().1).unwrap();
     package::stage(&pkg.zip, &v, &app).unwrap();
     std::fs::remove_file(&pkg.zip).unwrap();
     std::fs::create_dir_all(app.join("BDFData").join("recovery")).unwrap();

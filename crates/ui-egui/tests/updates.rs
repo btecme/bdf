@@ -37,6 +37,7 @@ fn status(offer: bool, managed: bool, trusted: bool, ready: bool) -> Status {
         previous_version: None,
         last_result: None,
         feed: None,
+        check_state: "up_to_date".into(),
     }
 }
 
@@ -250,4 +251,62 @@ fn an_automatic_check_runs_on_its_own_a_few_seconds_after_start() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(fake.checks.load(Ordering::Relaxed), 1, "the first automatic check ran by itself");
+}
+
+/// Open the update dialog the way Help > Check for updates does and let its check finish.
+fn open_dialog(h: &mut Harness<'static, PdfCraftApp>, fake: &Fake) {
+    let before = fake.checks.load(Ordering::Relaxed);
+    h.state_mut().check_for_updates();
+    for _ in 0..60 {
+        h.run_steps(2);
+        if fake.checks.load(Ordering::Relaxed) > before {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(4);
+}
+
+/// R18-1: a development build's offer is a test offer, and says so in the button, its tooltip and the dialog.
+#[test]
+fn an_offer_in_a_development_build_is_labelled_as_a_test_everywhere() {
+    let mut s = status(true, true, true, false);
+    s.dev_build = true;
+    s.channel = "dev".into();
+    s.check_state = "available".into();
+    let fake = Fake::new(s);
+    let mut h = harness(Some(fake.clone()));
+    assert!(h.query_by_label("Update").is_none(), "the plain Update label is for real releases only");
+    // The button's accessible name and tooltip are the test label (its visible text is "Test update").
+    assert!(h.query_by_label("Update to BDF 9.9.9").is_none(), "no ordinary update wording for a test offer");
+    h.get_by_label_contains("Test offer from a development feed").click();
+    h.run_steps(4);
+    h.get_by_label_contains("BDF 9.9.9 is available.");
+    // The dialog repeats it above the offer, next to the existing development-build line.
+    assert!(h.query_all_by_label_contains("Test offer from a development feed").count() >= 1);
+    h.get_by_label_contains("Development build: updates come from a test feed.");
+}
+
+/// R18-1: each empty state says what is true. A dialog never says "up to date" about a check that did not happen.
+#[test]
+fn the_dialog_says_what_actually_happened_not_up_to_date_for_everything() {
+    let say = |state: &str, error: Option<&str>, trusted: bool, dev: bool| -> Vec<String> {
+        let mut s = status(false, true, trusted, false);
+        s.dev_build = dev;
+        s.check_state = state.into();
+        s.last_error = error.map(str::to_string);
+        let fake = Fake::new(s);
+        let mut h = harness(Some(fake.clone()));
+        open_dialog(&mut h, &fake);
+        ["is up to date", "has not checked for updates yet", "no update feed configured", "cannot verify updates", "Couldn't update"]
+            .iter()
+            .filter(|needle| h.query_by_label_contains(needle).is_some())
+            .map(|n| n.to_string())
+            .collect()
+    };
+    assert_eq!(say("up_to_date", None, true, false), ["is up to date"]);
+    assert_eq!(say("never_checked", None, true, false), ["has not checked for updates yet"]);
+    assert_eq!(say("no_feed", None, true, true), ["no update feed configured"]);
+    assert_eq!(say("not_configured", None, false, false), ["cannot verify updates"]);
+    assert_eq!(say("failed", Some("couldn't reach the update server"), true, false), ["Couldn't update"]);
 }

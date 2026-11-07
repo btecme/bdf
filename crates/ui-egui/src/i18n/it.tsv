@@ -2386,3 +2386,7 @@ animation effects	Off	Disattivati
 	Development build: updates come from a test feed.	Versione di sviluppo: gli aggiornamenti arrivano da un feed di prova.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Gli aggiornamenti arrivano solo dalle versioni firmate di BDF. Non viene inviato nulla su di te o sui tuoi documenti.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Aggiornamento di prova
+	Test offer from a development feed. This is not a BDF release.	Offerta di prova da un feed di sviluppo. Non è una versione di BDF.
+	This development build has no update feed configured, so there is nothing to check.	Questa versione di sviluppo non ha alcun feed di aggiornamento configurato, quindi non c'è nulla da controllare.
+	BDF has not checked for updates yet.	BDF non ha ancora cercato aggiornamenti.

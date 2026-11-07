@@ -2376,3 +2376,7 @@ animation effects	Off	Ki
 	Development build: updates come from a test feed.	Fejlesztői verzió: a frissítések tesztcsatornáról érkeznek.
 	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	A frissítések csak a BDF aláírt kiadásaiból érkeznek. Rólad és a dokumentumaidról semmi sem kerül elküldésre.
 	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Tesztfrissítés
+	Test offer from a development feed. This is not a BDF release.	Tesztajánlat egy fejlesztői csatornáról. Ez nem a BDF hivatalos kiadása.
+	This development build has no update feed configured, so there is nothing to check.	Ennek a fejlesztői verziónak nincs beállított frissítési csatornája, ezért nincs mit ellenőrizni.
+	BDF has not checked for updates yet.	A BDF még nem keresett frissítéseket.
