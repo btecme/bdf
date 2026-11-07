@@ -67,10 +67,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.combine_tab.focused = false;
                 }
                 // Keep the two icon buttons, a text-wide margin and three gaps outside the scrolling tabs.
-                let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 2.0 * button
-                    + 50.0
-                    + window_controls::width(&controls.right);
+                // Room for what sits at the right: the "b-tec Built" mark, the Update button when there is one, the two icon
+                // buttons, the window controls and the gaps.
+                let controls_width = crate::updates::reserved_width(app, ui) + 2.0 * button + 50.0 + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
                 let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
@@ -239,6 +238,13 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
                     if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
+                    }
+                    // The "b-tec Built" mark, and beside it the green Update button when a newer release is on offer.
+                    if crate::updates::brand_link(ui) {
+                        app.execute("help.btec_bdf");
+                    }
+                    if app.update_button_shown() && crate::updates::button(app, ui, button) {
+                        app.updates.open = true;
                     }
                 });
             });

@@ -2354,3 +2354,28 @@ animation effects	Off	Өшірулі
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	b-tec бағдарламалау агенттері дәуіріне арнап агентті бірінші орынға қоятын PDF қолданбасы ретінде жасады. Неліктен екенін біздің негізгі принциптеріміз түсіндіреді.
 	b-tec website	b-tec веб-сайты
 	b-tec first principles	b-tec негізгі принциптері
+	Update to BDF {v}	BDF {v} нұсқасына жаңарту
+	Downloading and checking the update…	Жаңартуды жүктеу және тексеру…
+	Couldn't update: {e}	Жаңарту мүмкін болмады: {e}
+	You have version {c}.	Сізде {c} нұсқасы бар.
+	Releases page	Нұсқалар беті
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF сақталмаған өзгерістер туралы сұрайды, жабылады, жаңартылады және құжаттарыңызды қайта ашады. Параметрлеріңіз сақталады.
+	Close BDF and update	BDF жабу және жаңарту
+	Download update	Жаңартуды жүктеп алу
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Бұл құрастыру жаңартуларды тексере алмайды, сондықтан ешқайсысын орнатпайды. Ең соңғы портативті пакетті нұсқалар бетінен алыңыз.
+	Update postponed. Choose Update again when you are ready.	Жаңарту кейінге қалдырылды. Дайын болғанда қайтадан Жаңарту дегенді таңдаңыз.
+	Check for updates automatically	Жаңартуларды автоматты түрде тексеру
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	BDF шығарылымдар арнасынан фонда сұрайды. Сәтсіз тексеру жұмысыңызды ешқашан үзбейді.
+	Windows integration	Windows интеграциясы
+	Refresh Windows integration	Windows интеграциясын жаңарту
+	Make BDF my default PDF app	BDF бағдарламасын әдепкі PDF қолданбасы ету
+	Remove Windows integration	Windows интеграциясын жою
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF тіркелді. Әдепкі ету үшін оны Windows «Әдепкі қолданбалар» бөлімінде таңдаңыз.
+	Windows integration removed. Other apps' settings were not touched.	Windows интеграциясы жойылды. Басқа қолданбалардың параметрлері өзгертілмеді.
+	Development build: updates come from a test feed.	Әзірлеу құрастыруы: жаңартулар сынақ арнасынан келеді.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Жаңартулар тек BDF қол қойылған шығарылымдарынан келеді. Сіз немесе құжаттарыңыз туралы ештеңе жіберілмейді.
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Сынақ жаңартуы
+	Test offer from a development feed. This is not a BDF release.	Әзірлеу арнасынан келген сынақ ұсынысы. Бұл BDF шығарылымы емес.
+	This development build has no update feed configured, so there is nothing to check.	Бұл әзірлеу құрастыруында жаңарту арнасы бапталмаған, сондықтан тексеретін ештеңе жоқ.
+	BDF has not checked for updates yet.	BDF жаңартуларды әлі тексермеді.

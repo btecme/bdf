@@ -12,3 +12,4 @@ pub mod persistence;
 pub mod private_files;
 pub mod staging;
 pub mod state;
+pub mod windows_integration;

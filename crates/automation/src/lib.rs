@@ -29,6 +29,7 @@ mod printing;
 mod reading;
 mod redact;
 mod signing;
+pub mod software;
 mod tools;
 
 use std::collections::HashMap;
@@ -167,6 +168,11 @@ pub struct Automation {
     /// The version of each document's file that this session last read or wrote: what a save may replace without
     /// being told otherwise (BUILD-006).
     versions: HashMap<DocId, FileVersion>,
+    /// The software tools (updates, Windows integration) that change things are permitted (BUILD-018). Off by default.
+    software_allowed: bool,
+    /// What the software tools act on; made from the running executable when first needed.
+    #[cfg(not(target_arch = "wasm32"))]
+    software_env: Option<software::SoftwareEnv>,
 }
 
 impl Default for Automation {
@@ -177,7 +183,16 @@ impl Default for Automation {
 
 impl Automation {
     pub fn new() -> Self {
-        Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: TextCache::default(), versions: HashMap::new() }
+        Self {
+            session: Session::new(),
+            root: None,
+            renderers: HashMap::new(),
+            texts: TextCache::default(),
+            versions: HashMap::new(),
+            software_allowed: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            software_env: None,
+        }
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
@@ -224,6 +239,9 @@ impl Automation {
         }
         let def = tools::find(name).ok_or_else(|| ToolError::UnknownTool(name.into()))?;
         tools::check_args(def, args)?;
+        if def.needs_software_authorisation() && !self.software_allowed {
+            return Err(ToolError::Failed(software::NOT_AUTHORISED.into()));
+        }
         let _confined = ConfineScope::enter(self.root.clone());
         let a = Args(args);
         let out = match name {
@@ -334,6 +352,15 @@ impl Automation {
                 json!({ "redone": label, "document": summary(self.doc(&a)?) })
             }
             "command_list" => self.command_list(&a)?,
+            "update_status"
+            | "update_check"
+            | "update_download"
+            | "update_apply"
+            | "update_rollback"
+            | "windows_integration_status"
+            | "windows_integration_register"
+            | "windows_integration_remove"
+            | "windows_open_default_apps" => self.software_call(name, &a)?,
             "command_run" => return self.command_run(&a),
             "command_batch" => self.command_batch(&a)?,
             "doc_inspect" => self.doc_inspect(&a)?,

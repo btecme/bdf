@@ -1,22 +1,76 @@
-//! Help ▸ Check for updates (issue #28), with stand-in release sources (no network).
+//! Help ▸ Check for updates (issue #28, reworked in BUILD-018), with a stand-in update host (no network).
+//! The button, the install flow and the automatic check are in `tests/updates.rs`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use pdfcraft_ui_egui::updates::{Release, UpdateSource, is_newer};
+use pdfcraft_ui_egui::updates::{LastResult, Status, UpdateHost, is_newer};
+use pdfcraft_update::service::Offer;
 
-fn source(answer: Result<&str, &str>) -> UpdateSource {
-    let answer = answer.map(str::to_string).map_err(str::to_string);
-    Arc::new(move || answer.clone().map(|v| Release { url: format!("https://github.com/btecme/bdf/releases/tag/{v}"), version: v }))
+fn status(offer: Option<&str>) -> Status {
+    Status {
+        current: env!("CARGO_PKG_VERSION").into(),
+        channel: "stable".into(),
+        dev_build: false,
+        trust: "configured".into(),
+        key_id: None,
+        managed: true,
+        managed_note: None,
+        app_dir: "C:\\BDF".into(),
+        update_available: offer.map(|v| Offer { version: v.into(), notes: String::new(), notes_url: None, published: String::new(), size: 1 }),
+        ready_to_install: false,
+        last_check: None,
+        next_check: 0,
+        last_error: None,
+        rejected: None,
+        previous_version: None,
+        last_result: None,
+        feed: None,
+        check_state: "up_to_date".into(),
+    }
 }
 
-fn harness(answer: Result<&str, &str>) -> Harness<'static, PdfCraftApp> {
+struct Host {
+    answer: Result<Status, String>,
+    calls: Arc<AtomicUsize>,
+    /// What `status()` says the last check found (`check_state`).
+    state: &'static str,
+}
+
+impl UpdateHost for Host {
+    fn status(&self) -> Status {
+        Status { check_state: self.state.into(), ..status(None) }
+    }
+    fn check(&self, _manual: bool) -> Result<Status, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.answer.clone()
+    }
+    fn download(&self, _progress: &mut dyn FnMut(u64, u64) -> bool) -> Result<(), String> {
+        Ok(())
+    }
+    fn install(&self, _reopen: &[PathBuf]) -> Result<(), String> {
+        Ok(())
+    }
+    fn take_last_result(&self) -> Option<LastResult> {
+        None
+    }
+}
+
+fn harness(answer: Result<Status, String>, calls: Arc<AtomicUsize>) -> Harness<'static, PdfCraftApp> {
+    harness_in_state(answer, calls, "up_to_date")
+}
+
+fn harness_in_state(answer: Result<Status, String>, calls: Arc<AtomicUsize>, state: &'static str) -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.update_source = Some(source(answer));
+        // Background checks are covered in tests/updates.rs; here only the person's own check runs.
+        app.auto_update_check = false;
+        app.update_host = Some(Arc::new(Host { answer: answer.clone(), calls: calls.clone(), state }));
         app
     })
 }
@@ -48,11 +102,11 @@ fn versions_compare_by_number() {
 
 #[test]
 fn a_newer_release_is_offered_for_download() {
-    let mut h = harness(Ok("v99.0.0"));
+    let mut h = harness(Ok(status(Some("99.0.0"))), Arc::default());
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     h.get_by_label_contains("BDF 99.0.0 is available");
-    h.get_by_label("Download");
+    h.get_by_label("Download update");
     h.get_by_label("Later").click();
     h.run_steps(3);
     assert!(h.query_by_label_contains("is available").is_none(), "Later closes the dialog");
@@ -60,40 +114,39 @@ fn a_newer_release_is_offered_for_download() {
 
 #[test]
 fn an_up_to_date_or_failed_check_says_so() {
-    let mut h = harness(Ok(concat!("v", env!("CARGO_PKG_VERSION"))));
+    let mut h = harness(Ok(status(None)), Arc::default());
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     h.get_by_label_contains("is up to date");
-    assert!(h.query_by_label("Download").is_none());
+    assert!(h.query_by_label("Download update").is_none());
 
-    let mut h = harness(Err("couldn't reach GitHub"));
+    let mut h = harness(Err("couldn't reach the update server".into()), Arc::default());
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
-    h.get_by_label_contains("Couldn't check for updates: couldn't reach GitHub");
+    h.get_by_label_contains("Couldn't update: couldn't reach the update server");
+}
+
+/// A check that cannot even start (a development build with no feed) is a state, not a failure: the dialog says the
+/// state once, without the error that the attempt returned.
+#[test]
+fn a_check_that_could_not_start_shows_its_state_and_not_its_error() {
+    let mut h = harness_in_state(Err("couldn't reach the update server".into()), Arc::default(), "no_feed");
+    h.state_mut().execute("help.check_updates");
+    settle(&mut h);
+    h.get_by_label_contains("no update feed configured");
+    assert!(h.query_by_label_contains("Couldn't update").is_none(), "the error is not repeated");
 }
 
 #[test]
-fn nothing_is_asked_until_the_user_checks() {
-    // No check at start (the owner's decision): the source is only called from the command.
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = calls.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        // Settings from a build that had the startup option are ignored.
-        app.restore(r#"{"check_updates_at_start": true}"#);
-        let counted = counted.clone();
-        app.update_source = Some(Arc::new(move || {
-            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(Release { version: "v99.0.0".into(), url: "https://github.com/btecme/bdf/releases/tag/v99.0.0".into() })
-        }));
-        app
-    });
+fn with_automatic_checks_off_nothing_is_asked_until_the_user_checks() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut h = harness(Ok(status(Some("99.0.0"))), calls.clone());
     settle(&mut h);
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    h.run_steps(20);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "no check without the person asking, when automatic checks are off");
     assert!(h.query_by_label_contains("is available").is_none());
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     h.get_by_label_contains("BDF 99.0.0 is available");
 }

@@ -2377,3 +2377,28 @@ animation effects	Off	معطّلة
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	من تطوير b-tec كتطبيق PDF يضع الوكلاء أولًا في عصر وكلاء البرمجة. تشرح مبادئنا الأولى السبب.
 	b-tec website	موقع b-tec
 	b-tec first principles	المبادئ الأولى لدى b-tec
+	Update to BDF {v}	التحديث إلى BDF {v}
+	Downloading and checking the update…	جارٍ تنزيل التحديث والتحقق منه…
+	Couldn't update: {e}	تعذّر التحديث: {e}
+	You have version {c}.	لديك الإصدار {c}.
+	Releases page	صفحة الإصدارات
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	سيسألك BDF عن أي عمل غير محفوظ ثم يُغلق ويُحدَّث ويعيد فتح مستنداتك. تبقى إعداداتك كما هي.
+	Close BDF and update	إغلاق BDF والتحديث
+	Download update	تنزيل التحديث
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	لا يستطيع هذا الإصدار التحقق من التحديثات لذلك لن يثبّت أي تحديث. نزّل أحدث حزمة محمولة من صفحة الإصدارات.
+	Update postponed. Choose Update again when you are ready.	تم تأجيل التحديث. اختر «تحديث» مرة أخرى عندما تكون جاهزًا.
+	Check for updates automatically	التحقق من التحديثات تلقائيًا
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	يستعلم عن موجز إصدارات BDF في الخلفية. لا يقاطع أي فحص فاشل عملك أبدًا.
+	Windows integration	التكامل مع Windows
+	Refresh Windows integration	تحديث التكامل مع Windows
+	Make BDF my default PDF app	اجعل BDF تطبيق PDF الافتراضي لدي
+	Remove Windows integration	إزالة التكامل مع Windows
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	تم تسجيل BDF. اختره من «التطبيقات الافتراضية» في Windows ليصبح الافتراضي.
+	Windows integration removed. Other apps' settings were not touched.	أُزيل التكامل مع Windows. لم تُمَسّ إعدادات التطبيقات الأخرى.
+	Development build: updates come from a test feed.	إصدار تطوير: تأتي التحديثات من موجز اختبار.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	تأتي التحديثات فقط من إصدارات BDF الموقّعة. لا يُرسل أي شيء عنك أو عن مستنداتك.
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	تحديث تجريبي
+	Test offer from a development feed. This is not a BDF release.	عرض تجريبي من موجز تطوير. هذا ليس إصدارًا من BDF.
+	This development build has no update feed configured, so there is nothing to check.	لم يُضبط في إصدار التطوير هذا أي موجز تحديثات، لذلك لا يوجد ما يمكن فحصه.
+	BDF has not checked for updates yet.	لم يتحقق BDF من التحديثات بعد.

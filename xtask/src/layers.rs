@@ -82,6 +82,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
+    // Signed portable updates (BUILD-018): trust root, verification, staged replacement, no UI toolkit.
+    ("update", Class::Layer(7)),
     // test support
     ("testkit", Class::Testkit),
     ("oracle", Class::Testkit),
@@ -90,6 +92,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("worker", Class::Exempt),
+    ("updater", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 
@@ -110,6 +113,8 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("app-service", "platform"),
     ("ui-egui", "app-service"),
     ("automation", "app-service"),
+    ("ui-egui", "update"),
+    ("automation", "update"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).

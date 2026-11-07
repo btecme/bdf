@@ -2361,3 +2361,28 @@ animation effects	Off	Izklopljeni
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	Ustvarilo podjetje b-tec kot aplikacijo PDF, ki na prvo mesto postavlja agente, za dobo programskih agentov. Zakaj, pojasnjujejo naša temeljna načela.
 	b-tec website	Spletna stran b-tec
 	b-tec first principles	Temeljna načela b-tec
+	Update to BDF {v}	Posodobi na BDF {v}
+	Downloading and checking the update…	Prenašanje in preverjanje posodobitve …
+	Couldn't update: {e}	Posodobitev ni uspela: {e}
+	You have version {c}.	Imate različico {c}.
+	Releases page	Stran z različicami
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF bo vprašal o neshranjenih spremembah, se zaprl, posodobil in znova odprl vaše dokumente. Vaše nastavitve ostanejo.
+	Close BDF and update	Zapri BDF in posodobi
+	Download update	Prenesi posodobitev
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Ta različica ne more preverjati posodobitev, zato nobene ne bo namestila. Najnovejši prenosni paket prenesite s strani z različicami.
+	Update postponed. Choose Update again when you are ready.	Posodobitev je preložena. Ko boste pripravljeni, znova izberite Posodobi.
+	Check for updates automatically	Samodejno preverjaj posodobitve
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	V ozadju poizveduje po viru izdaj BDF. Neuspešno preverjanje nikoli ne prekine vašega dela.
+	Windows integration	Povezava z Windows
+	Refresh Windows integration	Osveži povezavo z Windows
+	Make BDF my default PDF app	Nastavi BDF kot privzeto aplikacijo za PDF
+	Remove Windows integration	Odstrani povezavo z Windows
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF je registriran. Izberite ga v Windows pod Privzete aplikacije, da postane privzet.
+	Windows integration removed. Other apps' settings were not touched.	Povezava z Windows je odstranjena. Nastavitve drugih aplikacij niso bile spremenjene.
+	Development build: updates come from a test feed.	Razvojna različica: posodobitve prihajajo iz testnega vira.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Posodobitve prihajajo samo iz podpisanih izdaj BDF. O vas ali vaših dokumentih se ne pošilja nič.
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Preizkusna posodobitev
+	Test offer from a development feed. This is not a BDF release.	Preizkusna ponudba iz razvojnega vira. To ni izdaja BDF.
+	This development build has no update feed configured, so there is nothing to check.	Ta razvojna različica nima nastavljenega vira posodobitev, zato ni kaj preverjati.
+	BDF has not checked for updates yet.	BDF še ni preverjal posodobitev.

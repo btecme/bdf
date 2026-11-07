@@ -23,6 +23,10 @@ tempfile = "3.27"
 png = "0.18"
 base64 = { version = "0.22", optional = true }
 
+# The software tools (BUILD-018): updates need the HTTPS transport; the browser build has no updater.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pdfcraft-update = { workspace = true, features = ["net"] }
+
 
 [features]
 default = ["mcp"]
@@ -30,6 +34,8 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+# Test signing key, packages and installed-copy fixtures for the software tools' tests (never in a product build).
+pdfcraft-update = { workspace = true, features = ["net", "testing"] }
 pdfcraft-fonts = { workspace = true }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
