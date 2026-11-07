@@ -1,6 +1,7 @@
 # Windows qualification of the portable updates and the Local System deployment (BUILD-018). It publishes nothing and signs nothing.
 #
 # The flows that need a disposable Windows machine run on GitHub-hosted runners, which are thrown away after every job:
+#   * probe      which ways of acting as another person work from Local System (exact errors), to choose the mechanism;
 #   * system     deploy as Local System (as Action1 does) to real standard-user profiles, a second user, the Default profile, an account
 #                that may not run batch tasks, a run ended part-way;
 #   * boundary   the file-system race against a real second process running as the person (previous script measured, current asserted);
@@ -41,6 +42,25 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  probe:
+    name: which ways of acting as another person work from Local System
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Probe
+        shell: pwsh
+        run: ./packaging/windows/qualify-windows.ps1 -Stage probe -EvidenceDir "$env:GITHUB_WORKSPACE\qualify-evidence" -ThisMachineIsDisposable
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: Get-ChildItem qualify-evidence -Filter *.txt | ForEach-Object { "``````"; Get-Content $_.FullName; "``````" } | Add-Content $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: qualify-probe
+          path: qualify-evidence/**
+          retention-days: 14
   build:
     name: build the throwaway-signed programs and run the tests that need the key
     runs-on: windows-latest

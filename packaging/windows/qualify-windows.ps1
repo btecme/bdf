@@ -26,8 +26,8 @@
 .PARAMETER ThisMachineIsDisposable  Required: you say this machine is thrown away afterwards.
 #>
 param(
-    [Parameter(Mandatory)][ValidateSet('system', 'boundary', 'disk', 'desktop')][string]$Stage,
-    [Parameter(Mandatory)][string]$Material,
+    [Parameter(Mandatory)][ValidateSet('system', 'boundary', 'disk', 'desktop', 'probe')][string]$Stage,
+    [string]$Material,
     [string]$EvidenceDir,
     [string]$LegacyDeploy,
     [int]$Port = 8089,
@@ -37,14 +37,16 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$Material = (Resolve-Path $Material).Path
+if ($Stage -ne 'probe') { $Material = (Resolve-Path $Material).Path }
 if (-not $EvidenceDir) { $EvidenceDir = Join-Path $Repo 'qualify-evidence' }
 New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null
 $EvidenceDir = (Resolve-Path $EvidenceDir).Path
 $Deploy = Join-Path $PSScriptRoot 'deploy-bdf.ps1'
-$Pub = (Get-Content (Join-Path $Material 'pubkey.txt') -Raw).Trim()
-$Versions = @(Get-Content (Join-Path $Material 'versions.txt'))
-$V0 = $Versions[0]; $V1 = $Versions[1]
+if ($Stage -ne 'probe') {
+    $Pub = (Get-Content (Join-Path $Material 'pubkey.txt') -Raw).Trim()
+    $Versions = @(Get-Content (Join-Path $Material 'versions.txt'))
+    $V0 = $Versions[0]; $V1 = $Versions[1]
+}
 
 # ---- the guard ------------------------------------------------------------------------------------------------------
 $hosted = ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted')
@@ -170,7 +172,7 @@ function Version-Of([string]$dir) {
     if ($m) { $m.Matches[0].Groups[1].Value } else { '' }
 }
 function Pkg([string]$v, [string]$what) { Join-Path $Material (Join-Path "packages\$v" $(if ($what -eq 'zip') { "bdf-$v-windows-x64-portable.zip" } else { 'bdf-update.json' })) }
-$Zip0 = Pkg $V0 'zip'; $Rel0 = Pkg $V0 'rel'; $Zip1 = Pkg $V1 'zip'; $Rel1 = Pkg $V1 'rel'
+if ($Stage -ne 'probe') { $Zip0 = Pkg $V0 'zip'; $Rel0 = Pkg $V0 'rel'; $Zip1 = Pkg $V1 'zip'; $Rel1 = Pkg $V1 'rel' }
 function Start-Feed {
     $script = Join-Path $PSScriptRoot 'preview-feed.ps1'
     $p = Start-Process -FilePath $PS -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script`"", "`"$(Join-Path $Material 'feed')`"", "$Port") -PassThru -WindowStyle Hidden
@@ -237,7 +239,8 @@ function Stage-System {
                 $end = (Get-Date).AddSeconds(120)
                 while ((Get-Date) -lt $end -and (Version-Of $app) -ne $V1) { Start-Sleep -Milliseconds 500 }
                 Check ((Version-Of $app) -eq $V1) "bdfq3, a standard user, updated their own SYSTEM-deployed copy to $V1 from the feed (it is $(Version-Of $app))"
-                Check ((Version-Of (Join-Path $app 'BDFPrevious')) -eq $V0) 'and BDFPrevious holds the version they had'
+                $end = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $end -and (Version-Of (Join-Path $app 'BDFPrevious')) -ne $V0) { Start-Sleep -Milliseconds 500 }
+                Check ((Version-Of (Join-Path $app 'BDFPrevious')) -eq $V0) 'and BDFPrevious holds the version they had (the updater tidies up just after the swap)'
             } finally { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
         }
     }
@@ -404,14 +407,15 @@ function Tree-State([string]$Dir) {
 function Same-State($A, $B) { ($A.Keys.Count -eq $B.Keys.Count) -and -not @($A.Keys | Where-Object { $B[$_] -ne $A[$_] }) }
 function Stage-Disk {
     $letter = 'Z'
-    Scenario 'A 640 MB volume' { New-SmallVolume $letter 640; Info ('the volume has {0:n0} MB free' -f (([IO.DriveInfo]"${letter}:").AvailableFreeSpace / 1MB)) }
+    Scenario 'A 900 MB volume' { New-SmallVolume $letter 900; Info ('the volume has {0:n0} MB free' -f (([IO.DriveInfo]"${letter}:").AvailableFreeSpace / 1MB)) }
     $zipBytes = (Get-Item $Zip1).Length
     Info ('the update package is {0:n0} MB' -f ($zipBytes / 1MB))
     $feed = Start-Feed
     try {
         function Fresh-App([string]$Name) {
+            if (Test-Path "${letter}:\fill.bin") { Remove-Item "${letter}:\fill.bin" -Force }
+            foreach ($old in @(Get-ChildItem "${letter}:\" -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'System Volume Information' -and $_.Name -ne '$RECYCLE.BIN' })) { Remove-Item $old.FullName -Recurse -Force -ErrorAction SilentlyContinue }
             $app = "${letter}:\$Name"
-            if (Test-Path $app) { Remove-Item $app -Recurse -Force }
             New-Item -ItemType Directory -Path $app | Out-Null
             Expand-Package $Zip0 $app
             New-Item -ItemType Directory -Path "$app\BDFData\recovery" -Force | Out-Null
@@ -450,6 +454,7 @@ function Stage-Disk {
             Info "files left in BDFUpdate after the failed download: $($leftover.Count)"
             [void](Fill-To $letter 400MB)
             $c = BdfCli $app @('update', 'check'); $d = BdfCli $app @('update', 'download')
+            if ($d.Code -ne 0) { Say ("      check: $($c.Out.Trim() -replace '\s+', ' ')"); Say ("      download: $($d.Out.Trim() -replace '\s+', ' ')") }
             Check ($d.Code -eq 0) 'with room again the same download succeeds'
         }
         Scenario 'Room for the download, none for the replacement' {
@@ -512,6 +517,7 @@ function Stage-Disk {
 # =====================================================================================================================
 function Stage-Desktop {
     Scenario 'The real window: a complete update' {
+        if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { Info 'not run on ARM64 here: this window test drives the x64 build (under emulation on ARM64); it is qualified on x64'; return }
         $work = Join-Path $env:TEMP 'bdfq-desktop'
         if (Test-Path $work) { Remove-Item $work -Recurse -Force }
         $app = Join-Path $work 'BDF'; New-Item -ItemType Directory -Path $app -Force | Out-Null
@@ -577,22 +583,52 @@ function Stage-Desktop {
             $names = @($win.FindAll($ts::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { '{0} | {1}' -f $_.Current.ControlType.ProgrammaticName, $_.Current.Name } | Where-Object { $_ -notmatch '\| $' } | Select-Object -Unique)
             Set-Content -Path (Join-Path $EvidenceDir 'default-app-settings-elements.txt') -Value $names -Encoding utf8
             Info "elements Settings exposes: $($names.Count) named (listed in default-app-settings-elements.txt)"
-            $btn = $null
-            foreach ($label in 'Set default', 'Set as default', 'Make default') {
-                $btn = $win.FindFirst($ts::Descendants, (New-Object System.Windows.Automation.AndCondition(
-                    (New-Object System.Windows.Automation.PropertyCondition($ae::NameProperty, $label)),
-                    (New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button))))
-                )
-                if ($btn) { Info "found the button '$label'"; break }
+            function Dump-Elements([string]$file) {
+                $all = @($ae::RootElement.FindAll($ts::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object {
+                    try { '{0} | {1}' -f $_.Current.ControlType.ProgrammaticName, $_.Current.Name } catch { } } | Where-Object { $_ -and $_ -notmatch '\| $' } | Select-Object -Unique)
+                Set-Content -Path (Join-Path $EvidenceDir $file) -Value $all -Encoding utf8
+                $all
             }
-            if ($btn) {
-                $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-                Start-Sleep -Seconds 5
-                Shot-Desktop 'default-app-2-after-set'
+            # On this page the file type is a row: ".pdf, <current app>, <its description>". Choosing the row offers the apps that can open it.
+            $row = $win.FindFirst($ts::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)),
+                (New-Object System.Windows.Automation.PropertyCondition($ae::IsEnabledProperty, $true)))))
+            $rows = @($win.FindAll($ts::Descendants, (New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button))) | Where-Object { $_.Current.Name -like '.pdf*' })
+            if ($rows.Count -eq 0) {
+                Say 'PENDING  the .pdf row was not found on the Settings page (see default-app-settings-elements.txt)'
             } else {
-                Say 'PENDING  the Set default button was not found on this Settings page (see default-app-settings-elements.txt)'
-            }
-            Get-Process -Name 'SystemSettings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                $beforeNames = @(Dump-Elements 'default-app-settings-elements.txt')
+                Info "choosing the row '$($rows[0].Current.Name)'"
+                try { $rows[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { Info "invoke failed: $($_.Exception.Message)" }
+                Start-Sleep -Seconds 4
+                Shot-Desktop 'default-app-2-chooser'
+                $afterNames = @(Dump-Elements 'default-app-chooser-elements.txt')
+                $newBdf = @($afterNames | Where-Object { $_ -match 'BDF' -and $beforeNames -notcontains $_ })
+                Info "names with BDF in them that appeared after choosing the row: $($newBdf -join ' ;; ')"
+                $choice = $null
+                foreach ($e in $ae::RootElement.FindAll($ts::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+                    try { if ($e.Current.Name -match 'BDF' -and $e.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window -and $beforeNames -notcontains ('{0} | {1}' -f $e.Current.ControlType.ProgrammaticName, $e.Current.Name)) { $choice = $e; break } } catch { }
+                }
+                if (-not $choice) {
+                    Say 'PENDING  BDF was not offered in the chooser that the .pdf row opens (see default-app-chooser-elements.txt)'
+                } else {
+                    Info "choosing '$($choice.Current.Name)'"
+                    $done = $false
+                    foreach ($pattern in [System.Windows.Automation.SelectionItemPattern]::Pattern, [System.Windows.Automation.InvokePattern]::Pattern) {
+                        try { $choice.GetCurrentPattern($pattern).GetType() | Out-Null; if ($pattern -eq [System.Windows.Automation.SelectionItemPattern]::Pattern) { $choice.GetCurrentPattern($pattern).Select() } else { $choice.GetCurrentPattern($pattern).Invoke() }; $done = $true; break } catch { }
+                    }
+                    Start-Sleep -Seconds 2
+                    # a confirmation button, if the chooser has one
+                    foreach ($label in 'Set default', 'OK', 'Select') {
+                        $ok = $ae::RootElement.FindFirst($ts::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                            (New-Object System.Windows.Automation.PropertyCondition($ae::NameProperty, $label)),
+                            (New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))))
+                        if ($ok) { Info "confirming with '$label'"; try { $ok.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { }; break }
+                    }
+                    Start-Sleep -Seconds 4
+                    Shot-Desktop 'default-app-3-after-choice'
+                }
+            }            Get-Process -Name 'SystemSettings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         }
         $after = Assoc-Command '.pdf'
         Info "after: Windows says .pdf opens with $after"
@@ -619,12 +655,29 @@ function Stage-Desktop {
     }
 }
 
+# =====================================================================================================================
+function Stage-Probe {
+    Scenario 'Acting as another person from Local System: what works, with the exact errors' {
+        $u = New-TestUser 'bdfqp'
+        $outside = 'C:\ProgramData\bdfq-outside'
+        New-Item -ItemType Directory -Path $outside -Force | Out-Null
+        & icacls.exe $outside /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
+        $out = Join-Path $Share 'probe-out.txt'
+        if (Test-Path $out) { Remove-Item $out }
+        $name = Start-SystemTask (Join-Path $PSScriptRoot 'qualify-probe-system.ps1') @('-User', 'bdfqp', '-Out', "`"$out`"", '-Shared', "`"$Drop`"", '-Admins', "`"$outside`"")
+        $code = Wait-Task $name 300
+        Remove-SystemTask $name
+        Say "the probe ended with task result $code"
+        if (Test-Path $out) { foreach ($l in Get-Content $out) { Say "      $l" } } else { Say 'FAIL  the probe wrote nothing'; $script:failures++ }
+    }
+}
 try {
     switch ($Stage) {
         'system'   { Stage-System }
         'boundary' { Stage-Boundary }
         'disk'     { Stage-Disk }
         'desktop'  { Stage-Desktop }
+        'probe'    { Stage-Probe }
     }
 } finally {
     Say ''

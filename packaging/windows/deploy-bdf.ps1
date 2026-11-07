@@ -387,21 +387,28 @@ function Install-ForProfile($profile) {
     $oldFiles = @()
     $pendingMarker = Join-Path $app 'BDFUpdate\deploy-pending.json'
     $interrupted = $false
-    if (Test-Path -LiteralPath $app) {
+    $createdApp = -not (Test-Path -LiteralPath $app)   # a first install: if it fails, the folder it made goes again
+    if (-not $createdApp) {
         # Nothing below is trusted until it has been checked: the folder is the person's, and so is the list in it.
         $oldListPath = Join-Path $app $PackageFile
-        if (-not (Test-Path -LiteralPath $oldListPath -PathType Leaf) -or (Test-IsLink $oldListPath)) { throw "a folder exists at $app that is not a managed BDF copy; leaving it alone" }
+        $hasList = (Test-Path -LiteralPath $oldListPath -PathType Leaf) -and -not (Test-IsLink $oldListPath)
+        $hasMarker = Test-Path -LiteralPath $pendingMarker -PathType Leaf
+        # No list is a managed copy only when it is a first install that did not finish: our marker is there, or the folder holds nothing but our own folders (the list is placed last, so it never was).
+        $onlyOurs = @(Get-ChildItem -LiteralPath $app -Force | Where-Object { $_.Name -ine 'BDFUpdate' -and $_.Name -ine 'BDFPrevious' -and $_.Name -ine 'BDFData' }).Count -eq 0
+        if (-not $hasList -and -not $hasMarker -and -not $onlyOurs) { throw "a folder exists at $app that is not a managed BDF copy; leaving it alone" }
         $link = Find-Link $app
         if ($link) { throw "a link or junction is inside the BDF folder ($link); refusing to work in it" }
-        try {
-            if ((Get-Item -LiteralPath $oldListPath -Force).Length -gt 1048576) { throw 'it is too large' }
-            $oldInfo = Get-Content -LiteralPath $oldListPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $oldFiles = @(Get-ValidatedPaths $oldInfo 'the installed package list')
-            $installedVersion = [version][string]$oldInfo.version
-        } catch { throw "the installed copy's package list cannot be trusted ($($_.Exception.Message)); leaving it exactly as it is" }
+        if ($hasList) {
+            try {
+                if ((Get-Item -LiteralPath $oldListPath -Force).Length -gt 1048576) { throw 'it is too large' }
+                $oldInfo = Get-Content -LiteralPath $oldListPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                $oldFiles = @(Get-ValidatedPaths $oldInfo 'the installed package list')
+                $installedVersion = [version][string]$oldInfo.version
+            } catch { throw "the installed copy's package list cannot be trusted ($($_.Exception.Message)); leaving it exactly as it is" }
+        }
         # A marker left by a run that did not finish means the copy may be part old, part new whatever its list says.
-        $interrupted = Test-Path -LiteralPath $pendingMarker -PathType Leaf
-        if ($installedVersion -ge $version -and -not $interrupted) { return 'current' }
+        $interrupted = $hasMarker -or -not $hasList
+        if ($hasList -and $installedVersion -ge $version -and -not $interrupted) { return 'current' }
     }
     if ($WhatIf) { return $(if ($installedVersion) { "would update $installedVersion -> $version" } else { "would install $version" }) }
 
@@ -521,6 +528,13 @@ function Install-ForProfile($profile) {
         try { Remove-Tree $stage } catch { }
         try { Remove-Tree $prev } catch { }
         try { Remove-Tree $pendingMarker } catch { }
+        if ($createdApp) {
+            # A first install that failed leaves nothing behind that a later run would refuse as "not a managed copy"; the person's data, if any, stays.
+            try {
+                foreach ($c in @(Get-ChildItem -LiteralPath $app -Force | Where-Object { $_.Name -ine 'BDFData' })) { Remove-Tree $c.FullName }
+                if (@(Get-ChildItem -LiteralPath $app -Force).Count -eq 0) { [System.IO.Directory]::Delete($app) }
+            } catch { }
+        }
         throw "rolled back: $reason"
     } finally { $zip.Dispose() }
 

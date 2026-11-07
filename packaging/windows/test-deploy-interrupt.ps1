@@ -161,6 +161,38 @@ try {
         $code3 = Run-Deploy $zip2 $rel2 $users $name
         Check ($code3 -eq 0 -and (Last-Output) -match 'already has') "round ${round}: a further run finds nothing to do"
     }
+    # A first install killed part-way: the folder holds our marker and no package list yet, and the next run must finish it
+    # (an earlier version refused such a folder for ever as "not a managed copy").
+    function Stage-Started([string]$App) { Test-Path -LiteralPath (Join-Path $App 'BDFUpdate\deploy-stage') }
+    $fprobe = Join-Path $Work 'FreshProbe'; New-Item -ItemType Directory -Path (Join-Path $fprobe 'p') | Out-Null
+    $fapp0 = Join-Path $fprobe 'p\AppData\Local\Programs\BDF'
+    $fp = Start-Deploy $zip2 $rel2 $fprobe 'p'
+    while (-not (Stage-Started $fapp0) -and -not $fp.HasExited) { Start-Sleep -Milliseconds 2 }
+    $fsw = [Diagnostics.Stopwatch]::StartNew(); $fp.WaitForExit(); $fwindow = [int]$fsw.Elapsed.TotalMilliseconds
+    Write-Output ("a first install takes about {0:n0} ms from its first change; kills are spread over that" -f $fwindow)
+    $freshStates = @{ none = 0; folder = 0; complete = 0 }
+    foreach ($round in 1..$Rounds) {
+        $users = Join-Path $Work "Fresh$round"
+        New-Item -ItemType Directory -Path (Join-Path $users 'newbie') | Out-Null
+        $app = Join-Path $users 'newbie\AppData\Local\Programs\BDF'
+        $delay = [int]($fwindow * ($round - 0.5) / $Rounds)
+        $p = Start-Deploy $zip2 $rel2 $users 'newbie'
+        while (-not (Stage-Started $app) -and -not $p.HasExited) { Start-Sleep -Milliseconds 2 }
+        Start-Sleep -Milliseconds $delay
+        if (-not $p.HasExited) { cmd.exe /c "taskkill.exe /PID $($p.Id) /T /F >nul 2>&1" }
+        $p.WaitForExit()
+        $listBack = Test-Path (Join-Path $app 'bdf-package.json')
+        $fstate = if (-not (Test-Path $app)) { 'none' } elseif ($listBack -and -not (Test-Path (Join-Path $app 'BDFUpdate\deploy-pending.json'))) { 'complete' } else { 'folder' }
+        $freshStates[$fstate]++
+        $code = Run-Deploy $zip2 $rel2 $users 'newbie'
+        $now = Tree-Hash $app @('BDFData', 'BDFUpdate', 'BDFPrevious')
+        $wrong = @($zip2Files.Keys | Where-Object { $now[$_] -ne $zip2Files[$_] })
+        Check ($code -eq 0 -and $wrong.Count -eq 0) "first install ${round} (killed $delay ms in, left: $fstate): the next run succeeds and every file is the release ($($wrong.Count) wrong, exit $code)"
+        Check (-not (Test-Path (Join-Path $app 'BDFUpdate\deploy-pending.json')) -and -not (Test-Path (Join-Path $app 'BDFUpdate\deploy-stage'))) "first install ${round}: no marker or staging folder is left behind"
+        Check ($(Run-Deploy $zip2 $rel2 $users 'newbie') -eq 0 -and (Last-Output) -match 'already has') "first install ${round}: a further run finds nothing to do"
+    }
+    Write-Output ("first installs killed: nothing left {0}, a half-made folder {1}, already complete {2}" -f $freshStates.none, $freshStates.folder, $freshStates.complete)
+    Check ($freshStates.folder -ge 3) 'the sweep really did leave a half-made first install (at least three times)'
     Write-Output ("kills landed: before any change {0}, part-way {1}, after the last step {2}" -f $outcomes.untouched, $outcomes.partial, $outcomes.complete)
     Check ($outcomes.partial -ge 3) 'the sweep really did kill the script part-way through an update (at least three times)'
 } finally {
