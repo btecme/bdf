@@ -536,6 +536,12 @@ function Stage-Disk {
             $st = BdfCli $app @('update', 'status')
             Info "the copy still starts: $($st.Code -eq 0)"
             [void](Fill-To $letter 400MB)
+            # After a failed update the helper starts BDF again from the folder (the person's session carries on). The next update has to wait for
+            # that BDF to close, and never ends it: so, as a person would, close it first.
+            $restarted = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($app, [StringComparison]::OrdinalIgnoreCase) })
+            Info "the helper restarted BDF after the failed update: $(@($restarted | Where-Object { $_.ProcessName -eq 'bdf' }).Count -gt 0)"
+            $restarted | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
             $st2 = BdfCli $app @('update', 'status')
             $ap = BdfCli $app @('update', 'apply')
             $end = (Get-Date).AddSeconds(120); while ((Get-Date) -lt $end -and (Version-Of $app) -ne $V1) { Start-Sleep -Milliseconds 500 }
