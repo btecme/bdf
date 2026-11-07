@@ -104,36 +104,42 @@ copy runs. The workflow then asserts the artifact holds exactly the MSI and the 
 2. Create an Action1 *Run script* (PowerShell) with the contents of `deploy-bdf.ps1` and run it with:
    `-PackageZip <zip> -ReleaseFile <bdf-update.json> -PublicKey <release public key> -IncludeDefaultProfile`
    (add `-Channel dev` only for test releases; `-Users alice,bob` limits it; `-WhatIf` reports without changing anything).
-3. What it does. As Local System it verifies the release itself in PowerShell (signature against `-PublicKey`, package hash,
-   every file) and stops on anything unsigned or altered, and puts the verified release in a working folder only Local System and
-   Administrators can change. Then, for each real user profile (local, domain and Azure AD accounts from the profile list: never
-   SYSTEM or service accounts), it starts a short scheduled task **as that user** (their own identity, no password, limited
-   rights, no network: the Task Scheduler "S4U" logon). That task verifies the release again and installs into
-   `%LOCALAPPDATA%\Programs\BDF` of that user. The files it writes are the user's own, so no ownership or permission is changed
-   and in-app updates need no administrator rights.
-   **Why the install runs as the user, not as Local System (corrected after review round 2).** The folder is the user's, so they
+3. What it does. As Local System it verifies the release itself in PowerShell (signature against `-PublicKey`, package hash, every
+   file) and stops on anything unsigned or altered. It publishes the verified release to `C:\ProgramData\BDF\release\<version>-<id>`
+   (only Local System and Administrators can change it; everyone can read it) and registers one task for the **Users group** that
+   runs **when anyone signs in**: `\BDF\BDF-apply-release`. That task runs as the person who signed in, in their own session and
+   with their own rights (no password, no administrator): it checks the signature, and if their copy is older it installs or updates
+   `%LOCALAPPDATA%\Programs\BDF`. The files it writes are the person's own, so no ownership or permission change is needed and
+   in-app updates need no administrator rights. A person already on this version or newer costs a signature check and nothing else.
+   People who are signed in when the script runs have the task started in their session at once and are waited for (up to
+   `-WaitSeconds`, default 180) so the run can report what happened; everyone else is reported as **pending until they sign in**,
+   which is not a failure. `-Users` limits it to named people; `-WhatIf` reports without registering anything.
+   **Why the install runs as the person, not as Local System (corrected after review round 2).** The folder is the user's, so they
    can change it at any moment. A Local System script that checks a path ("is this a link?") and then uses it can always be
    raced: the check is out of date by the time of the use. `packaging/windows/test-deploy-race.ps1` measures this against the
    previous in-place version: with a second process swapping a folder for a junction while the script ran, a Local System run was
    steered through the link in a measurable share of trials (zero hits in a sample proves nothing). Checking harder only narrows
    the window. Running the install with the user's own rights makes the window harmless instead: it can reach nothing the user
-   cannot already change. **`-SkipLoggedOnUsers` is not a defence against this and does not remove any file-system race**: it
-   checks once whether a profile looks loaded, a person can sign in a moment later, and something other than a sign-in can load a
-   profile. It only avoids updating someone's BDF under them.
-   Inside the user's task the older checks remain, because they protect the user from a damaged copy: the installed
+   cannot already change. **`-SkipLoggedOnUsers` is not a defence against this and does not remove any file-system race**: it only
+   decides whether the task is started now in the sessions of people who are signed in. A task that runs as another person
+   without their password was tried first and **does not work on current Windows**: from Local System, Task Scheduler refuses
+   ("Access is denied") to register an S4U task for another user, with or without the batch-logon right, and .NET's S4U needs a
+   domain (hosted-runner probe on Windows Server 2025, build 26100; see `docs/bdf-evidence/BUILD-018.md` section 8).
+   Inside the person's own task the older checks remain, because they protect the person from a damaged copy: the installed
    `bdf-package.json` belongs to the user, so it is checked like the signed one before anything moves (schema, version, count, and
    every path: no `BDFData`/`BDFUpdate`/`BDFPrevious`, no absolute, drive, stream, 8.3-short or back-slash names, no traversal, no
    duplicates), and an installed copy whose list fails is refused and left exactly as it is; the folder is scanned for junctions
    and symbolic links first (the user's `BDFData` is never read or listed); every path is checked just before it is moved, created
    or deleted; deleting never follows a link. Local System itself reads the profile list from the registry and nothing inside a
    profile, except the Default profile (only administrators can write there, so it is installed directly). The working directory
-   is System32 and the log and working folders are used only if they are not links and are owned by SYSTEM or Administrators.
-   **If the task cannot be started as that user** (the account may not run batch tasks by policy, or is of a type Task Scheduler
-   cannot run without a password) that user is reported as failed and nothing is changed: there is no fallback that works in their
-   folder as Local System. The in-app updater and the per-user ZIP still work for them.
+   is System32 and the log, release and results folders are used only if they are not links and are owned by SYSTEM or
+   Administrators. Each person's task leaves a text result in `C:\ProgramData\BDF\user-results` (everyone may add a file, nobody
+   may change another person's); it is for the log and is never trusted for anything.
+   To stop deploying: `Unregister-ScheduledTask -TaskName BDF-apply-release -TaskPath '\BDF\' -Confirm:$false` and delete
+   `C:\ProgramData\BDF\release`; installed copies stay.
 4. **Reruns are safe, and so is an interruption.** A user already on this version or newer is untouched. An older managed copy is
    updated by renaming files (previous version kept in `BDFPrevious`, rollback on failure) **only if nothing is running from it**;
-   a running copy is skipped and updated by the next run. `BDFData` and any file the user keeps in the folder are never touched (a
+   a running copy is skipped and updated at the person's next sign-in. `BDFData` and any file the user keeps in the folder are never touched (a
    regression test plants hostile installed lists, including a native `BDFData\settings.json` path, and checks the data stays where
    it was). A folder at that path that is not a managed BDF copy is left alone and reported as a failure. If a run is stopped
    part-way (the task is ended, the machine stops), it leaves a marker (`BDFUpdate\deploy-pending.json`) and the files it had set
@@ -143,7 +149,7 @@ copy runs. The workflow then asserts the artifact holds exactly the MSI and the 
    a swept series of moments and checks this; against the previous script it fails (the previous version was thrown away on
    resume).
 5. **New users:** `-IncludeDefaultProfile` also installs into `C:\Users\Default`, which Windows copies into every profile
-   created afterwards. Users who already exist are covered by running the Action1 policy on a schedule.
+   created afterwards; the sign-in task covers them too. Running the Action1 policy again publishes a newer release.
 6. Not done on purpose: nothing runs BDF as SYSTEM or runs anything from a user's folder as SYSTEM; no default-app change and no registry
    change (people choose in Preferences ▸ Windows integration); no shortcut, service or firewall rule; no Action1 credentials or
    API secrets are in BDF or its package. The log is `C:\ProgramData\BDF\deploy.log`.

@@ -11,22 +11,27 @@
        envelope whose signature (ECDSA P-256 over SHA-256) is checked against -PublicKey, then the package's
        size and SHA-256 against that signed information, then every file in the ZIP against the package's own
        list. Nothing is read from an unauthenticated source. Unsigned or tampered input stops the run.
-    2. Puts the verified release in a working folder only Local System and Administrators can change.
-    3. For each intended user profile, starts a short task that runs AS THAT PERSON (a scheduled task with that
-       person's own identity and no password: the Task Scheduler "S4U" logon, limited rights, no network). That
-       task verifies the release again and installs (or updates) the portable copy in
-       <profile>\AppData\Local\Programs\BDF by renaming files, with the previous version kept in BDFPrevious. Because
-       it runs with the person's own rights it can reach nothing the person cannot already change, whatever they
-       do to links and folders while it runs, and the files it writes are the person's own (no ownership or
-       permission change is needed). A copy that is running, or any other open file, is never replaced: that
-       user is skipped and picked up by the next run. If the task cannot be started as that person, that person
-       is reported as failed and nothing is changed: there is no fallback that works in their folder as Local System.
-    4. An interrupted run (the script or the machine stopped part-way) leaves a marker in the person's BDFUpdate
+    2. Publishes the verified release to C:\ProgramData\BDF\release\<version>, a folder only Local System and
+       Administrators can change (everyone can read it), and registers one scheduled task, \BDF\BDF-apply-release,
+       for the Users group that runs when anyone signs in.
+    3. That task runs AS THE PERSON who signed in (their own session and rights, no password, no administrator). It verifies
+       the release again and installs (or updates) the portable copy in %LOCALAPPDATA%\Programs\BDF by renaming files, with
+       the previous version kept in BDFPrevious. Because it runs with the person's own rights it can reach nothing the
+       person cannot already change, whatever they do to links and folders while it runs, and the files it writes are the
+       person's own (no ownership or permission change is needed). A copy that is running, or any other open file, is never
+       replaced: it is picked up at the next sign-in. A person already on this version or newer costs a signature check
+       and nothing else.
+    4. People who are signed in when the script runs have the task started in their session at once and their results
+       are collected; everyone else is reported as pending until they sign in. Nobody is "failed" because they were away.
+    5. An interrupted install (the task ended, the machine stopped part-way) leaves a marker in the person's BDFUpdate
        folder; the next run finishes the job from the verified package instead of treating the copy as current.
 
-  New users: -IncludeDefaultProfile also installs into C:\Users\Default, which Windows copies into every
-  profile created later (only administrators can write there, so it is done directly). Users who already exist
-  are covered by running this script again (Action1 policy).
+  New users: -IncludeDefaultProfile also installs into C:\Users\Default, which Windows copies into every profile created later
+  (only administrators can write there, so it is done directly). The sign-in task covers them too, so a new user gets the
+  newest release at their first sign-in either way.
+
+  To stop deploying: Unregister-ScheduledTask -TaskName BDF-apply-release -TaskPath '\BDF\' -Confirm:$false, and delete
+  C:\ProgramData\BDF\release. Copies already installed are left as they are.
 
   Not done on purpose: no change to default apps or any registry (each person registers BDF in
   Preferences > Windows integration, if they want to), no shortcut, no firewall or service.
@@ -34,43 +39,49 @@
 .PARAMETER PackageZip   The portable ZIP (bdf-<version>-windows-x64-portable.zip).
 .PARAMETER ReleaseFile  The signed release file (bdf-update.json) published with that ZIP.
 .PARAMETER PublicKey    The release signing public key: 130 hex characters (uncompressed P-256 point).
-.PARAMETER Users        Only these user names (as in C:\Users\<name>). Default: every real user profile.
+.PARAMETER Users        Only these user names (as in C:\Users\<name>). Default: every person who signs in.
 .PARAMETER IncludeDefaultProfile  Also install for users created later.
 .PARAMETER Channel      stable (default) or dev (test releases signed with a test key).
-.PARAMETER UsersRoot    Test hook: treat the subfolders of this folder as the profiles (no ownership changes).
+.PARAMETER UsersRoot    Test hook: treat the subfolders of this folder as the profiles and install into them directly, as the
+                        current user (no task, no ownership changes).
 .PARAMETER LogDirectory Where the log is written (default C:\ProgramData\BDF, used only when it is safe: see Notes).
-.PARAMETER SkipLoggedOnUsers  Skip a person whose profile is loaded (they appear to be signed in), so their BDF is not updated under them.
-                        This is about not disturbing a person at work. It is NOT a security control and it does not remove any
-                        file-system race: the check is made once, a person can sign in a moment later, and a profile can be
-                        loaded by things other than a sign-in. Safety comes from the install running as the person (above).
-.PARAMETER AsUser       Internal. The folder of one profile to install into, used by the task Local System starts as that person.
-                        Never needed by hand; run by hand it installs into the folder with the rights of whoever runs it.
-.PARAMETER OutcomeFile  Internal. Where an -AsUser run writes a one-line result for the Local System run to read (as text, never as an authority).
+.PARAMETER SkipLoggedOnUsers  Do not start the task now in the sessions of people who are signed in (they get the release at their next
+                        sign-in). This is about not disturbing a person at work. It is NOT a security control and does not remove any
+                        file-system race: safety comes from the install running as the person (above).
+.PARAMETER WaitSeconds  How long to wait for the people who were signed in to report (default 180); the rest are reported as pending.
+.PARAMETER AsCurrentUser  Internal. What the sign-in task runs: install for the person running it (their %USERPROFILE%).
+.PARAMETER AsUser       Internal. The folder of one profile to install into, with the rights of whoever runs this.
+.PARAMETER ResultsDir   Internal. With -AsCurrentUser: the folder where the person's task writes a text result for the Local System run.
+.PARAMETER OutcomeFile  Internal. With -AsUser: where the result text goes.
 .PARAMETER WhatIf       Verify and report what would happen without changing anything.
 
 .NOTES
   The boundary. A script running as Local System must not work inside a folder a person can change: any check of a path
   ("is this a link?") is out of date by the time the path is used, and the person can swap a folder for a junction in
   between (measured: packaging\windows\test-deploy-race.ps1 steers the old in-place version through the swapped link). So:
-    * Local System verifies the release, copies it to a folder only it and Administrators can write, and starts the install
-      as the person (S4U scheduled task, limited rights, no network). The install can therefore only reach what that person can
-      already change. Local System itself does not read, list, create, move or delete anything inside a person's profile,
-      except that it reads the profile list from the registry and, for the Default profile (administrators only), installs directly.
+    * Local System verifies the release and publishes it to a folder only it and Administrators can write; the install runs
+      as the person. The install can therefore only reach what that person can already change. Local System itself does not
+      read, list, create, move or delete anything inside a person's profile, except that it reads the profile list from the
+      registry and, for the Default profile (administrators only), installs directly.
+    * Starting a task for another person without their password was tried first and does not work on current Windows: Task
+      Scheduler refuses ("Access is denied") to register an S4U task for another user from Local System, with or without the
+      batch-logon right, and .NET's S4U needs a domain (qualification, 2026-11-07, docs/bdf-evidence/BUILD-018.md). A task for
+      the Users group, which runs in the session of whoever signs in, is the mechanism that works.
     * Inside the person's own task the older checks remain, because they protect the person from a damaged copy, not Local
       System from the person: the installed package list (bdf-package.json) belongs to the person, so it is checked like the
       new list before anything moves (version, schema, count, every path: no BDFData, BDFUpdate or BDFPrevious, no
       absolute, drive, stream, short (8.3) or back-slash names, no traversal, no duplicates); the BDF folder is scanned for
       links before any change and each path is checked immediately before it is moved, created or deleted; deleting never
       follows a link; BDFData is never read, listed or changed.
-    * Nothing from a profile is run as Local System, the working directory is System32, and the log and working folders
-      are used only when they are not links and are owned by SYSTEM or Administrators (a new one is readable by them only).
+    * Nothing from a profile is run as Local System, the working directory is System32, and the log, release and results
+      folders are used only when they are not links and are owned by SYSTEM or Administrators (a new one is readable by them).
     * Limits, stated plainly: the person's task runs with the person's rights, so a person who wants to damage their own BDF
-      copy can. S4U needs the person's account to be allowed to run a batch task; where it is not (policy, or an account
-      type Task Scheduler cannot run without a password) that person is reported as failed, and the in-app updater and
-      the per-user ZIP still work for them. The window between "the script finished its checks" and "the file was moved"
-      is not closed by checking harder; it is made harmless by who does the moving.
+      copy can. Results come back as text files in a folder every person can add to (each person's file belongs to them), so a
+      local user can forge or delete a result: results are for the log and are never trusted for anything. A person who never
+      signs in is never updated. The window between "the script finished its checks" and "the file was moved" is not closed by
+      checking harder; it is made harmless by who does the moving.
 
-  Exit codes: 0 done (or nothing to do; skipped users are listed and retried by the next run),
+  Exit codes: 0 done (or nothing to do; pending people are listed and picked up at their sign-in),
               1 verification or a deployment failed, 2 bad parameters.
   Windows PowerShell 5.1 and PowerShell 7. Log: C:\ProgramData\BDF\deploy.log
 #>
@@ -85,7 +96,10 @@ param(
     [string]$UsersRoot,
     [string]$LogDirectory,
     [switch]$SkipLoggedOnUsers,
+    [int]$WaitSeconds = 180,
+    [switch]$AsCurrentUser,
     [string]$AsUser,
+    [string]$ResultsDir,
     [string]$OutcomeFile,
     [switch]$WhatIf
 )
@@ -97,6 +111,16 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 # `-File` passes "a,b" as one string: accept a comma-separated list as well as an array.
 if ($Users) { $Users = @($Users | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+
+# What the sign-in task runs: install for the person running it, only if they are among -Users.
+if ($AsCurrentUser) {
+    $AsUser = $env:USERPROFILE
+    if ($Users -and ($Users -notcontains $env:USERNAME)) { Write-Output "$env:USERNAME is not among -Users; nothing to do"; exit 0 }
+    if ($ResultsDir) {
+        $OutcomeFile = Join-Path $ResultsDir ($env:USERNAME + '.txt')
+        try { Set-Content -LiteralPath $OutcomeFile -Value '' -Encoding UTF8 } catch { $OutcomeFile = $null }
+    }
+}
 
 # Never run from, or relative to, a user's folder.
 try { Set-Location -LiteralPath (Join-Path $env:SystemRoot 'System32'); [Environment]::CurrentDirectory = (Get-Location).Path } catch { }
@@ -200,6 +224,18 @@ $version = [version]$manifest.version
 $entry = @($manifest.packages | Where-Object { $_.os -eq 'windows' -and $_.arch -eq 'x64' -and $_.kind -eq 'portable-zip' }) | Select-Object -First 1
 if (-not $entry) { Stop-Run 'the release has no Windows x64 portable package' }
 
+# The sign-in task runs at every sign-in: a person already on this version or newer costs the signature check above and nothing else
+# (the package is hashed only when something is to be installed; Local System already verified it before publishing it).
+if ($AsUser) {
+    try {
+        $quickList = Join-Path $AsUser "$AppSub\bdf-package.json"
+        $quickMarker = Join-Path $AsUser "$AppSub\BDFUpdate\deploy-pending.json"
+        if ((Test-Path -LiteralPath $quickList -PathType Leaf) -and -not (Test-Path -LiteralPath $quickMarker) -and (Get-Item -LiteralPath $quickList -Force).Length -le 1048576) {
+            $quickVersion = [version][string]((Get-Content -LiteralPath $quickList -Raw -Encoding UTF8 | ConvertFrom-Json).version)
+            if ($quickVersion -ge $version) { Write-Log 'RESULT: current'; exit 0 }
+        }
+    } catch { }
+}
 $zipInfo = Get-Item -LiteralPath $PackageZip
 if ($zipInfo.Length -ne [int64]$entry.size) { Stop-Run "the package is $($zipInfo.Length) bytes, the signed release says $($entry.size)" }
 $stream = [System.IO.File]::OpenRead($zipInfo.FullName)
@@ -567,123 +603,151 @@ if ($AsUser) {
     }
 }
 
-# ---- 4. as Local System: hand each person's install to that person ------------------------------------------------------
-
-# A folder only Local System and Administrators can change, holding the verified release the people's tasks read.
-function New-RunFolder {
-    if (-not $LogDir) { throw 'there is no safe working folder (the log folder is missing, is a link, or is not owned by SYSTEM or Administrators)' }
-    $run = Join-Path $LogDir ('run-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $run | Out-Null
-    & (Join-Path $System32 'icacls.exe') $run /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /Q | Out-Null
-    if ($LASTEXITCODE) { throw 'could not restrict the working folder' }
-    Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $run 'deploy-bdf.ps1')
-    Copy-Item -LiteralPath $zipInfo.FullName -Destination (Join-Path $run 'package.zip')
-    Copy-Item -LiteralPath $ReleaseFile -Destination (Join-Path $run 'release.json')
-    $run
-}
+# ---- 4. as Local System: publish the release and let each person's own session apply it -----------------------------------
 
 # Text a person's task wrote, for the log only: a regular file, small, printable, a few lines.
 function Read-Outcome([string]$Path) {
     try {
         $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
         if (($item.Attributes -band $ReparseAttr) -or $item.PSIsContainer -or $item.Length -gt 16384) { return @() }
-        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -Tail 4)
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -Tail 6)
         @($lines | ForEach-Object { (($_ -replace '[^\x20-\x7e]', '?')) } | ForEach-Object { if ($_.Length -gt 300) { $_.Substring(0, 300) } else { $_ } })
     } catch { @() }
 }
 
-function Invoke-InstallAsUser($profile, [string]$Run) {
-    $account = ([System.Security.Principal.SecurityIdentifier]$profile.Sid).Translate([System.Security.Principal.NTAccount]).Value
-    $sidDir = Join-Path $Run $profile.Sid
-    New-Item -ItemType Directory -Path $sidDir | Out-Null
-    & (Join-Path $System32 'icacls.exe') $sidDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($profile.Sid):(OI)(CI)M" /Q | Out-Null
-    if ($LASTEXITCODE) { throw 'could not prepare the working folder for this person' }
-    $outcomeFile = Join-Path $sidDir 'outcome.txt'
-    $arguments = @(
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $Run 'deploy-bdf.ps1')`"",
-        '-PackageZip', "`"$(Join-Path $Run 'package.zip')`"", '-ReleaseFile', "`"$(Join-Path $Run 'release.json')`"",
-        '-PublicKey', $PublicKey, '-Channel', $Channel, '-AsUser', "`"$($profile.Path)`"", '-OutcomeFile', "`"$outcomeFile`""
-    )
-    if ($WhatIf) { $arguments += '-WhatIf' }
-    $taskName = 'BDF-deploy-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
-    $taskPath = '\BDF\'
-    $action = New-ScheduledTaskAction -Execute (Join-Path $System32 'WindowsPowerShell\v1.0\powershell.exe') -Argument ($arguments -join ' ') -WorkingDirectory $System32
-    $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType S4U -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    try {
-        try {
-            Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-            Start-ScheduledTask -TaskName $taskName -TaskPath $taskPath
-        } catch { throw "could not start the install as $account ($($_.Exception.Message)); nothing was changed" }
-        $deadline = (Get-Date).AddMinutes(31)
-        $info = $null
-        while ((Get-Date) -lt $deadline) {
-            Start-Sleep -Milliseconds 500
-            $state = (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath).State
-            $info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath $taskPath
-            if ($state -eq 'Ready' -and $info.LastRunTime.Year -gt 2000) { break }
-            $info = $null
-        }
-        if (-not $info) {
-            Stop-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
-            throw "the install as $account did not finish in 30 minutes and was stopped; the next run will finish it"
-        }
-        $code = [int64]$info.LastTaskResult
-        $lines = @(Read-Outcome $outcomeFile)
-        $result = @($lines | Where-Object { $_ -match 'RESULT: ' } | Select-Object -Last 1)
-        $message = if ($result.Count -gt 0) { ($result[0] -replace '^.*RESULT: ', '') } else { ($lines -join ' | ') }
-        if ($code -eq 4) { return 'in-use' }
-        if ($code -ne 0) { throw "the install as $account failed (task result $code): $message" }
-        if ($message) { $message } else { 'done' }
-    } finally {
-        try { Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+$icacls = Join-Path $System32 'icacls.exe'
+$TaskName = 'BDF-apply-release'
+$TaskPath = '\BDF\'
+
+# A folder only Local System and Administrators can change; everyone can read and run from it. A new one is made so; an existing
+# one is used only if it is not a link and is owned by SYSTEM or Administrators.
+function Initialize-ReleaseRoot {
+    if (-not $LogDir) { throw 'there is no safe working folder (the log folder is missing, is a link, or is not owned by SYSTEM or Administrators)' }
+    $root = Join-Path $LogDir 'release'
+    if (Test-Path -LiteralPath $root) {
+        $item = Get-Item -LiteralPath $root -Force
+        $owner = (Get-Acl -LiteralPath $root).Owner
+        if (($item.Attributes -band $ReparseAttr) -or -not $item.PSIsContainer -or $owner -notmatch '^(NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators|NT SERVICE\\TrustedInstaller)$') { throw "$root is not ours (a link, or owned by someone else); leaving it alone" }
+    } else {
+        New-Item -ItemType Directory -Path $root | Out-Null
     }
+    & $icacls $root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /Q | Out-Null
+    if ($LASTEXITCODE) { throw 'could not restrict the release folder' }
+    $root
 }
 
-# A run that was ended part-way (the deployment tool stopped it, the machine restarted) can leave its working folder and its
-# per-person tasks behind. Anything of ours older than an hour is stale: a normal run removes its own as it goes.
-function Clear-StaleRuns {
-    $cutoff = (Get-Date).AddHours(-1)
-    if ($LogDir) {
-        foreach ($d in @(Get-ChildItem -LiteralPath $LogDir -Directory -Filter 'run-*' -Force -ErrorAction SilentlyContinue)) {
-            if ($d.LastWriteTime -lt $cutoff -and -not ($d.Attributes -band $ReparseAttr)) { try { Remove-Tree $d.FullName; Write-Log "removed a stale working folder from an earlier run: $($d.Name)" } catch { } }
-        }
+# Where each person's task leaves a text result: everyone may add a file, nobody may change another person's (the creator owns it).
+function Initialize-ResultsDir {
+    $dir = Join-Path $LogDir 'user-results'
+    if (Test-Path -LiteralPath $dir) {
+        $item = Get-Item -LiteralPath $dir -Force
+        $owner = (Get-Acl -LiteralPath $dir).Owner
+        if (($item.Attributes -band $ReparseAttr) -or -not $item.PSIsContainer -or $owner -notmatch '^(NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators|NT SERVICE\\TrustedInstaller)$') { throw "$dir is not ours; leaving it alone" }
+    } else {
+        New-Item -ItemType Directory -Path $dir | Out-Null
     }
-    try {
-        foreach ($t in @(Get-ScheduledTask -TaskPath '\BDF\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'BDF-deploy-*' -and $_.State -ne 'Running' })) {
-            $made = $null
-            try { $made = [datetime]$t.Date } catch { }
-            if ($made -and $made -lt $cutoff) { Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath '\BDF\' -Confirm:$false -ErrorAction SilentlyContinue; Write-Log "removed a stale task from an earlier run: $($t.TaskName)" }
-        }
-    } catch { }
+    & $icacls $dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(RX,WD,AD)' '*S-1-3-0:(OI)(CI)(IO)M' /Q | Out-Null
+    if ($LASTEXITCODE) { throw 'could not prepare the results folder' }
+    $dir
 }
-if (-not $UsersRoot) { Clear-StaleRuns }
+
+function Publish-Release([string]$Root) {
+    $dir = Join-Path $Root ("{0}-{1}" -f $version, [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $dir 'deploy-bdf.ps1')
+    Copy-Item -LiteralPath $zipInfo.FullName -Destination (Join-Path $dir 'package.zip')
+    Copy-Item -LiteralPath $ReleaseFile -Destination (Join-Path $dir 'release.json')
+    # Older published releases go once the task points at this one (a person's task still running from one keeps working until it ends).
+    $dir
+}
+
+function Register-ApplyTask([string]$Dir, [string]$Results) {
+    $arguments = @(
+        '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $Dir 'deploy-bdf.ps1')`"",
+        '-PackageZip', "`"$(Join-Path $Dir 'package.zip')`"", '-ReleaseFile', "`"$(Join-Path $Dir 'release.json')`"",
+        '-PublicKey', $PublicKey, '-Channel', $Channel, '-AsCurrentUser', '-ResultsDir', "`"$Results`""
+    )
+    if ($Users) { $arguments += @('-Users', ($Users -join ',')) }
+    $action = New-ScheduledTaskAction -Execute (Join-Path $System32 'WindowsPowerShell\v1.0\powershell.exe') -Argument ($arguments -join ' ') -WorkingDirectory $System32
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $principal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances Parallel
+    Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+}
 
 $profiles = Get-TargetProfiles
 if (@($profiles).Count -eq 0) { Write-Log 'no user profiles to deploy to' }
-$run = $null
-try {
-    foreach ($p in $profiles) {
+$people = @($profiles | Where-Object { $_.Sid })
+$direct = @($profiles | Where-Object { -not $_.Sid })
+
+# The Default profile (administrators only can write there) and, in tests, the fake profiles: installed directly, as the caller.
+foreach ($p in $direct) {
+    try {
+        $outcome = Install-ForProfile $p
+        switch -Wildcard ($outcome) {
+            'current' { Write-Log "$($p.Name): already has $version or newer; nothing to do"; [void]$Done.Add($p.Name) }
+            'in-use' { Write-Log "$($p.Name): BDF is running from its folder; skipped (the next run will update it)"; [void]$Skipped.Add($p.Name) }
+            default { Write-Log "$($p.Name): $outcome"; [void]$Done.Add($p.Name) }
+        }
+    } catch {
+        Write-Log "$($p.Name): FAILED: $($_.Exception.Message)"
+        [void]$Failed.Add($p.Name)
+    }
+}
+
+# Everyone else: their own session does it. Local System publishes, registers the task, starts it where someone is signed in, and listens.
+$Pending = New-Object System.Collections.ArrayList
+if ($people.Count -gt 0) {
+    if ($WhatIf) {
+        foreach ($p in $people) { Write-Log "$($p.Name): would install or update to $version when they sign in (and now, if signed in)" }
+    } else {
         try {
-            if ($SkipLoggedOnUsers -and $p.Sid -and (Test-Path -LiteralPath "Registry::HKEY_USERS\$($p.Sid)")) { $outcome = 'signed-in' }
-            elseif ($p.Sid) {
-                if (-not $run) { $run = New-RunFolder }
-                $outcome = Invoke-InstallAsUser $p $run
-            } else { $outcome = Install-ForProfile $p }
-            switch -Wildcard ($outcome) {
-                'current' { Write-Log "$($p.Name): already has $version or newer; nothing to do"; [void]$Done.Add($p.Name) }
-                'signed-in' { Write-Log "$($p.Name): signed in; skipped by -SkipLoggedOnUsers (the next run will update it)"; [void]$Skipped.Add($p.Name) }
-                'in-use' { Write-Log "$($p.Name): BDF is running from its folder; skipped (the next run will update it)"; [void]$Skipped.Add($p.Name) }
-                default { Write-Log "$($p.Name): $outcome"; [void]$Done.Add($p.Name) }
+            $root = Initialize-ReleaseRoot
+            $results = Initialize-ResultsDir
+            $started = Get-Date
+            $dir = Publish-Release $root
+            Register-ApplyTask $dir $results
+            # The release the task used to run from, and anything older, can go now (a task still running from it keeps its open files).
+            foreach ($old in @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $dir -and $_.LastWriteTime -lt (Get-Date).AddHours(-1) })) {
+                if (-not ($old.Attributes -band $ReparseAttr)) { try { Remove-Tree $old.FullName } catch { } }
             }
+            Write-Log "published $version to $dir and registered the sign-in task $TaskPath$TaskName"
+            $waiting = @($people | Where-Object { Test-Path -LiteralPath "Registry::HKEY_USERS\$($_.Sid)" })
+            $sleepers = @($people | Where-Object { $waiting -notcontains $_ })
+            if ($waiting.Count -gt 0 -and -not $SkipLoggedOnUsers) {
+                Start-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath
+                $deadline = $started.AddSeconds($WaitSeconds)
+                $reported = @{}
+                while ((Get-Date) -lt $deadline -and $reported.Count -lt $waiting.Count) {
+                    Start-Sleep -Seconds 2
+                    foreach ($p in $waiting) {
+                        if ($reported.ContainsKey($p.Name)) { continue }
+                        $file = Join-Path $results ($p.Name + '.txt')
+                        if (-not (Test-Path -LiteralPath $file)) { continue }
+                        if ((Get-Item -LiteralPath $file -Force).LastWriteTime -lt $started) { continue }
+                        $result = @(Read-Outcome $file | Where-Object { $_ -match 'RESULT: ' } | Select-Object -Last 1)
+                        if ($result.Count -gt 0) { $reported[$p.Name] = ($result[0] -replace '^.*RESULT: ', '') }
+                    }
+                }
+                foreach ($p in $waiting) {
+                    if ($reported.ContainsKey($p.Name)) {
+                        $r = $reported[$p.Name]
+                        if ($r -like 'FAILED*') { Write-Log "$($p.Name): $r"; [void]$Failed.Add($p.Name) }
+                        elseif ($r -eq 'in-use') { Write-Log "$($p.Name): BDF is running from its folder; skipped (the next sign-in will update it)"; [void]$Skipped.Add($p.Name) }
+                        elseif ($r -eq 'current') { Write-Log "$($p.Name): already has $version or newer; nothing to do"; [void]$Done.Add($p.Name) }
+                        else { Write-Log "$($p.Name): $r"; [void]$Done.Add($p.Name) }
+                    } else { [void]$Pending.Add($p.Name); Write-Log "$($p.Name): signed in but has not reported within $WaitSeconds s; the task is still queued for their next sign-in" }
+                }
+            } else {
+                foreach ($p in $waiting) { [void]$Pending.Add($p.Name); Write-Log "$($p.Name): signed in; -SkipLoggedOnUsers, so they get it at their next sign-in" }
+            }
+            foreach ($p in $sleepers) { [void]$Pending.Add($p.Name); Write-Log "$($p.Name): not signed in; they get $version when they next sign in" }
         } catch {
-            Write-Log "$($p.Name): FAILED: $($_.Exception.Message)"
-            [void]$Failed.Add($p.Name)
+            Write-Log "FAILED to publish the release for people to apply: $($_.Exception.Message)"
+            [void]$Failed.Add('(all people)')
         }
     }
-} finally {
-    if ($run) { try { Remove-Tree $run } catch { } }
 }
-Write-Log ("summary: done {0}, skipped (in use) {1}, failed {2}" -f $Done.Count, $Skipped.Count, $Failed.Count)
+Write-Log ("summary: done {0}, skipped (in use) {1}, pending sign-in {2}, failed {3}" -f $Done.Count, $Skipped.Count, $Pending.Count, $Failed.Count)
 if ($Failed.Count -gt 0) { exit 1 }
 exit 0

@@ -289,8 +289,31 @@ try {
     Set-Content "$ginaApp\BDFUpdate\deploy-pending.json" '{}'
     $r = AsUser $zip2 $rel2
     Check ($r.Code -eq 0 -and $r.Outcome -match 'RESULT: updated 0.8.2 -> 0.8.2' -and -not (Test-Path "$ginaApp\BDFUpdate\deploy-pending.json")) 'an unfinished-run marker makes a current-looking copy be finished, and the marker goes away'
-    $r = AsUser $bad $rel2
-    Check ($r.Code -eq 1 -and $r.Outcome -match 'STOP') '-AsUser verifies the release itself: a tampered package is refused (exit 1)'
+    $bogus = Join-Path $Work 'bogus.zip'; Set-Content $bogus 'this is not a zip'
+    $r = AsUser $bogus $rel2
+    Check ($r.Code -eq 0 -and $r.Outcome -match 'RESULT: current') 'a person already current costs only the signature check: the package is not even read'
+    $ivan = Join-Path $users 'ivan'; New-Item -ItemType Directory -Path $ivan | Out-Null
+    $r = AsUser $bad $rel2 $ivan
+    Check ($r.Code -eq 1 -and $r.Outcome -match 'STOP' -and -not (Test-Path (Join-Path $ivan 'AppData'))) '-AsUser verifies the release itself for a person who needs it: a tampered package is refused (exit 1) and nothing is installed'
+    # 14. What the sign-in task runs (-AsCurrentUser): the person running it, only if they are among -Users, and a text result for Local System.
+    $zed = Join-Path $users 'zed'; New-Item -ItemType Directory -Path $zed | Out-Null
+    $resultsDir = Join-Path $Work 'results'; New-Item -ItemType Directory -Path $resultsDir | Out-Null
+    function AsCurrent([string]$Zip, [string]$Rel, [string[]]$Extra = @()) {
+        $savedProfile = $env:USERPROFILE; $savedName = $env:USERNAME
+        try {
+            $env:USERPROFILE = $zed; $env:USERNAME = 'zed'     # the child process sees a fake person; nothing real is touched
+            Deploy (@('-PackageZip', $Zip, '-ReleaseFile', $Rel, '-PublicKey', $pub, '-Channel', 'dev', '-AsCurrentUser', '-ResultsDir', $resultsDir) + $Extra)
+        } finally { $env:USERPROFILE = $savedProfile; $env:USERNAME = $savedName }
+    }
+    $r = AsCurrent $zip1 $rel1 @('-Users', 'someone-else')
+    Check ($r.Code -eq 0 -and $r.Out -match 'not among -Users' -and -not (Test-Path (Join-Path $zed 'AppData\Local\Programs\BDF'))) ("-AsCurrentUser does nothing for a person who is not among -Users (exit $($r.Code): $(($r.Out -replace '\s+', ' ').Trim())")
+    $r = AsCurrent $zip1 $rel1 @('-Users', 'zed')
+    Check ($r.Code -eq 0 -and (Get-Content (Join-Path $zed 'AppData\Local\Programs\BDF\bdf.exe')) -match 'one') '-AsCurrentUser installs for the person running it'
+    Check ((Get-Content (Join-Path $resultsDir 'zed.txt') -Raw) -match 'RESULT: installed 0.8.1') 'and leaves the result in a file named for them'
+    $r = AsCurrent $zip1 $rel1
+    Check ($r.Code -eq 0 -and (Get-Content (Join-Path $resultsDir 'zed.txt') -Raw) -match 'RESULT: current') 'at the next sign-in it finds nothing to do and says so'
+    $r = AsCurrent $zip2 $rel2
+    Check ($r.Code -eq 0 -and (Get-Content (Join-Path $zed 'AppData\Local\Programs\BDF\bdf.exe')) -match 'two' -and (Get-Content (Join-Path $resultsDir 'zed.txt') -Raw) -match 'RESULT: updated 0.8.1 -> 0.8.2') 'when a newer release is published, the next sign-in updates it'
     $hank = Join-Path $users 'hank'; New-Item -ItemType Directory -Path "$hank\AppData\Local\Programs\BDF" -Force | Out-Null
     Set-Content "$hank\AppData\Local\Programs\BDF\precious.txt" 'not BDF'
     $r = AsUser $zip2 $rel2 $hank

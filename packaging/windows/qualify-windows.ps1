@@ -8,10 +8,10 @@
   It never publishes or signs anything: it uses the throwaway key and packages made by qualify-build.ps1.
 
   Stages (each is independent and writes <EvidenceDir>\<stage>.txt):
-    system    Deploy as Local System (as Action1 does) to real standard-user profiles: the install runs as each person (S4U), the files
+    system    Deploy as Local System (as Action1 does) to real standard-user profiles: the release is published and a sign-in task registered, it is applied in the signed-in session and, for standard users, by running the task as them; the files
               are theirs, a standard user can run and update their own copy, a second user cannot touch it, reruns do nothing, a running
-              copy is skipped then updated, the Default profile reaches a user created later, an account that may not run batch tasks is
-              reported as failed with nothing changed, -WhatIf changes nothing, and a run ended part-way is finished by the next run.
+              copy is skipped then updated, the Default profile reaches a user created later, a person not among -Users is
+              left alone, the published release cannot be tampered with, -WhatIf changes nothing, and a run (or a person's install) ended part-way is finished by the next one.
     boundary  The file-system race, with a real second process running as the person: previous script (measured, informational)
               against the current one (asserted: nothing outside the person's own rights is ever touched).
     disk      A really full volume: download, staging and an update on a 400 MB virtual disk, and the deployment script, at several
@@ -190,43 +190,106 @@ function Expand-Package([string]$Zip, [string]$Dest) {
 }
 
 # =====================================================================================================================
+$ApplyTask = 'BDF-apply-release'
+function Task-Exists { [bool](Get-ScheduledTask -TaskName $ApplyTask -TaskPath '\BDF\' -ErrorAction SilentlyContinue) }
+# What the sign-in task runs, run as a given person exactly as the task would run it (their own account, their profile loaded).
+# On a runner nobody can sign in a second time, so this stands in for their sign-in; the task itself is started for the signed-in account.
+function Run-TaskAs($User, [int]$TimeoutSec = 600) {
+    $task = Get-ScheduledTask -TaskName $ApplyTask -TaskPath '\BDF\'
+    $argLine = $task.Actions[0].Arguments
+    $p = Start-Process -FilePath $PS -Credential $User.Cred -WorkingDirectory (Join-Path $env:SystemRoot 'System32') -ArgumentList $argLine -PassThru -WindowStyle Hidden -LoadUserProfile
+    $null = $p.Handle
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return -1 }
+    $p.ExitCode
+}
+function Result-Of([string]$Name) { $f = "C:\ProgramData\BDF\user-results\$Name.txt"; if (Test-Path $f) { (Get-Content $f -Raw) } else { '' } }
+function Show-Log($r) { Say (($r.Log -split "`n" | ForEach-Object { "      $_" } | Out-String).TrimEnd()) }
+
 function Stage-System {
-    Scenario 'Two real standard users, deployed to as Local System' {
+    Scenario '-WhatIf as Local System reports and registers nothing' {
+        $r = Deploy-AsSystem $Zip0 $Rel0 @('-Users', 'runneradmin', '-WhatIf')
+        Show-Log $r
+        Check ($r.Code -eq 0 -and $r.Log -match 'would install or update') '-WhatIf says what it would do'
+        Check (-not (Task-Exists) -and -not (Test-Path 'C:\Users\runneradmin\AppData\Local\Programs\BDF')) 'and registers no task and installs nothing'
+    }
+    Scenario 'Deploy as Local System: published, registered, and applied in the signed-in session' {
         $script:q1 = New-TestUser 'bdfq1'; $script:q2 = New-TestUser 'bdfq2'
         Check (@(Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like '*\bdfq1' }).Count -eq 0) 'the test users are standard users (not administrators)'
-        $r = Deploy-AsSystem $Zip0 $Rel0 @('-Users', 'bdfq1,bdfq2', '-IncludeDefaultProfile')
-        Say ($r.Log -split "`n" | ForEach-Object { "      $_" } | Out-String).TrimEnd()
+        $r = Deploy-AsSystem $Zip0 $Rel0 @('-Users', 'runneradmin,bdfq1,bdfq2', '-IncludeDefaultProfile')
+        Show-Log $r
         Check ($r.Code -eq 0) "the Local System run exits 0 (it exited $($r.Code))"
-        foreach ($u in $q1, $q2) {
-            Check ((Version-Of $u.App) -eq $V0) "$($u.Name): BDF $V0 is installed in their own folder"
-            Check ((Owner-Of (Join-Path $u.App 'bdf.exe')) -like "*\$($u.Name)") "$($u.Name): the files belong to that person, not to SYSTEM or Administrators (owner: $(Owner-Of (Join-Path $u.App 'bdf.exe')))"
-            Check (-not (Test-Path (Join-Path $u.App 'BDFData'))) "$($u.Name): no data folder was invented"
-        }
+        Check ($r.Log -match 'registered the sign-in task') 'it published the release and registered the sign-in task'
+        $t = Get-ScheduledTask -TaskName $ApplyTask -TaskPath '\BDF\' -ErrorAction SilentlyContinue
+        Check ($t -and @($t.Triggers | Where-Object { $_.CimClass.CimClassName -like '*Logon*' }).Count -eq 1) 'the task has a sign-in (logon) trigger'
+        Check ($t -and $t.Principal.GroupId -like '*Users') 'and is for the Users group, so it runs as whoever signs in'
+        Check ($r.Log -match 'runneradmin: installed') 'the signed-in account got the release at once, in their own session, and reported back'
+        Check ((Version-Of 'C:\Users\runneradmin\AppData\Local\Programs\BDF') -eq $V0) "runneradmin's copy is $V0"
+        Check ($r.Log -match 'bdfq1: not signed in' -and $r.Log -match 'bdfq2: not signed in') 'people who are not signed in are reported as pending, not as failures'
         Check (Test-Path 'C:\Users\Default\AppData\Local\Programs\BDF\bdf.exe') 'the Default profile has a copy, for users created later'
+        Check (-not (Test-Path $q1.App)) 'nothing was written in a profile of someone who is not signed in'
     }
-    Scenario 'The person runs and writes in their own copy; another person cannot' {
+    Scenario 'Their sign-in: the task runs as each standard person and installs for them' {
+        foreach ($u in $q1, $q2) {
+            $code = Run-TaskAs $u
+            Check ($code -eq 0 -and (Version-Of $u.App) -eq $V0) "$($u.Name): signing in installs $V0 in their own folder (exit $code)"
+            if (Test-Path (Join-Path $u.App 'bdf.exe')) {
+                Check ((Owner-Of (Join-Path $u.App 'bdf.exe')) -like "*\$($u.Name)") "$($u.Name): the files belong to that person (owner: $(Owner-Of (Join-Path $u.App 'bdf.exe')))"
+            }
+            Check ((Result-Of $u.Name) -match 'RESULT: installed') "$($u.Name): the result is left for Local System in a file named for them"
+        }
         $a = Run-AsUser $q1 "`$app = '$($q1.App)'; `$s = & `"`$app\bdf-cli.exe`" update status | Out-String; Write-Output `$s; try { Set-Content -LiteralPath `"`$app\wrote.txt`" 'x'; Remove-Item -LiteralPath `"`$app\wrote.txt`"; Write-Output 'WRITE-OK' } catch { Write-Output 'WRITE-DENIED' }"
-        Check ($a.Out -match '"managed": true') "bdfq1 runs their copy and it is a managed copy"
+        Check ($a.Out -match '"managed": true') 'bdfq1 runs their copy and it is a managed copy'
         Check ($a.Out -match 'WRITE-OK') 'bdfq1 can modify files in their own copy (so the in-app update needs no administrator)'
         $b = Run-AsUser $q2 "try { Set-Content -LiteralPath '$($q1.App)\intruder.txt' 'x'; Write-Output 'WRITE-OK' } catch { Write-Output 'WRITE-DENIED' }"
         Check ($b.Out -match 'WRITE-DENIED' -and -not (Test-Path (Join-Path $q1.App 'intruder.txt'))) 'bdfq2 cannot write into bdfq1''s copy'
     }
-    Scenario 'A rerun changes nothing' {
-        $stamp = (Get-Item (Join-Path $q1.App 'bdf.exe')).LastWriteTimeUtc
-        $r = Deploy-AsSystem $Zip0 $Rel0 @('-Users', 'bdfq1,bdfq2')
-        Check ($r.Code -eq 0 -and @($r.Log -split "`n" | Where-Object { $_ -match 'already has' }).Count -eq 2) 'both people are reported as already current'
-        Check ((Get-Item (Join-Path $q1.App 'bdf.exe')).LastWriteTimeUtc -eq $stamp) 'the program file was not rewritten'
+    Scenario 'The published release and the results folder cannot be tampered with by a person' {
+        $rel = @(Get-ChildItem 'C:\ProgramData\BDF\release' -Directory | Select-Object -First 1)
+        Check ($rel.Count -eq 1) 'there is a published release folder'
+        if ($rel.Count -eq 1) {
+            $w = Run-AsUser $q2 "try { Set-Content -LiteralPath '$($rel[0].FullName)\deploy-bdf.ps1' 'tampered'; Write-Output 'WRITE-OK' } catch { Write-Output 'WRITE-DENIED' }; try { Remove-Item -LiteralPath '$($rel[0].FullName)\package.zip' -Force -ErrorAction Stop; Write-Output 'DELETE-OK' } catch { Write-Output 'DELETE-DENIED' }; try { Set-Content -LiteralPath '$($rel[0].FullName)\new.txt' 'x'; Write-Output 'CREATE-OK' } catch { Write-Output 'CREATE-DENIED' }"
+            Check ($w.Out -match 'WRITE-DENIED' -and $w.Out -match 'DELETE-DENIED' -and $w.Out -match 'CREATE-DENIED') 'a standard person can read the published release but not change, delete or add to it'
+            $r2 = Run-AsUser $q2 "(Get-Content -LiteralPath '$($rel[0].FullName)\release.json' -Raw).Length"
+            Check ($r2.Out -match '^\s*\d+') 'and can read it (the task needs to)'
+        }
+        $x = Run-AsUser $q2 "try { Add-Content -LiteralPath 'C:\ProgramData\BDF\user-results\bdfq1.txt' 'forged'; Write-Output 'WRITE-OK' } catch { Write-Output 'WRITE-DENIED' }"
+        Check ($x.Out -match 'WRITE-DENIED') 'bdfq2 cannot change bdfq1''s result file'
+    }
+    Scenario 'A rerun costs nothing; a person already current is not even compared against the package' {
+        $r = Deploy-AsSystem $Zip0 $Rel0 @('-Users', 'runneradmin,bdfq1,bdfq2')
+        Show-Log $r
+        Check ($r.Code -eq 0 -and $r.Log -match 'runneradmin: already has') 'a rerun leaves the signed-in account alone'
+        $t0 = Get-Date; $code = Run-TaskAs $q1; $secs = ((Get-Date) - $t0).TotalSeconds
+        Check ($code -eq 0 -and (Result-Of 'bdfq1') -match 'RESULT: current') ('the next sign-in of a current person finds nothing to do ({0:n1} s)' -f $secs)
+    }
+    Scenario 'A person not among -Users is left alone' {
+        $r = Deploy-AsSystem $Zip1 $Rel1 @('-Users', 'runneradmin')
+        $code = Run-TaskAs $q2
+        Check ($code -eq 0 -and (Version-Of $q2.App) -eq $V0) 'bdfq2 signs in after a release meant only for runneradmin and keeps what they had'
+        $r = Deploy-AsSystem $Zip1 $Rel1 @('-Users', 'runneradmin,bdfq1,bdfq2')
+    }
+    Scenario 'A running copy is skipped, and updated at the next sign-in' {
+        $hold = Join-Path $Share 'hold.ps1'
+        Set-Content -Path $hold -Encoding utf8 -Value "`$f = [IO.File]::Open('$($q1.App)\bdf-cli.exe', 'Open', 'Read', 'Read'); Start-Sleep -Seconds 90; `$f.Dispose()"
+        $p = Start-AsUser $q1 $hold
+        Start-Sleep -Seconds 4
+        $code = Run-TaskAs $q1
+        Check ($code -eq 4 -and (Result-Of 'bdfq1') -match 'RESULT: in-use') 'sign-in with a program running from the folder: skipped (exit 4), not failed'
+        Check ((Version-Of $q1.App) -eq $V0) 'the running copy is unchanged'
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2
+        $code = Run-TaskAs $q1
+        Check ($code -eq 0 -and (Version-Of $q1.App) -eq $V1) 'the next sign-in updates it'
+        Check ((Version-Of (Join-Path $q1.App 'BDFPrevious')) -eq $V0) 'and keeps the version they had in BDFPrevious'
     }
     Scenario 'A user created later gets the copy from the Default profile, owns it, and updates it themselves from the feed' {
         $q3 = New-TestUser 'bdfq3'
         Check (Test-Path (Join-Path $q3.App 'bdf.exe')) 'bdfq3 has BDF in their profile from the first minute'
         if (Test-Path (Join-Path $q3.App 'bdf.exe')) {
             Check ((Owner-Of (Join-Path $q3.App 'bdf.exe')) -like '*\bdfq3') "the copied files belong to bdfq3 (owner: $(Owner-Of (Join-Path $q3.App 'bdf.exe')))"
-            $w = Run-AsUser $q3 "try { Set-Content -LiteralPath '$($q3.App)\wrote.txt' 'x'; Remove-Item -LiteralPath '$($q3.App)\wrote.txt'; Write-Output 'WRITE-OK' } catch { Write-Output 'WRITE-DENIED' }"
-            Check ($w.Out -match 'WRITE-OK') 'bdfq3 can modify their copy'
             $feed = Start-Feed
             try {
                 $app = $q3.App
+                $before = Version-Of $app
                 $text = @"
 `$env:BDF_UPDATE_FEED = 'http://127.0.0.1:$Port/release.json'
 `$cli = '$app\bdf-cli.exe'
@@ -235,68 +298,40 @@ function Stage-System {
 & `$cli update apply | Out-String | Write-Output
 "@
                 $u = Run-AsUser $q3 $text 600
-                Say ($u.Out -split "`n" | Select-Object -First 12 | ForEach-Object { "      $_" } | Out-String).TrimEnd()
                 $end = (Get-Date).AddSeconds(120)
-                while ((Get-Date) -lt $end -and (Version-Of $app) -ne $V1) { Start-Sleep -Milliseconds 500 }
-                Check ((Version-Of $app) -eq $V1) "bdfq3, a standard user, updated their own SYSTEM-deployed copy to $V1 from the feed (it is $(Version-Of $app))"
-                $end = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $end -and (Version-Of (Join-Path $app 'BDFPrevious')) -ne $V0) { Start-Sleep -Milliseconds 500 }
-                Check ((Version-Of (Join-Path $app 'BDFPrevious')) -eq $V0) 'and BDFPrevious holds the version they had (the updater tidies up just after the swap)'
+                while ((Get-Date) -lt $end -and (Version-Of $app) -eq $before) { Start-Sleep -Milliseconds 500 }
+                Check ((Version-Of $app) -eq $V1) "bdfq3, a standard user, updated their own SYSTEM-deployed copy from $before to $V1 from the feed (it is $(Version-Of $app))"
+                $end = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $end -and -not (Version-Of (Join-Path $app 'BDFPrevious'))) { Start-Sleep -Milliseconds 500 }
+                Check ((Version-Of (Join-Path $app 'BDFPrevious')) -eq $before) 'and BDFPrevious holds the version they had (the updater tidies up just after the swap)'
             } finally { Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue }
         }
     }
-    Scenario 'A running copy is skipped, and updated by the next run' {
-        $hold = Join-Path $Share 'hold.ps1'
-        Set-Content -Path $hold -Encoding utf8 -Value "`$f = [IO.File]::Open('$($q1.App)\bdf-cli.exe', 'Open', 'Read', 'Read'); Start-Sleep -Seconds 120; `$f.Dispose()"
-        $p = Start-AsUser $q1 $hold
-        Start-Sleep -Seconds 4
-        $r = Deploy-AsSystem $Zip1 $Rel1 @('-Users', 'bdfq1,bdfq2')
-        Say ($r.Log -split "`n" | ForEach-Object { "      $_" } | Out-String).TrimEnd()
-        Check ($r.Code -eq 0 -and $r.Log -match 'bdfq1: BDF is running from its folder') 'bdfq1 (a program running from the folder) is skipped, not failed, and the run exits 0'
-        Check ((Version-Of $q1.App) -eq $V0) 'the running copy is unchanged'
-        Check ((Version-Of $q2.App) -eq $V1) 'bdfq2 (nothing running) was updated in the same run'
-        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2
-        $r = Deploy-AsSystem $Zip1 $Rel1 @('-Users', 'bdfq1,bdfq2')
-        Check ($r.Code -eq 0 -and (Version-Of $q1.App) -eq $V1) 'the next run updates bdfq1'
-        Check ((Version-Of (Join-Path $q1.App 'BDFPrevious')) -eq $V0) 'bdfq1 keeps the version they had in BDFPrevious'
-    }
-    Scenario 'An account that may not run batch tasks is reported as failed and nothing is changed' {
-        $q4 = New-TestUser 'bdfq4'
-        $cfg = Join-Path $env:TEMP 'bdfq-rights.inf'; $db = Join-Path $env:TEMP 'bdfq-rights.sdb'
-        & secedit.exe /export /cfg $cfg /areas USER_RIGHTS | Out-Null
-        $text = Get-Content $cfg -Raw
-        if ($text -match '(?m)^SeDenyBatchLogonRight\s*=.*$') { $text = $text -replace '(?m)^(SeDenyBatchLogonRight\s*=.*)$', "`$1,*$($q4.Sid)" } else { $text = $text -replace '(?m)^(\[Privilege Rights\])', "`$1`r`nSeDenyBatchLogonRight = *$($q4.Sid)" }
-        Set-Content -Path $cfg -Value $text -Encoding Unicode
-        & secedit.exe /configure /db $db /cfg $cfg /areas USER_RIGHTS | Out-Null
-        $r = Deploy-AsSystem $Zip1 $Rel1 @('-Users', 'bdfq4,bdfq2')
-        Say ($r.Log -split "`n" | ForEach-Object { "      $_" } | Out-String).TrimEnd()
-        Check ($r.Code -eq 1 -and $r.Log -match 'bdfq4: FAILED') 'the person denied batch logon is reported as failed and the run exits 1'
-        Check (-not (Test-Path $q4.App)) 'nothing was created in their profile'
-        Check ($r.Log -match 'bdfq2: already has') 'the other person in the same run is unaffected'
-        $why = (($r.Log -split "`n" | Where-Object { $_ -match 'bdfq4: FAILED' }) -join ' ')
-        Info "the message names the cause: $why"
-    }
-    Scenario '-WhatIf reports and changes nothing' {
-        $q5 = New-TestUser 'bdfq5'
-        $r = Deploy-AsSystem $Zip0 $Rel0 @('-Users', 'bdfq5', '-WhatIf')
-        Check ($r.Log -match 'would install' -and -not (Test-Path $q5.App)) '-WhatIf as Local System says what it would do and creates nothing'
-    }
-    Scenario 'A run ended part-way is finished by the next run, and clears what it left' {
+    Scenario 'The person''s own install is stopped part-way: the next sign-in finishes it' {
         $q6 = New-TestUser 'bdfq6'
-        $name = Start-SystemTask $Deploy @('-PackageZip', "`"$Zip0`"", '-ReleaseFile', "`"$Rel0`"", '-PublicKey', $Pub, '-Channel', 'dev', '-Users', 'bdfq6')
-        Start-Sleep -Seconds 3
-        Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue      # the deployment tool ends the run
+        $task = Get-ScheduledTask -TaskName $ApplyTask -TaskPath '\BDF\'
+        $p = Start-Process -FilePath $PS -Credential $q6.Cred -WorkingDirectory (Join-Path $env:SystemRoot 'System32') -ArgumentList $task.Actions[0].Arguments -PassThru -WindowStyle Hidden -LoadUserProfile
+        $null = $p.Handle
+        $end = (Get-Date).AddSeconds(60)
+        while ((Get-Date) -lt $end -and -not (Test-Path (Join-Path $q6.App 'BDFUpdate\deploy-stage')) -and -not $p.HasExited) { Start-Sleep -Milliseconds 100 }
+        Start-Sleep -Milliseconds 1500
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        $p.WaitForExit()
+        Info "after the stop: folder exists $(Test-Path $q6.App), list present $(Test-Path (Join-Path $q6.App 'bdf-package.json')), marker present $(Test-Path (Join-Path $q6.App 'BDFUpdate\deploy-pending.json'))"
+        $code = Run-TaskAs $q6
+        Check ($code -eq 0 -and (Version-Of $q6.App) -eq $V1) "the next sign-in completes the install (exit $code, copy is '$(Version-Of $q6.App)')"
+        Check (-not (Test-Path (Join-Path $q6.App 'BDFUpdate\deploy-pending.json')) -and -not (Test-Path (Join-Path $q6.App 'BDFUpdate\deploy-stage'))) 'no marker or staging folder is left behind'
+    }
+    Scenario 'The Local System run is ended part-way: nothing is left broken' {
+        $name = Start-SystemTask $Deploy @('-PackageZip', "`"$Zip1`"", '-ReleaseFile', "`"$Rel1`"", '-PublicKey', $Pub, '-Channel', 'dev', '-Users', 'runneradmin')
+        Start-Sleep -Seconds 4
+        Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
         Remove-SystemTask $name
-        $stale = @(Get-ChildItem 'C:\ProgramData\BDF' -Directory -Filter 'run-*' -ErrorAction SilentlyContinue)
-        Info "after the run was ended: $($stale.Count) working folder(s) left, copy is '$(Version-Of $q6.App)'"
-        Start-Sleep -Seconds 20     # the person's own task is a separate task: it finishes (or not) by itself
-        foreach ($d in $stale) { $d.LastWriteTime = (Get-Date).AddHours(-3) }
-        foreach ($t in @(Get-ScheduledTask -TaskPath '\BDF\' -ErrorAction SilentlyContinue)) { Info "task left from the ended run: $($t.TaskName) ($($t.State))" }
-        $r = Deploy-AsSystem $Zip0 $Rel0 @('-Users', 'bdfq6')
-        Say ($r.Log -split "`n" | ForEach-Object { "      $_" } | Out-String).TrimEnd()
-        Check ($r.Code -eq 0 -and (Version-Of $q6.App) -eq $V0) 'the next run succeeds and the copy is complete'
-        Check (@(Get-ChildItem 'C:\ProgramData\BDF' -Directory -Filter 'run-*' -ErrorAction SilentlyContinue).Count -eq 0) 'no working folder is left behind after the next run'
-        Check (-not (Test-Path (Join-Path $q6.App 'BDFUpdate\deploy-pending.json'))) 'no unfinished-run marker is left in the person''s folder'
+        $t = Get-ScheduledTask -TaskName $ApplyTask -TaskPath '\BDF\' -ErrorAction SilentlyContinue
+        $dirFromTask = if ($t) { ($t.Actions[0].Arguments -replace '^.*-File "([^"]+)\\deploy-bdf\.ps1".*$', '$1') } else { '' }
+        Check ((-not $t) -or (Test-Path $dirFromTask)) 'the registered task never points at a release folder that is missing or half-copied'
+        $r = Deploy-AsSystem $Zip1 $Rel1 @('-Users', 'runneradmin,bdfq1,bdfq2,bdfq3,bdfq6')
+        Check ($r.Code -eq 0) 'the next run succeeds'
     }
 }
 
@@ -334,7 +369,7 @@ while (-not (Test-Path $Stop)) {
 try { if ((Test-Path -LiteralPath $dir) -and ((Get-Item -LiteralPath $dir -Force).Attributes -band 'ReparsePoint')) { [IO.Directory]::Delete($dir) } } catch { }
 try { if (-not (Test-Path -LiteralPath $dir) -and (Test-Path -LiteralPath $real)) { [IO.Directory]::Move($real, $dir) } } catch { }
 '@
-    function Race([string]$Label, [string]$Script, [string]$UserName, [bool]$Assert) {
+    function Race([string]$Label, [string]$Script, [string]$UserName, [bool]$Assert, [bool]$AsTask) {
         $u = New-TestUser $UserName
         $hits = 0; $ran = 0; $updated = 0
         foreach ($t in 1..$Trials) {
@@ -342,7 +377,10 @@ try { if (-not (Test-Path -LiteralPath $dir) -and (Test-Path -LiteralPath $real)
             Get-ChildItem $outside -Force | Remove-Item -Recurse -Force
             foreach ($i in 1..60) { Set-Content -Path (Join-Path $outside ('m{0:000}.bin' -f $i)) -Value "CANARY $i" -Encoding ascii }
             if (Test-Path $u.App) { Remove-Item $u.App -Recurse -Force }
-            $r0 = Deploy-AsSystem $a.Zip $a.Rel @('-Users', $UserName) $Script
+            [void](Deploy-AsSystem $a.Zip $a.Rel @('-Users', $UserName) $Script)
+            if ($AsTask) { [void](Run-TaskAs $u) }           # the person's sign-in installs the older release
+            # the newer release is published; the update is applied while a second process, running as the person, swaps a folder for a junction
+            if ($AsTask) { [void](Deploy-AsSystem $b.Zip $b.Rel @('-Users', $UserName) $Script) }
             $events = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
             $watch = New-Object System.IO.FileSystemWatcher $outside
             $watch.IncludeSubdirectories = $true; $watch.InternalBufferSize = 65536
@@ -353,7 +391,8 @@ try { if (-not (Test-Path -LiteralPath $dir) -and (Test-Path -LiteralPath $real)
             $stopFile = Join-Path $Drop "stop-$UserName-$t"
             if (Test-Path $stopFile) { Remove-Item $stopFile }
             $ap = Start-AsUser $u $attacker @('-App', "`"$($u.App)`"", '-Outside', "`"$outside`"", '-Stop', "`"$stopFile`"")
-            $r = Deploy-AsSystem $b.Zip $b.Rel @('-Users', $UserName) $Script
+            if ($AsTask) { [void](Run-TaskAs $u); $outcome = Result-Of $UserName }
+            else { $r = Deploy-AsSystem $b.Zip $b.Rel @('-Users', $UserName) $Script; $outcome = $r.Log }
             Set-Content $stopFile 'stop'
             [void]$ap.WaitForExit(30000); if (-not $ap.HasExited) { Stop-Process -Id $ap.Id -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Milliseconds 500
@@ -361,21 +400,22 @@ try { if (-not (Test-Path -LiteralPath $dir) -and (Test-Path -LiteralPath $real)
             foreach ($s in $subs) { Unregister-Event -SubscriptionId $s.Id -ErrorAction SilentlyContinue }
             $watch.Dispose()
             $ran++
-            if ($r.Log -match 'updated 0.8.1 -> 0.8.2') { $updated++ }
+            if ($outcome -match 'updated 0.8.1 -> 0.8.2') { $updated++ }
             if ($events.Count -gt 0) { $hits++; Info "$Label trial ${t}: steered through the link: $((@($events.ToArray()) | Select-Object -First 3) -join '; ')" }
         }
-        Info "$Label`: $hits of $ran trials touched the administrators-only folder; $updated of $ran runs finished the update under attack"
+        Info "$Label`: $hits of $ran trials touched the administrators-only folder; $updated of $ran updates finished while under attack"
         if ($Assert) { Check ($hits -eq 0) "$Label`: in $ran trials with a second process swapping a folder for a junction, nothing in the administrators-only folder was ever touched" }
         # the person's copy is healed by a run with nobody attacking
-        $r = Deploy-AsSystem $b.Zip $b.Rel @('-Users', $UserName) $Script
-        if ($Assert) { Check ($r.Code -eq 0 -and (Version-Of $u.App) -eq '0.8.2') "$Label`: with nobody attacking, the next run leaves a complete 0.8.2" }
+        if ($AsTask) { [void](Deploy-AsSystem $b.Zip $b.Rel @('-Users', $UserName) $Script); [void](Run-TaskAs $u) }
+        else { [void](Deploy-AsSystem $b.Zip $b.Rel @('-Users', $UserName) $Script) }
+        if ($Assert) { Check ((Version-Of $u.App) -eq '0.8.2') "$Label`: with nobody attacking, the next sign-in leaves a complete 0.8.2 (it is '$(Version-Of $u.App)')" }
         $hits
     }
     Scenario 'The previous in-place script, measured (informational: zero hits in a sample proves nothing)' {
-        if ($LegacyDeploy -and (Test-Path $LegacyDeploy)) { [void](Race 'previous script' $LegacyDeploy 'bdfqold' $false) } else { Info 'the previous script was not supplied (-LegacyDeploy), so it was not measured here' }
+        if ($LegacyDeploy -and (Test-Path $LegacyDeploy)) { [void](Race 'previous script' $LegacyDeploy 'bdfqold' $false $false) } else { Info 'the previous script was not supplied (-LegacyDeploy), so it was not measured here' }
     }
-    Scenario 'The current script: the install runs as the person' {
-        [void](Race 'current script' $Deploy 'bdfqnew' $true)
+    Scenario 'The current script: the install runs as the person, in their own sign-in' {
+        [void](Race 'current script' $Deploy 'bdfqnew' $true $true)
     }
 }
 
