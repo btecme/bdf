@@ -2370,6 +2370,9 @@ animation effects	Off	Ki
 	Windows integration	Windows-integráció
 	Refresh Windows integration	Windows-integráció frissítése
 	Make BDF my default PDF app	A BDF legyen az alapértelmezett PDF-alkalmazásom
+	Preferences ({key})	Beállítások ({key})
+	Make BDF the default PDF app	A BDF legyen az alapértelmezett PDF-alkalmazás
+	BDF is registered, but Windows Settings did not open: {why}	A BDF regisztrálva van, de a Windows Beállítások nem nyílt meg: {why}
 	Remove Windows integration	Windows-integráció eltávolítása
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	A BDF regisztrálva van. Válaszd ki a Windows Alapértelmezett alkalmazások oldalán, hogy alapértelmezett legyen.
 	Windows integration removed. Other apps' settings were not touched.	A Windows-integráció eltávolítva. Más alkalmazások beállításait nem érintettük.

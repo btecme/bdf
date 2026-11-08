@@ -1,7 +1,7 @@
 # BUILD-018 evidence: portable deployment, optional Windows integration, signed user-initiated updates
 
 Status: **implemented 2026-11-06 on `feat/build-018-portable-updates` (version 0.8.0); corrected 2026-11-07 for the independent
-review's findings R18-1 to R18-4 (section 7); qualified 2026-11-07 on disposable hosted Windows machines (section 8); the hosted
+review's findings R18-1 to R18-4 (section 7) and R18-5 (section 9); qualified 2026-11-07 on disposable hosted Windows machines (section 8); the hosted
 result for the head named in the pull request is read there, not asserted here; not independently accepted.** A signed release
 has not been published and no production signing key exists. Still not shown: the default-app choice and PDF double-click on a
 Windows 11 desktop, a real power cut, production signing (section 8). Design and
@@ -284,3 +284,61 @@ not a default (the default is another application). Section "Machine" above said
 that check named other keys than the ones registration writes, so it did not show this. No test or script in the repository registers an
 existing program against the real registry, and the platform tests include one that checks they do not, so the source is unexplained.
 `bdf-cli windows unregister` from any current copy removes it; the owner's registry was left alone.
+
+## 9. Review round 2 (2026-11-08): R18-5, and two discoverability shortcuts
+
+### R18-5 (P2): saving an unnamed document during an update did not finish the update
+
+Independent review of `12c9d40d`: choosing *Update ▸ Close BDF and update ▸ Save* for a document with no file asks where, and the
+answer arrives on a later frame. That gap was read as the person cancelling (no close prompt, not quitting), so the update was
+dropped although the file had been written; with a destination known at once the update ran but the list of files to reopen had been
+taken before the document had a path.
+
+**Change** (update/save lifecycle state only; `updates.rs`, `editing.rs`, `pickers.rs`): a Save As picker that is still open, or whose
+answer is waiting for the frame, is not a cancellation (`Pickers::is_showing`); the reopen list is kept by document and a document that
+is closed for the update's quit is entered with the path it has *then*, so a just-saved file replaces the old (or missing) one; when a
+save has just failed, its reason is kept in the notice and "Update postponed" is added to it instead of replacing it.
+
+**Tests** (`crates/ui-egui/tests/updates.rs`, 19 in the file): the reviewer's two cases (picker; direct save), two unnamed documents
+saved one after the other (one updater start, both files reopened), a cancelled Save As, a failed Save As (folder missing: nothing
+written, document still open and unsaved, update withdrawn, the reason shown), an existing document saved over (its own file), and an
+email attachment's temporary copy saved to a new place (the new file, not the temporary path). Run against the unfixed code, the picker,
+direct-save and two-document cases failed on the update never starting or the wrong file; the failed-Save-As case failed too: "Update postponed"
+was shown before the save had even run and the failure reason then replaced it. All 19 pass now. Save, Don't save and Cancel are unchanged (the earlier tests still pass);
+an original is never saved over without the person choosing Save.
+
+### Two discoverability shortcuts
+
+* **A gear in the toolbar**, between Document properties and Save, opens Preferences (the same `app.preferences` command as the menu
+  and Ctrl+,); tooltip and accessible name *Preferences (Ctrl+,)*; enabled with or without a document (Print, Save and Document
+  properties still follow the document).
+* **"Make BDF the default PDF app" at the bottom right of the window** (Windows, with or without a document). It is a thin panel of its
+  own across the window's width, so the page and tools above it have that much less room and nothing is covered; no room is kept when
+  it is not showing. Clicking runs the one action Preferences uses (register this copy for the person, open the Default apps page;
+  `windows_integration::register` and `open_default_apps`, which the `windows_*` automation tools already expose). **Opening Settings is
+  not success:** the link goes only when Windows reports BDF as the default (`Status::bdf_is_default`: this registered copy chosen in
+  Settings, or the installed BDF's file type), read at start, when the window regains the focus, and after a choice or removal, and
+  never per frame (Preferences now uses the same cached status; it used to read the registry on every frame it was open). A cancelled
+  choice, a failed registration, or Settings that did not open leaves it in place and says why.
+* The desktop app supplies the host (`default_app::DefaultAppHost`, like the update host); the web build and every test have none, so no
+  test reads or writes the real registry.
+
+**Tests** (`crates/ui-egui/tests/default_app.rs`, 10, plus a platform test of `bdf_is_default`): shown/hidden for nothing registered,
+registered but not chosen, another copy's registration, another application, confirmed default, the installed BDF, unsupported and no
+host, each with and without a document; one registry read at start and one per focus regain, none over sixty frames, with Preferences
+open too; click, still shown while only registered, still shown after a cancelled choice, hidden once Windows reports BDF on the next
+focus; failed registration and failed Settings keep it with the reason; the gear opens Preferences with and without a document, sits
+between Document properties and Save and carries the shortcut key; at 1400x900 at 1x, 1000x700 at 1.25x, 640x600 at 1.5x, 480x600 at
+1.75x and 360x640 at 2x, the link is inside the window, at its bottom-right corner, at least 20 points high, clickable, not overlapping the
+gear or any other button, tab, link or field. Breaking the caching and treating "registered" as success made four of them fail.
+
+**Looked at** (this machine, Windows 11 22631, display scaling 150 %, a synthetic PDF, the real registry read only, nothing clicked, nothing
+registered): the strip and the gear in the real window with a document open, at full width and at about 700 points wide, and the home
+view at about 500 points. The strip never covers anything. **Observed, not changed:** below roughly 520 points the existing toolbar
+(mode tabs, the 260-point search box, the icons) already crowds, and the gear adds one more icon to that row; the gear and the strip stay
+reachable and do not overlap each other.
+
+**Not shown:** the real click through Windows' Settings and the link disappearing after BDF is chosen there (the same two minutes at a
+Windows 11 desktop as before; it should now also show the link go), and other display scalings than 150 % in the real window (the layout
+tests above cover 1x to 2x). **Translations:** three new strings (*Preferences ({key})*, *Make BDF the default PDF app*, *BDF is registered,
+but Windows Settings did not open: {why}*) are in all 21 catalogues, written from the existing entries' wording and **unreviewed**, like the earlier ones.

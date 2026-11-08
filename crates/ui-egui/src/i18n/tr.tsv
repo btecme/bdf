@@ -2367,6 +2367,9 @@ animation effects	Off	Kapalı
 	Windows integration	Windows tümleştirmesi
 	Refresh Windows integration	Windows tümleştirmesini yenile
 	Make BDF my default PDF app	BDF'yi varsayılan PDF uygulamam yap
+	Preferences ({key})	Tercihler ({key})
+	Make BDF the default PDF app	BDF'yi varsayılan PDF uygulaması yap
+	BDF is registered, but Windows Settings did not open: {why}	BDF kaydedildi, ancak Windows Ayarları açılmadı: {why}
 	Remove Windows integration	Windows tümleştirmesini kaldır
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF kaydedildi. Varsayılan yapmak için Windows'taki Varsayılan uygulamalar'dan seçin.
 	Windows integration removed. Other apps' settings were not touched.	Windows tümleştirmesi kaldırıldı. Diğer uygulamaların ayarlarına dokunulmadı.

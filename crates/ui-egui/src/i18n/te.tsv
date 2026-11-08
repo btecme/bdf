@@ -2280,6 +2280,9 @@ animation effects	Off	ఆఫ్
 	Windows integration	Windows ఇంటిగ్రేషన్
 	Refresh Windows integration	Windows ఇంటిగ్రేషన్‌ను రిఫ్రెష్ చేయండి
 	Make BDF my default PDF app	BDFని నా డిఫాల్ట్ PDF యాప్‌గా చేయండి
+	Preferences ({key})	ప్రాధాన్యతలు ({key})
+	Make BDF the default PDF app	BDFని డిఫాల్ట్ PDF యాప్‌గా చేయండి
+	BDF is registered, but Windows Settings did not open: {why}	BDF నమోదైంది, కానీ Windows సెట్టింగ్‌లు తెరవలేదు: {why}
 	Remove Windows integration	Windows ఇంటిగ్రేషన్‌ను తొలగించండి
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF నమోదైంది. దీన్ని డిఫాల్ట్‌గా చేయడానికి Windowsలోని డిఫాల్ట్ యాప్‌లలో ఎంచుకోండి.
 	Windows integration removed. Other apps' settings were not touched.	Windows ఇంటిగ్రేషన్ తొలగించబడింది. ఇతర యాప్‌ల సెట్టింగ్‌లు మార్చబడలేదు.

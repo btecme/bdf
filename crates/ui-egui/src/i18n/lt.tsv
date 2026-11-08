@@ -2615,6 +2615,9 @@ key	Space	Tarpas
 	Windows integration	Integracija su Windows
 	Refresh Windows integration	Atnaujinti integraciją su Windows
 	Make BDF my default PDF app	Padaryti BDF numatytąja PDF programa
+	Preferences ({key})	Nuostatos ({key})
+	Make BDF the default PDF app	Padaryti BDF numatytąja PDF programa
+	BDF is registered, but Windows Settings did not open: {why}	BDF užregistruotas, bet Windows nustatymų atidaryti nepavyko: {why}
 	Remove Windows integration	Pašalinti integraciją su Windows
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF užregistruotas. Pasirinkite jį Windows skiltyje Numatytosios programos, kad taptų numatytąja.
 	Windows integration removed. Other apps' settings were not touched.	Integracija su Windows pašalinta. Kitų programų nustatymai nepakeisti.

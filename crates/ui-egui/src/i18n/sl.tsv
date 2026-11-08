@@ -2376,6 +2376,9 @@ animation effects	Off	Izklopljeni
 	Windows integration	Povezava z Windows
 	Refresh Windows integration	Osveži povezavo z Windows
 	Make BDF my default PDF app	Nastavi BDF kot privzeto aplikacijo za PDF
+	Preferences ({key})	Nastavitve ({key})
+	Make BDF the default PDF app	Nastavi BDF kot privzeto aplikacijo za PDF
+	BDF is registered, but Windows Settings did not open: {why}	BDF je registriran, vendar se nastavitve sistema Windows niso odprle: {why}
 	Remove Windows integration	Odstrani povezavo z Windows
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF je registriran. Izberite ga v Windows pod Privzete aplikacije, da postane privzet.
 	Windows integration removed. Other apps' settings were not touched.	Povezava z Windows je odstranjena. Nastavitve drugih aplikacij niso bile spremenjene.

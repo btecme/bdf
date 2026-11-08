@@ -2369,6 +2369,9 @@ animation effects	Off	Өшірулі
 	Windows integration	Windows интеграциясы
 	Refresh Windows integration	Windows интеграциясын жаңарту
 	Make BDF my default PDF app	BDF бағдарламасын әдепкі PDF қолданбасы ету
+	Preferences ({key})	Параметрлер ({key})
+	Make BDF the default PDF app	BDF бағдарламасын әдепкі PDF қолданбасы ету
+	BDF is registered, but Windows Settings did not open: {why}	BDF тіркелді, бірақ Windows параметрлері ашылмады: {why}
 	Remove Windows integration	Windows интеграциясын жою
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF тіркелді. Әдепкі ету үшін оны Windows «Әдепкі қолданбалар» бөлімінде таңдаңыз.
 	Windows integration removed. Other apps' settings were not touched.	Windows интеграциясы жойылды. Басқа қолданбалардың параметрлері өзгертілмеді.

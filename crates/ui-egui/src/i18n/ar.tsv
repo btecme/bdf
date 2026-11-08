@@ -2392,6 +2392,9 @@ animation effects	Off	معطّلة
 	Windows integration	التكامل مع Windows
 	Refresh Windows integration	تحديث التكامل مع Windows
 	Make BDF my default PDF app	اجعل BDF تطبيق PDF الافتراضي لدي
+	Preferences ({key})	التفضيلات ({key})
+	Make BDF the default PDF app	اجعل BDF تطبيق PDF الافتراضي
+	BDF is registered, but Windows Settings did not open: {why}	تم تسجيل BDF، لكن تعذّر فتح إعدادات Windows: {why}
 	Remove Windows integration	إزالة التكامل مع Windows
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	تم تسجيل BDF. اختره من «التطبيقات الافتراضية» في Windows ليصبح الافتراضي.
 	Windows integration removed. Other apps' settings were not touched.	أُزيل التكامل مع Windows. لم تُمَسّ إعدادات التطبيقات الأخرى.

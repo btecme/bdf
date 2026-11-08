@@ -21,6 +21,13 @@ has been published: see [Owner setup](#owner-setup-to-activate-production-releas
   this Windows account (Open with, Default apps) and opens Windows' Default apps page, where the person confirms. BDF never
   sets the default and never writes the protected `UserChoice`. *Remove Windows integration* removes only what this copy
   registered; *Refresh* re-points a registration after the folder moved. An extracted copy never touches the registry.
+  The same action is also one click away: while Windows has not confirmed BDF as the default PDF app, a quiet *Make BDF the
+  default PDF app* link sits in a thin strip at the bottom right of the window (with or without a document open; the
+  strip is a panel of its own, so it takes room from the page and covers nothing). It runs exactly the Preferences action. Opening
+  Settings is not success: the link goes only when Windows itself reports BDF (this registered copy, or the installed BDF) as the
+  default, read again when BDF regains the focus. A cancelled choice or a failed registration leaves it in place. The registry is
+  read at start, on regaining the focus and after a choice or removal, never per frame. A gear in the toolbar, between Document
+  properties and Save, opens Preferences (Ctrl+,) with or without a document.
 * **The previous version is kept** in `BDFPrevious` (`bdf-cli update rollback` goes back to it).
 * **The dialog says what is true.** Not configured (a build with no trust root: it cannot verify, so it installs nothing), never
   checked, failed (with the reason), up to date, or available: `bdf-cli update status` reports the same as `check_state`.

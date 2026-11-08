@@ -437,6 +437,14 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if icons::button(ui, "save", 32.0, false, &tip).clicked() {
                             app.run_command("file.save");
                         }
+                    });
+                    // Preferences belong to the application, not to a document: always available, between Save and
+                    // Document properties. The same command as the menu entry and the shortcut.
+                    let tip = crate::commands::command_tip(ui.ctx(), tl!("Preferences ({key})"), "app.preferences");
+                    if icons::button(ui, "settings", 32.0, false, &tip).clicked() {
+                        app.run_command("app.preferences");
+                    }
+                    ui.add_enabled_ui(has_doc, |ui| {
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
                         if icons::button(ui, "info", 32.0, false, &tip).clicked() {
                             app.dialog = Some(Dialog::Properties(PropsTab::Description));
@@ -449,6 +457,49 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// The thin strip along the bottom of the window that holds "Make BDF the default PDF app" while Windows has not confirmed BDF
+/// as the default. It is a panel of its own, so the document and the tools above it simply have that much less room: nothing
+/// is ever covered. Nothing is drawn (and no room kept) when the shortcut is not showing.
+pub fn default_app_footer(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if !app.default_app_shortcut_shown() {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let mut clicked = false;
+    egui::Panel::bottom("default_app_footer")
+        .exact_size(FOOTER_HEIGHT)
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
+        .show(ui, |ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                clicked = default_app_link(ui, &t);
+            });
+        });
+    if clicked {
+        app.make_default_pdf_app();
+    }
+}
+
+/// The footer strip's height, in points (it scales with the display like everything else).
+const FOOTER_HEIGHT: f32 = 26.0;
+
+/// The shortcut itself: quiet text that turns to the accent on hover, like the "b-tec Built" mark. A window too narrow for the
+/// whole sentence shows the start of it (the tooltip and the accessible name keep all of it). True when clicked.
+fn default_app_link(ui: &mut egui::Ui, t: &Tokens) -> bool {
+    let text = tl!("Make BDF the default PDF app");
+    let font = theme::medium(12.0);
+    let measure = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), t.text_muted).size().x);
+    let room = (ui.available_width() - 8.0).max(0.0);
+    let shown = crate::panels::ellipsized_prefix(text, |s| measure(s) <= room);
+    let (rect, resp) = ui.allocate_exact_size(vec2(measure(&shown) + 8.0, 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), text));
+    let color = if resp.hovered() { t.accent } else { t.text_muted };
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, shown, font, color);
+    if resp.hovered() {
+        ui.painter().hline(rect.x_range().shrink(4.0), rect.bottom() - 3.0, Stroke::new(1.0, color));
+    }
+    theme::hand(resp.on_hover_text(text)).clicked()
 }
 
 fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {

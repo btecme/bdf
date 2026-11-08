@@ -27,6 +27,9 @@ use std::path::Path;
 
 /// The file type BDF registers for a portable copy.
 pub const PROG_ID: &str = "BDF.Portable.Document";
+/// The file type the Windows installer (MSI) registers machine-wide. Read only, to recognise a person who already chose
+/// the installed BDF; this module never writes it.
+pub const INSTALLED_PROG_ID: &str = "BDF.Document";
 /// The name under `RegisteredApplications`, and the Settings page's `registeredAppUser` argument.
 pub const REGISTERED_APP: &str = "BDF Portable";
 /// The Settings page where the person confirms BDF as the default (falls back to the Default apps page).
@@ -52,6 +55,12 @@ pub struct Status {
 }
 
 impl Status {
+    /// Windows says BDF opens this user's PDF files: this copy, registered and chosen in Settings, or the installed BDF.
+    /// Only what Windows reports counts. Registering, or opening the Settings page, is not the choice.
+    pub fn bdf_is_default(&self) -> bool {
+        (self.this_copy && self.is_default) || self.default_progid.as_deref() == Some(INSTALLED_PROG_ID)
+    }
+
     /// What the person should be told, in one sentence.
     pub fn summary(&self) -> String {
         if !self.supported {
@@ -424,6 +433,20 @@ mod tests {
         let quoted = dir.join("a\"b.exe");
         assert!(check_exe(&quoted).is_err(), "a quote would end the command early");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_what_windows_reports_makes_bdf_the_default() {
+        let base = Status { supported: true, registered: true, this_copy: true, ..Status::default() };
+        assert!(!base.bdf_is_default(), "registered but not chosen (opening Settings is not the choice)");
+        assert!(Status { is_default: true, default_progid: Some(PROG_ID.into()), ..base.clone() }.bdf_is_default());
+        assert!(
+            !Status { this_copy: false, is_default: true, default_progid: Some(PROG_ID.into()), ..base.clone() }.bdf_is_default(),
+            "another copy's registration is the default, not this one"
+        );
+        assert!(Status { default_progid: Some(INSTALLED_PROG_ID.into()), ..Status::default() }.bdf_is_default(), "the installed BDF");
+        assert!(!Status { default_progid: Some("AcroExch.Document.DC".into()), ..base }.bdf_is_default(), "another application");
+        assert!(!Status::default().bdf_is_default());
     }
 
     #[test]

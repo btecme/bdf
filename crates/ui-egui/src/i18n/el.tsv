@@ -2377,6 +2377,9 @@ animation effects	Off	Ανενεργά
 	Windows integration	Ενσωμάτωση στα Windows
 	Refresh Windows integration	Ανανέωση ενσωμάτωσης στα Windows
 	Make BDF my default PDF app	Ορισμός του BDF ως προεπιλεγμένης εφαρμογής PDF
+	Preferences ({key})	Προτιμήσεις ({key})
+	Make BDF the default PDF app	Ορισμός του BDF ως προεπιλεγμένης εφαρμογής PDF
+	BDF is registered, but Windows Settings did not open: {why}	Το BDF καταχωρίστηκε, αλλά οι Ρυθμίσεις των Windows δεν άνοιξαν: {why}
 	Remove Windows integration	Κατάργηση ενσωμάτωσης στα Windows
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	Το BDF καταχωρίστηκε. Επιλέξτε το στις Προεπιλεγμένες εφαρμογές των Windows για να γίνει προεπιλογή.
 	Windows integration removed. Other apps' settings were not touched.	Η ενσωμάτωση στα Windows καταργήθηκε. Οι ρυθμίσεις άλλων εφαρμογών δεν άλλαξαν.

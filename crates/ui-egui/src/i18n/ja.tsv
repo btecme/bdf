@@ -2371,6 +2371,9 @@ animation effects	Off	オフ
 	Windows integration	Windows との連携
 	Refresh Windows integration	Windows との連携を更新
 	Make BDF my default PDF app	BDF を既定の PDF アプリにする
+	Preferences ({key})	環境設定 ({key})
+	Make BDF the default PDF app	BDF を既定の PDF アプリにする
+	BDF is registered, but Windows Settings did not open: {why}	BDF を登録しましたが、Windows の設定を開けませんでした: {why}
 	Remove Windows integration	Windows との連携を解除
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF を登録しました。既定にするには、Windows の「既定のアプリ」で選んでください。
 	Windows integration removed. Other apps' settings were not touched.	Windows との連携を解除しました。ほかのアプリの設定には触れていません。

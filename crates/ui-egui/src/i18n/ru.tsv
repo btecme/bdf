@@ -2284,6 +2284,9 @@ animation effects	Off	Выкл
 	Windows integration	Интеграция с Windows
 	Refresh Windows integration	Обновить интеграцию с Windows
 	Make BDF my default PDF app	Сделать BDF моим приложением для PDF по умолчанию
+	Preferences ({key})	Настройки ({key})
+	Make BDF the default PDF app	Сделать BDF приложением для PDF по умолчанию
+	BDF is registered, but Windows Settings did not open: {why}	BDF зарегистрирован, но параметры Windows не открылись: {why}
 	Remove Windows integration	Удалить интеграцию с Windows
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF зарегистрирован. Выберите его в разделе «Приложения по умолчанию» Windows, чтобы сделать его основным.
 	Windows integration removed. Other apps' settings were not touched.	Интеграция с Windows удалена. Настройки других приложений не затронуты.

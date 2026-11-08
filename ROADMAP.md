@@ -570,3 +570,4 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-05 | major | Honest assessment and "Where we're lacking" added |
 
 - **2026-10-12 (M8):** Redaction cleans indirect and form structure references, preserving surviving form tags.
+- **2026-11-08 (BUILD-018):** Review round 2: R18-5 fixed (saving an unnamed document while an update closes BDF finishes the update and reopens the saved file), a Preferences gear in the toolbar, and a "Make BDF the default PDF app" link at the bottom right that stays until Windows itself reports BDF as the default; evidence in `docs/bdf-evidence/BUILD-018.md` section 9.

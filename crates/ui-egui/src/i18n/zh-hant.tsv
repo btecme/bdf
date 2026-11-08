@@ -2241,6 +2241,9 @@ animation effects	Off	關
 	Windows integration	Windows 整合
 	Refresh Windows integration	重新整理 Windows 整合
 	Make BDF my default PDF app	將 BDF 設為預設的 PDF 應用程式
+	Preferences ({key})	偏好設定 ({key})
+	Make BDF the default PDF app	將 BDF 設為預設的 PDF 應用程式
+	BDF is registered, but Windows Settings did not open: {why}	BDF 已註冊，但無法開啟 Windows 設定：{why}
 	Remove Windows integration	移除 Windows 整合
 	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF 已註冊。若要設為預設，請在 Windows 的「預設應用程式」中選擇它。
 	Windows integration removed. Other apps' settings were not touched.	已移除 Windows 整合。其他應用程式的設定未受影響。

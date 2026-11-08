@@ -330,6 +330,7 @@ fn app_creator<'a>(
             app.motion.source = Some(motion::source());
         }
         app.update_host = updates::host();
+        app.default_app_host = Some(pdfcraft_ui_egui::default_app::system_host());
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]
