@@ -851,6 +851,12 @@ impl PdfCraftApp {
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
     fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+        // For an update's quit, the file the document has now (after a Save, the one just written) is the one to reopen.
+        if req == CloseRequest::Quit
+            && let Some(id) = self.views.get(index).map(|v| v.id)
+        {
+            self.note_closing_for_update(id);
+        }
         self.close_tab(index);
         // A newer prompt wins: the user may have started another close while a save was pending.
         if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {

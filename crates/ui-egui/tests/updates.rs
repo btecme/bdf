@@ -228,6 +228,201 @@ fn documents_whose_unsaved_work_question_was_answered_are_still_reopened_after_t
     }
 }
 
+/// A document with no file of its own, edited, and sitting at the "Save changes to ...?" question of an update that has
+/// been asked to close BDF.
+fn unnamed_documents_at_the_save_question(fake: &Arc<Fake>, count: usize) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(Some(fake.clone()));
+    for n in 0..count {
+        h.state_mut().open_bytes(&format!("untitled-{n}.pdf"), None, pdf()).unwrap();
+    }
+    h.run_steps(4);
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    for id in ids {
+        h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "synthetic change".into() }).unwrap();
+    }
+    h.run_steps(2);
+    h.get_by_label("Update to BDF 9.9.9").click();
+    h.run_steps(3);
+    h.get_by_label("Close BDF and update").click();
+    h.run_steps(4);
+    h.get_by_label_contains("Save changes to");
+    h
+}
+
+fn wait_for_install(h: &mut Harness<'static, PdfCraftApp>, fake: &Fake) {
+    for _ in 0..120 {
+        h.run_steps(2);
+        if !fake.installs.lock().unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+struct Remove(PathBuf);
+impl Drop for Remove {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn scratch(tag: &str) -> (PathBuf, Remove) {
+    let out = std::env::temp_dir().join(format!("bdf-update-save-{tag}-{}.pdf", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    (out.clone(), Remove(out))
+}
+
+/// R18-5 (independent review, 2026-11-08). Save for a document that has no file asks where, and the answer arrives on a later
+/// frame; that gap was read as the person cancelling, so the update was dropped although the file was written.
+#[test]
+fn saving_an_unnamed_document_through_the_picker_carries_on_with_the_update_and_reopens_it() {
+    let (out, _guard) = scratch("picker");
+    let fake = Fake::new(status(true, true, true, true));
+    let mut h = unnamed_documents_at_the_save_question(&fake, 1);
+    h.state_mut().pick_override = Some(vec![out.to_string_lossy().into_owned()]);
+    h.get_by_label("Save").click();
+    wait_for_install(&mut h, &fake);
+    assert!(out.is_file(), "the newly named document was saved");
+    let installs = fake.installs.lock().unwrap().clone();
+    assert_eq!(installs.len(), 1, "the update proceeds after saving");
+    assert_eq!(installs[0], vec![out.clone()], "the file that was just saved is the one handed to the updater to reopen");
+    assert!(h.query_by_label_contains("Update postponed").is_none());
+}
+
+/// The same, where the destination is known at once: the update ran, but the reopen list had been taken before the document
+/// had a path.
+#[test]
+fn saving_an_unnamed_document_directly_hands_the_new_file_to_the_updater() {
+    let (out, _guard) = scratch("direct");
+    let fake = Fake::new(status(true, true, true, true));
+    let mut h = unnamed_documents_at_the_save_question(&fake, 1);
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.get_by_label("Save").click();
+    wait_for_install(&mut h, &fake);
+    assert!(out.is_file());
+    let installs = fake.installs.lock().unwrap().clone();
+    assert_eq!(installs.len(), 1);
+    assert_eq!(installs[0], vec![out.clone()]);
+}
+
+/// Several unnamed documents: each is asked about in turn, each one's own destination is remembered, and the updater starts
+/// once, after the last.
+#[test]
+fn several_unnamed_documents_are_each_saved_and_all_reopened() {
+    let (first, _g1) = scratch("multi-a");
+    let (second, _g2) = scratch("multi-b");
+    let fake = Fake::new(status(true, true, true, true));
+    let mut h = unnamed_documents_at_the_save_question(&fake, 2);
+    h.state_mut().pick_override = Some(vec![first.to_string_lossy().into_owned()]);
+    h.get_by_label("Save").click();
+    for _ in 0..120 {
+        h.run_steps(2);
+        if first.is_file() && h.query_by_label_contains("Save changes to").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(first.is_file(), "the first document was saved");
+    h.get_by_label_contains("Save changes to");
+    assert!(fake.installs.lock().unwrap().is_empty(), "the updater waits for the second question");
+    h.state_mut().pick_override = Some(vec![second.to_string_lossy().into_owned()]);
+    h.get_by_label("Save").click();
+    wait_for_install(&mut h, &fake);
+    assert!(second.is_file());
+    let installs = fake.installs.lock().unwrap().clone();
+    assert_eq!(installs.len(), 1, "the updater starts once");
+    let mut got = installs[0].clone();
+    got.sort();
+    let mut want = vec![first.clone(), second.clone()];
+    want.sort();
+    assert_eq!(got, want);
+}
+
+/// Cancelling the Save As dialog is a real cancellation: nothing is written, nothing closes, the update is withdrawn.
+#[test]
+fn cancelling_the_save_as_dialog_withdraws_the_update_and_keeps_the_document() {
+    let fake = Fake::new(status(true, true, true, true));
+    let mut h = unnamed_documents_at_the_save_question(&fake, 1);
+    h.state_mut().pick_override = Some(Vec::new());
+    h.get_by_label("Save").click();
+    h.run_steps(12);
+    assert!(fake.installs.lock().unwrap().is_empty(), "no update after a cancelled Save As");
+    assert_eq!(h.state().views.len(), 1, "the document is still open");
+    assert!(h.state().session.get(h.state().views[0].id).is_some_and(|d| d.dirty), "and still unsaved");
+    h.get_by_label_contains("Update postponed");
+}
+
+/// A Save As that fails (the folder is not there) is a cancellation too, and never counts as saved.
+#[test]
+fn a_failed_save_as_withdraws_the_update_and_keeps_the_document() {
+    let missing = std::env::temp_dir().join(format!("bdf-no-such-folder-{}", std::process::id())).join("x.pdf");
+    let fake = Fake::new(status(true, true, true, true));
+    let mut h = unnamed_documents_at_the_save_question(&fake, 1);
+    h.state_mut().pick_override = Some(vec![missing.to_string_lossy().into_owned()]);
+    h.get_by_label("Save").click();
+    h.run_steps(12);
+    assert!(fake.installs.lock().unwrap().is_empty());
+    assert_eq!(h.state().views.len(), 1);
+    assert!(!missing.exists());
+    h.get_by_label_contains("Update postponed");
+}
+
+/// A document that already has a file keeps it in the list when it is saved over: Save never goes to a new destination by
+/// itself, and the file reopened is the original.
+#[test]
+fn saving_a_named_document_still_reopens_its_own_file() {
+    let dir = std::env::temp_dir().join(format!("bdf-update-named-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("named.pdf");
+    std::fs::write(&file, pdf()).unwrap();
+    let fake = Fake::new(status(true, true, true, true));
+    let mut h = harness(Some(fake.clone()));
+    h.state_mut().open_bytes("named.pdf", Some(file.to_string_lossy().into_owned()), pdf()).unwrap();
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "changed".into() }).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Update to BDF 9.9.9").click();
+    h.run_steps(3);
+    h.get_by_label("Close BDF and update").click();
+    h.run_steps(4);
+    h.get_by_label_contains("Save changes to");
+    h.get_by_label("Save").click();
+    wait_for_install(&mut h, &fake);
+    assert_eq!(fake.installs.lock().unwrap().clone(), vec![vec![file.clone()]]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An existing document whose Save has to ask for a new destination (an email attachment's temporary copy): the new file is
+/// reopened, not the temporary path the install began with.
+#[test]
+fn a_mail_attachments_save_to_a_new_place_replaces_its_temporary_path() {
+    let root = std::env::temp_dir().join(format!("bdf-update-mail-{}", std::process::id()));
+    let mail_dir = root.join("INetCache").join("Content.Outlook").join("ABC123");
+    std::fs::create_dir_all(&mail_dir).unwrap();
+    let temp_copy = mail_dir.join("attachment.pdf");
+    std::fs::write(&temp_copy, pdf()).unwrap();
+    let (out, _guard) = scratch("mail");
+    let fake = Fake::new(status(true, true, true, true));
+    let mut h = harness(Some(fake.clone()));
+    h.state_mut().open_bytes("attachment.pdf", Some(temp_copy.to_string_lossy().into_owned()), pdf()).unwrap();
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "changed".into() }).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Update to BDF 9.9.9").click();
+    h.run_steps(3);
+    h.get_by_label("Close BDF and update").click();
+    h.run_steps(4);
+    h.get_by_label_contains("Save changes to");
+    h.state_mut().pick_override = Some(vec![out.to_string_lossy().into_owned()]);
+    h.get_by_label("Save").click();
+    wait_for_install(&mut h, &fake);
+    assert!(out.is_file(), "saved to the new place");
+    assert_eq!(fake.installs.lock().unwrap().clone(), vec![vec![out.clone()]], "the new file, not the temporary copy");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn later_leaves_everything_as_it_was() {
     let fake = Fake::new(status(true, true, true, true));

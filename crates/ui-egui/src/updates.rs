@@ -93,9 +93,10 @@ pub(crate) struct Updates {
     pub(crate) install_pending: bool,
     /// The close flow was started for the install; a cancelled close withdraws the install.
     quit_asked: bool,
-    /// The files to open again once the update is in: taken when the install begins, because answering the unsaved-work
-    /// questions (Save, Don't save) closes those documents before the updater starts.
-    reopen: Vec<PathBuf>,
+    /// The files to open again once the update is in, by document. Taken when the install begins, because answering the
+    /// unsaved-work questions (Save, Don't save) closes those documents before the updater starts; a document that is
+    /// closed that way is entered again with the path it has *then* (a new file the person just saved is the one to reopen).
+    reopen: Vec<(pdfcraft_engine::DocId, PathBuf)>,
 }
 
 impl Updates {
@@ -237,12 +238,24 @@ impl PdfCraftApp {
                 }
                 Job::Idle => {}
             }
-            // A close that was cancelled (the unsaved-work prompt's Cancel) withdraws the install.
-            if self.updates.install_pending && self.updates.quit_asked && self.close_request.is_none() && !self.allow_quit {
+            // A close that was cancelled (the unsaved-work prompt's Cancel, a cancelled or failed Save As) withdraws the
+            // install. While a Save As picker is still open, or its answer is waiting for the frame, the question is not
+            // answered yet: that is neither a cancellation nor a finished save.
+            if self.updates.install_pending
+                && self.updates.quit_asked
+                && self.close_request.is_none()
+                && !self.allow_quit
+                && !self.pickers.is_showing()
+            {
                 self.updates.install_pending = false;
                 self.updates.quit_asked = false;
                 self.updates.reopen.clear();
-                self.notify(tl!("Update postponed. Choose Update again when you are ready."));
+                let postponed = tl!("Update postponed. Choose Update again when you are ready.");
+                // A save that just failed has said why; keep that and add the outcome, don't replace it.
+                match self.toast.take() {
+                    Some((why, age)) if age < 0.5 => self.notify(format!("{why} {postponed}")),
+                    _ => self.notify(postponed),
+                }
             }
         }
     }
@@ -253,8 +266,23 @@ impl PdfCraftApp {
         self.updates.install_pending = true;
         self.updates.quit_asked = true;
         self.updates.open = false;
-        self.updates.reopen = self.views.iter().filter_map(|v| self.session.get(v.id)).filter_map(|d| d.path.clone().map(PathBuf::from)).collect();
+        self.updates.reopen =
+            self.views.iter().filter_map(|v| self.session.get(v.id).and_then(|d| d.path.clone()).map(|p| (v.id, PathBuf::from(p)))).collect();
         self.request_quit(&ctx);
+    }
+
+    /// Document `id` is being closed for the quit an update asked for: remember the file it has now, which after a Save
+    /// is the one just written (a document that had no file, or whose save went to a new place, is not in the list the
+    /// install began with, or is in it under its old path).
+    pub(crate) fn note_closing_for_update(&mut self, id: pdfcraft_engine::DocId) {
+        if !self.updates.install_pending {
+            return;
+        }
+        let Some(path) = self.session.get(id).and_then(|d| d.path.clone()).map(PathBuf::from) else { return };
+        match self.updates.reopen.iter_mut().find(|(d, _)| *d == id) {
+            Some(entry) => entry.1 = path,
+            None => self.updates.reopen.push((id, path)),
+        }
     }
 
     /// Called as BDF is really closing: hand the verified package to the updater. `false` keeps BDF open (the
@@ -267,7 +295,7 @@ impl PdfCraftApp {
         self.updates.quit_asked = false;
         let Some(host) = self.update_host.clone() else { return true };
         // The list taken when the install began; a file that is gone by now (moved, deleted) is not asked for.
-        let reopen: Vec<PathBuf> = std::mem::take(&mut self.updates.reopen).into_iter().filter(|p| p.is_file()).collect();
+        let reopen: Vec<PathBuf> = std::mem::take(&mut self.updates.reopen).into_iter().map(|(_, p)| p).filter(|p| p.is_file()).collect();
         match host.install(&reopen) {
             Ok(()) => true,
             Err(e) => {
@@ -548,39 +576,27 @@ pub(crate) fn preferences(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .color(t.text_muted),
         );
     }
-    if cfg!(windows) {
-        windows_preferences(app, ui, &t);
-    }
+    windows_preferences(app, ui, &t);
 }
 
+/// Windows integration: where it stands (the cached answer, see `default_app`) and the two actions. Shown wherever the
+/// desktop app supplies a host that reports Windows integration as supported, i.e. on Windows.
 #[cfg(not(target_arch = "wasm32"))]
 fn windows_preferences(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens) {
-    use pdfcraft_platform::windows_integration as win;
-    let Ok(exe) = std::env::current_exe() else { return };
-    let status = win::status(&exe);
+    let Some(status) = app.default_app.status().cloned() else { return };
     ui.add_space(4.0);
     ui.label(egui::RichText::new(tl!("Windows integration")).font(theme::semibold(13.0)));
     ui.label(egui::RichText::new(status.summary()).small().color(t.text_muted));
-    let mut result: Option<String> = None;
+    let (mut choose, mut remove) = (false, false);
     ui.horizontal_wrapped(|ui| {
         let label = if status.registered && !status.this_copy { tl!("Refresh Windows integration") } else { tl!("Make BDF my default PDF app") };
-        if widgets::pill_button(ui, label, true).clicked() {
-            result = Some(match win::register(&exe) {
-                Ok(_) => match win::open_default_apps() {
-                    Ok(()) => tl!("BDF is registered. Choose it in Windows' Default apps to make it the default.").to_string(),
-                    Err(_) => tl!("BDF is registered. Choose it in Windows' Default apps to make it the default.").to_string(),
-                },
-                Err(e) => e.to_string(),
-            });
-        }
-        if status.registered && widgets::pill_button(ui, tl!("Remove Windows integration"), false).clicked() {
-            result = Some(match win::unregister(&exe) {
-                Ok(_) => tl!("Windows integration removed. Other apps' settings were not touched.").to_string(),
-                Err(e) => e.to_string(),
-            });
-        }
+        choose = widgets::pill_button(ui, label, true).clicked();
+        remove = status.registered && widgets::pill_button(ui, tl!("Remove Windows integration"), false).clicked();
     });
-    if let Some(message) = result {
-        app.notify(message);
+    if choose {
+        app.make_default_pdf_app();
+    }
+    if remove {
+        app.remove_windows_integration();
     }
 }
