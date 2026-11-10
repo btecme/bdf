@@ -268,3 +268,145 @@ fn a_higher_resolution_asks_for_larger_page_images_and_low_asks_for_none_extra()
     settle(&mut h);
     assert_eq!(widest(&h), low, "back at Low the extra renders are released");
 }
+
+// ------------------------------------------------------- what Flatten must never lose (PR 18 review)
+
+/// A one-page form with a single field the way another program leaves it: filled in, with
+/// `/NeedAppearances` and no stored appearance.
+fn form_without_appearance(field: &str) -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /NeedAppearances true /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".to_string(),
+        format!("<< /Type /Annot /Subtype /Widget {field} /Rect [20 250 180 270] /P 3 0 R >>"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+    ])
+}
+
+fn page_text(app: &PdfCraftApp) -> String {
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+    let request = pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() };
+    renderer.render(request).text.map(|t| t.plain_text()).unwrap_or_default()
+}
+
+#[test]
+fn flatten_draws_a_filled_field_that_has_no_stored_appearance() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("form.pdf", None, form_without_appearance("/FT /Tx /T (name) /V (Ada Example)")).unwrap();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().form[0].value, ["Ada Example"]);
+    assert!(app.execute("doc.flatten"), "the value can be drawn, so it flattens");
+    assert_eq!(counts(&app), (0, 0), "the field is gone");
+    assert!(page_text(&app).contains("Ada Example"), "and its value is on the page: {:?}", page_text(&app));
+}
+
+#[test]
+fn flatten_stops_instead_of_deleting_a_value_it_cannot_draw() {
+    let mut app = PdfCraftApp::new();
+    // A ticked check box with no appearance: nothing to bake in.
+    app.open_bytes("ticked.pdf", None, form_without_appearance("/FT /Btn /T (agree) /V /Yes /AS /Yes")).unwrap();
+    let before = counts(&app);
+    app.execute("doc.flatten");
+    assert_eq!(counts(&app), before, "the field is still there");
+    assert!(!app.session.get(app.views[0].id).unwrap().dirty, "and nothing changed");
+    let said = app.toast.clone().map(|t| t.0).unwrap_or_default();
+    assert!(said.contains("agree") && said.contains("nothing was flattened"), "the person is told why: {said:?}");
+}
+
+#[test]
+fn flatten_still_removes_an_empty_field_and_an_unticked_box() {
+    for field in ["/FT /Tx /T (name)", "/FT /Btn /T (agree) /V /Off /AS /Off"] {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("empty.pdf", None, form_without_appearance(field)).unwrap();
+        assert!(app.execute("doc.flatten"), "{field}: nothing to lose");
+        assert_eq!(counts(&app), (0, 0), "{field}");
+    }
+}
+
+fn with_pending_redaction(app: &mut PdfCraftApp, bytes: Vec<u8>) {
+    use pdfcraft_engine::{NewAnnotation, Shape, Style};
+    app.open_bytes("marked.pdf", None, bytes).unwrap();
+    let shape =
+        Shape::Redact { quads: vec![pdfcraft_engine::rect_quad([20.0, 100.0, 100.0, 140.0])], overlay: String::new(), look: Default::default() };
+    assert!(app.apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: String::new()
+    })));
+}
+
+#[test]
+fn flatten_leaves_a_pending_redaction_to_be_applied() {
+    let mut app = PdfCraftApp::new();
+    with_pending_redaction(&mut app, plain(1));
+    let id = app.views[0].id;
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 1);
+    let spec = commands::command("doc.flatten").unwrap();
+    assert!(!commands::is_enabled(spec, &app.session, Some(id)), "a mark waiting to be applied is nothing to flatten");
+    app.execute("doc.flatten");
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 1, "the mark is still there to apply");
+}
+
+#[test]
+fn flatten_takes_the_comments_and_keeps_the_pending_redaction_beside_them() {
+    let mut app = PdfCraftApp::new();
+    with_pending_redaction(&mut app, with_comments());
+    let id = app.views[0].id;
+    assert!(app.execute("doc.flatten"));
+    let doc = app.session.get(id).unwrap();
+    assert_eq!(doc.redaction_marks(), 1);
+    assert_eq!(doc.info.annotations.len(), 1, "only the mark is left of the annotations");
+}
+
+// ----------------------------------------------------------- the toolbar at small window sizes
+
+/// Every control of the Organize toolbar that the tests can name, with where it is drawn.
+fn toolbar_controls(h: &Harness<'static, PdfCraftApp>) -> Vec<(&'static str, egui::Rect)> {
+    [
+        "Rotate counterclockwise",
+        "Rotate clockwise",
+        "Delete pages",
+        "Insert a blank page",
+        "Insert pages from a file",
+        "Replace pages",
+        "Extract pages",
+        "Split into files",
+        "Select pages",
+        "Move earlier",
+        "Move later",
+        "Save pages",
+        "Larger pages",
+        "Reset page size",
+        "Smaller pages",
+        "Preview resolution",
+    ]
+    .into_iter()
+    .filter_map(|label| h.query_by_label_contains(label).map(|n| (label, n.rect())))
+    .collect()
+}
+
+#[test]
+fn the_organize_toolbar_never_overlaps_at_small_window_sizes() {
+    let sizes = (16..=30).map(|k| (k as f32 * 50.0, 1.0)).chain([(900.0, 1.5), (820.0, 1.5), (820.0, 2.0)]);
+    for (width, scale) in sizes {
+        let mut h = Harness::builder().with_size(egui::vec2(width, 650.0)).with_pixels_per_point(scale).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("doc.pdf", None, plain(6)).unwrap();
+            app.set_option("organize", "on").unwrap();
+            app.set_option("organize-quality", "high").unwrap();
+            app
+        });
+        h.run_steps(6);
+        let controls = toolbar_controls(&h);
+        assert!(controls.len() >= 14, "{width}x650 at {scale}: found only {:?}", controls.iter().map(|c| c.0).collect::<Vec<_>>());
+        for (i, (a, ra)) in controls.iter().enumerate() {
+            assert!(ra.right() <= width + 0.5 && ra.left() >= -0.5, "{width}x650 at {scale}: {a} is drawn outside the window: {ra:?}");
+            for (b, rb) in &controls[i + 1..] {
+                assert!(!ra.shrink(1.0).intersects(rb.shrink(1.0)), "{width}x650 at {scale}: {a} {ra:?} overlaps {b} {rb:?}");
+            }
+        }
+    }
+}

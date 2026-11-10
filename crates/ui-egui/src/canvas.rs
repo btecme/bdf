@@ -4155,6 +4155,9 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     });
 }
 
+/// The width the organize toolbar needs to hold its page tools and its view controls in one row.
+const ORGANIZE_ONE_ROW: f32 = 1000.0;
+
 /// The organize toolbar: page operations on the selection (Acrobat's Organize Pages bar).
 fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
     egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(16, 4)).show(ui, |ui| {
@@ -4167,7 +4170,8 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
     let n = info.pages.len();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
     egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
-        ui.horizontal(|ui| {
+        // The page tools, then the view controls (page size, preview resolution, Save, Close).
+        let left = |ui: &mut egui::Ui, view: &mut DocView| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let label = match view.selected.len() {
                 0 => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(view.current + 1).to_string()), ("n", &n.to_string())]),
@@ -4235,53 +4239,63 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
                     view.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first + 1 });
                 }
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::ghost_button(ui, "x", tl!("Close")).on_hover_text(tl!("Back to the document")).clicked() {
-                    view.organize = false;
-                }
-                // What the grid shows is what is saved.
-                let save = ui.add_enabled_ui(dirty, |ui| widgets::pill_button(ui, tl!("Save pages"), true)).inner;
-                if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
-                    view.pending_action = Some(ViewAction::Save);
-                }
-                ui.add_space(8.0);
-                // Page size in the grid (right to left: in, the percentage, out).
-                let zoom = view.grid_zoom;
-                if ui
-                    .add_enabled_ui(zoom < *GRID_ZOOM_RANGE.end(), |ui| icons::button(ui, "zoom-in", 30.0, false, tl!("Larger pages")))
-                    .inner
-                    .clicked()
-                {
-                    view.grid_zoom_request = Some(zoom * GRID_ZOOM_STEP);
-                }
-                let percent = egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted))
-                    .frame(false);
-                let percent = ui.add_sized([44.0, 30.0], percent);
-                percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
-                if percent.on_hover_text(tl!("Reset page size")).clicked() {
-                    view.grid_zoom_request = Some(1.0);
-                }
-                if ui
-                    .add_enabled_ui(zoom > *GRID_ZOOM_RANGE.start(), |ui| icons::button(ui, "zoom-out", 30.0, false, tl!("Smaller pages")))
-                    .inner
-                    .clicked()
-                {
-                    view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
-                }
-                ui.add_space(8.0);
-                // Preview resolution (right to left: the slider, then its icon): Low, Medium, High.
-                let mut at = view.grid_quality.index();
-                let tip = crate::i18n::fmt(tl!("Preview resolution: {level}"), &[("level", &view.grid_quality.label())]);
-                let slider = ui.add_sized([56.0, 30.0], egui::Slider::new(&mut at, 0..=GridQuality::ALL.len() - 1).show_value(false).step_by(1.0));
-                slider.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, tip.clone()));
-                slider.on_hover_text(tip);
-                if at != view.grid_quality.index() {
-                    view.grid_quality = GridQuality::from_index(at);
-                    ui.ctx().request_repaint();
-                }
-                ui.add(icons::image("image", 14.0, t.text_muted));
+        };
+        let right = |ui: &mut egui::Ui, view: &mut DocView| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if widgets::ghost_button(ui, "x", tl!("Close")).on_hover_text(tl!("Back to the document")).clicked() {
+                view.organize = false;
+            }
+            // What the grid shows is what is saved.
+            let save = ui.add_enabled_ui(dirty, |ui| widgets::pill_button(ui, tl!("Save pages"), true)).inner;
+            if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
+                view.pending_action = Some(ViewAction::Save);
+            }
+            ui.add_space(8.0);
+            // Page size in the grid (right to left: in, the percentage, out).
+            let zoom = view.grid_zoom;
+            if ui.add_enabled_ui(zoom < *GRID_ZOOM_RANGE.end(), |ui| icons::button(ui, "zoom-in", 30.0, false, tl!("Larger pages"))).inner.clicked() {
+                view.grid_zoom_request = Some(zoom * GRID_ZOOM_STEP);
+            }
+            let percent =
+                egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted)).frame(false);
+            let percent = ui.add_sized([44.0, 30.0], percent);
+            percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
+            if percent.on_hover_text(tl!("Reset page size")).clicked() {
+                view.grid_zoom_request = Some(1.0);
+            }
+            if ui
+                .add_enabled_ui(zoom > *GRID_ZOOM_RANGE.start(), |ui| icons::button(ui, "zoom-out", 30.0, false, tl!("Smaller pages")))
+                .inner
+                .clicked()
+            {
+                view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
+            }
+            ui.add_space(8.0);
+            // Preview resolution (right to left: the slider, then its icon): Low, Medium, High.
+            let mut at = view.grid_quality.index();
+            let tip = crate::i18n::fmt(tl!("Preview resolution: {level}"), &[("level", &view.grid_quality.label())]);
+            let slider = ui.add_sized([56.0, 30.0], egui::Slider::new(&mut at, 0..=GridQuality::ALL.len() - 1).show_value(false).step_by(1.0));
+            slider.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, tip.clone()));
+            slider.on_hover_text(tip);
+            if at != view.grid_quality.index() {
+                view.grid_quality = GridQuality::from_index(at);
+                ui.ctx().request_repaint();
+            }
+            ui.add(icons::image("image", 14.0, t.text_muted));
+        };
+        if ui.available_width() >= ORGANIZE_ONE_ROW {
+            ui.horizontal(|ui| {
+                left(ui, view);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| right(ui, view));
             });
-        });
+        } else {
+            // Too narrow for both groups side by side (a small window, or the Tools pane open): the
+            // page tools wrap, and the view controls take a row of their own, so nothing is drawn
+            // over anything.
+            ui.horizontal_wrapped(|ui| left(ui, view));
+            ui.add_space(4.0);
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 30.0), egui::Layout::right_to_left(egui::Align::Center), |ui| right(ui, view));
+        }
     });
     // Keys act on the selection unless a text field or a dialog has them (Delete under
     // Preferences deleted the selected pages).

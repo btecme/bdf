@@ -394,7 +394,11 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks.contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
-        Flattenable => doc.is_some_and(|d| d.allows_modification() && (!d.info.annotations.is_empty() || !d.form.is_empty())),
+        // Links, pop-ups and pending redaction marks are left as they are: not something to flatten.
+        Flattenable => doc.is_some_and(|d| {
+            d.allows_modification()
+                && (!d.form.is_empty() || d.info.annotations.iter().any(|a| !matches!(a.subtype.as_str(), "Link" | "Popup" | "Redact")))
+        }),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),
         Security => doc.is_some_and(|d| d.allows_security_change() || d.can_unlock()),
         ProtectedSecurity => doc.is_some_and(|d| (d.allows_security_change() || d.can_unlock()) && d.security_summary().is_some()),
