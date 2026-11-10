@@ -159,6 +159,81 @@ pub fn parse_display_token(value: &str) -> Option<(PageLayout, bool)> {
     }
 }
 
+/// How sharp the Organize pages grid draws its previews. Low is the thumbnail the grid has always
+/// used: cheap on large documents, so it is the default. Medium and High also render the pages in
+/// view at two and three times the size they are drawn, within a byte limit for each page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GridQuality {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+
+impl GridQuality {
+    /// The slider's three positions, lowest first.
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+
+    /// How many times the drawn size a preview is rendered at.
+    pub fn multiplier(self) -> f32 {
+        match self {
+            Self::Low => 1.0,
+            Self::Medium => 2.0,
+            Self::High => 3.0,
+        }
+    }
+
+    /// The slider position, 0 to 2.
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|q| *q == self).unwrap_or(0)
+    }
+
+    /// The level at a slider position; anything past the end is the highest.
+    pub fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::High)
+    }
+
+    /// The name settings use: `low`, `medium` or `high`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    /// The level a settings [`name`](Self::name) says, in any case.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|q| q.name().eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// The level as the interface says it.
+    fn label(self) -> String {
+        match self {
+            Self::Low => tl!("Low"),
+            Self::Medium => tl!("Medium"),
+            Self::High => tl!("High"),
+        }
+        .to_string()
+    }
+}
+
+/// The widest an Organize preview is rendered for Medium or High, as bytes for one page. Many
+/// pages are in view at once, so each stays modest; Low is never capped.
+const GRID_PAGE_BYTES: f32 = 8.0 * 1024.0 * 1024.0;
+
+/// The device-pixel width to render an Organize preview at, for a page drawn `drawn` pixels wide
+/// (`page_w` by `page_h` points). Low is the size drawn. Higher levels multiply it, up to
+/// [`GRID_PAGE_BYTES`] for the page, and never go below the size drawn.
+fn grid_target_width(drawn: f32, page_w: f32, page_h: f32, quality: GridQuality) -> f32 {
+    if !drawn.is_finite() || drawn <= 0.0 || quality == GridQuality::Low {
+        return drawn;
+    }
+    let aspect = (page_h / page_w.max(1.0)).clamp(0.05, 20.0);
+    let cap = (GRID_PAGE_BYTES / (4.0 * aspect)).sqrt();
+    (drawn * quality.multiplier()).min(cap).max(drawn)
+}
+
 /// How a newly opened document is shown (Preferences ▸ Documents and view). A PDF that asks
 /// for its own layout or zoom gets that instead.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -173,12 +248,14 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session.
     pub highlight_fields: bool,
+    /// How sharp the Organize pages previews are; kept for the next document and session.
+    pub grid_quality: GridQuality,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
+        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false, grid_quality: GridQuality::Low }
     }
 }
 
@@ -451,6 +528,8 @@ pub struct DocView {
     pub grid_gap: Option<usize>,
     /// How large the page grid draws its pages (1.0 = the usual thumbnails).
     grid_zoom: f32,
+    /// The Organize preview level; mirrors `ViewDefaults::grid_quality` while the grid is drawn.
+    pub(crate) grid_quality: GridQuality,
     /// A zoom asked for this frame (toolbar, pinch, keys); the grid applies it once it has laid
     /// out, so it can keep the same pages in view.
     grid_zoom_request: Option<f32>,
@@ -650,6 +729,7 @@ impl DocView {
             insert_at: None,
             grid_gap: None,
             grid_zoom: 1.0,
+            grid_quality: defaults.grid_quality,
             grid_zoom_request: None,
             grid_anchor: None,
             grid_pages: HashMap::new(),
@@ -719,6 +799,7 @@ impl DocView {
         fresh.current = self.current;
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
+        fresh.grid_quality = self.grid_quality;
         // Same document id, so the scroll offset egui keeps for it is still this document's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
@@ -2097,7 +2178,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let unobstructed = !app.modal_open() && !app.palette_open;
     let view = &mut app.views[index];
     if view.organize {
+        // The level is one app-wide choice: the grid starts from it and hands a change back.
+        view.grid_quality = app.view_defaults.grid_quality;
         organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        app.view_defaults.grid_quality = view.grid_quality;
         return;
     }
 
@@ -4184,6 +4268,18 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
                 {
                     view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
                 }
+                ui.add_space(8.0);
+                // Preview resolution (right to left: the slider, then its icon): Low, Medium, High.
+                let mut at = view.grid_quality.index();
+                let tip = crate::i18n::fmt(tl!("Preview resolution: {level}"), &[("level", &view.grid_quality.label())]);
+                let slider = ui.add_sized([56.0, 30.0], egui::Slider::new(&mut at, 0..=GridQuality::ALL.len() - 1).show_value(false).step_by(1.0));
+                slider.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, tip.clone()));
+                slider.on_hover_text(tip);
+                if at != view.grid_quality.index() {
+                    view.grid_quality = GridQuality::from_index(at);
+                    ui.ctx().request_repaint();
+                }
+                ui.add(icons::image("image", 14.0, t.text_muted));
             });
         });
     });
@@ -4317,7 +4413,8 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                 ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
                 // A page drawn larger than its thumbnail gets a render at the size drawn, while
                 // it is in view; until that arrives the thumbnail stands in.
-                let want = size.x * ppp;
+                // Medium and High render the preview larger than it is drawn; Low is the size drawn.
+                let want = grid_target_width(size.x * ppp, p.width, p.height, view.grid_quality);
                 let thumb = view.thumbs.get(&i).map(|t| &t.tex);
                 let thumb_ok = thumb.is_some_and(|t| t.size()[0] as f32 >= want * GRID_SHARP.start());
                 let sharp = view.grid_pages.get(&i).filter(|_| !thumb_ok);

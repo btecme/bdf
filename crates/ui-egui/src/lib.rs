@@ -1320,10 +1320,17 @@ impl PdfCraftApp {
         // Read mode opens with the panes closed; the rail still opens them (#932). A right panel
         // the user closed stays closed (#1590).
         let opening_mode = self.mode_override.unwrap_or(self.default_mode);
-        if activate && self.right.is_none() && !self.right_panel_closed && opening_mode != Mode::Read {
-            self.right = if !doc.info.annotations.is_empty() {
+        // Comments are meant to be read, so a document that has some opens on them even after the
+        // person closed another side panel; only closing the Comments panel itself keeps them away.
+        let has_comments = !doc.info.annotations.is_empty();
+        if activate
+            && self.right.is_none()
+            && opening_mode != Mode::Read
+            && (!self.right_panel_closed || (has_comments && !self.comments_panel_closed))
+        {
+            self.right = if has_comments && !self.comments_panel_closed {
                 Some(RightPanel::Comments)
-            } else if !doc.info.outline.is_empty() {
+            } else if !doc.info.outline.is_empty() && !self.right_panel_closed {
                 Some(RightPanel::Bookmarks)
             } else {
                 None
@@ -2192,6 +2199,7 @@ impl PdfCraftApp {
         // Beside the object above, which is at the macro's recursion limit.
         if let Some(object) = state.as_object_mut() {
             object.insert("auto_update_check".into(), serde_json::Value::Bool(self.auto_update_check));
+            object.insert("organize_quality".into(), self.view_defaults.grid_quality.name().into());
         }
         state.to_string()
     }
@@ -2252,6 +2260,9 @@ impl PdfCraftApp {
         }
         if let Ok(units) = serde_json::from_value::<units::Unit>(v["units"].clone()) {
             self.units = units;
+        }
+        if let Some(q) = v["organize_quality"].as_str().and_then(canvas::GridQuality::from_name) {
+            self.view_defaults.grid_quality = q;
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
@@ -2602,6 +2613,9 @@ impl PdfCraftApp {
                     "false" => false,
                     _ => return Err("system-title-bar must be true or false".into()),
                 };
+            }
+            ("organize-quality", _) => {
+                self.view_defaults.grid_quality = canvas::GridQuality::from_name(value).ok_or("organize-quality must be low, medium or high")?;
             }
             ("flatten-fill-sign", _) => {
                 self.flatten_fill_sign_on_save = match value {

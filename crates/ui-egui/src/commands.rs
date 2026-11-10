@@ -112,6 +112,7 @@ impl PdfCraftApp {
                 commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
                 commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
                 commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
+                commands::Needs::Flattenable if self.active.is_some() => tl!("This document has no comments or form fields to flatten").to_string(),
                 commands::Needs::HasRedactions if self.active.is_some() => {
                     tl!("There are no redaction marks (mark text, areas or pages first)").to_string()
                 }
@@ -294,6 +295,13 @@ impl PdfCraftApp {
             "form.fields" => self.choose_right_panel(Some(RightPanel::Fields)),
             "comment.flatten" => {
                 self.apply_edit(Edit::Flatten { comments: true, fields: false });
+            }
+            "doc.flatten" => {
+                // Flatten what's typed in a field too, as Flatten form fields does; a refused value
+                // flattens nothing.
+                if self.commit_form_typing() {
+                    self.apply_edit(Edit::Flatten { comments: true, fields: true });
+                }
             }
             "form.flatten" => {
                 // Flatten what's typed in a field too (#166); a refused value flattens nothing.

@@ -32,6 +32,8 @@ pub enum Needs {
     HasComments,
     /// The document has form fields and allows changes.
     HasFields,
+    /// The document has comments or form fields to flatten and allows changes.
+    Flattenable,
     /// The document has redaction marks and allows changes.
     HasRedactions,
     /// The document has page marks of this kind and allows changes.
@@ -315,6 +317,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("export.html", "Export to HTML…", FILE, None, Copying, "file-symlink"),
     c("export.rtf", "Export to RTF…", FILE, None, Copying, "file-text"),
     c("app.preferences", "Preferences…", EDIT, Some(Shortcut::cmd(",")), Nothing, "settings"),
+    // The one-click flatten at the foot of Edit: every comment, Fill & Sign mark and form field
+    // becomes page content (Edit::Flatten with both). Flatten comments / form fields do one kind.
+    c("doc.flatten", "Flatten", EDIT, None, Flattenable, "layers"),
     c("tools.js_console", "JavaScript console…", None, Some(Shortcut::cmd("J")), Document, "square-terminal"),
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
@@ -389,6 +394,7 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks.contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
+        Flattenable => doc.is_some_and(|d| d.allows_modification() && (!d.info.annotations.is_empty() || !d.form.is_empty())),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),
         Security => doc.is_some_and(|d| d.allows_security_change() || d.can_unlock()),
         ProtectedSecurity => doc.is_some_and(|d| (d.allows_security_change() || d.can_unlock()) && d.security_summary().is_some()),

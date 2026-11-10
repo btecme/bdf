@@ -335,6 +335,7 @@ pub static COMMANDS: &[CommandCap] = &[
     CommandCap { id: "create.multiple", verdict: Verdict::Deferred, requirement: "", why: "Creating PDFs from other files is outside the v1 list." },
     CommandCap { id: "create.multiple_separate", verdict: Verdict::Deferred, requirement: "", why: "Creating PDFs from other files is outside the v1 list." },
     CommandCap { id: "doc.compare", verdict: Verdict::Deferred, requirement: "", why: "Comparison is deferred from v1." },
+    CommandCap { id: "doc.flatten", verdict: Verdict::Deferred, requirement: "", why: "Page assembly beyond the v1 operations, and page marks, are deferred." },
     CommandCap { id: "edit.advanced_search", verdict: Verdict::Deferred, requirement: "", why: "Editing existing content and page marks is deferred from v1." },
     CommandCap { id: "edit.attach", verdict: Verdict::Deferred, requirement: "", why: "Editing existing content and page marks is deferred from v1." },
     CommandCap { id: "edit.background", verdict: Verdict::Deferred, requirement: "", why: "Editing existing content and page marks is deferred from v1." },

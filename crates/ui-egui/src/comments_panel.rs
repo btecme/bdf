@@ -313,15 +313,12 @@ fn card(
                     });
                 } else {
                     let body = a.contents.as_deref().unwrap_or("");
+                    // Every comment is shown in full, selected or not: the list is for reading them.
                     if body.is_empty() {
                         let text = egui::RichText::new(tl!(kind_label(a))).italics().color(t.text_faint).font(theme::regular(13.0));
-                        let mut label = egui::Label::new(text).wrap();
-                        if !selected {
-                            label = label.truncate();
-                        }
-                        ui.add(label);
+                        ui.add(egui::Label::new(text).wrap());
                     } else {
-                        widgets::wrapped_text(ui, body, theme::regular(13.0), t.text, !selected);
+                        widgets::wrapped_text(ui, body, theme::regular(13.0), t.text, false);
                     }
                 }
                 if let Some((icon, label, c)) = status.and_then(status_badge) {

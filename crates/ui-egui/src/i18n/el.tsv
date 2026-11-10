@@ -2390,3 +2390,5 @@ animation effects	Off	Ανενεργά
 	Test offer from a development feed. This is not a BDF release.	Δοκιμαστική προσφορά από ροή ανάπτυξης. Δεν είναι έκδοση του BDF.
 	This development build has no update feed configured, so there is nothing to check.	Αυτή η έκδοση ανάπτυξης δεν έχει ρυθμισμένη ροή ενημερώσεων, επομένως δεν υπάρχει τίποτα προς έλεγχο.
 	BDF has not checked for updates yet.	Το BDF δεν έχει ελέγξει ακόμη για ενημερώσεις.
+	This document has no comments or form fields to flatten	Το έγγραφο δεν έχει σχόλια ή πεδία φόρμας για ενσωμάτωση
+	Preview resolution: {level}	Ανάλυση προεπισκόπησης: {level}

@@ -2628,3 +2628,5 @@ key	Space	Tarpas
 	Test offer from a development feed. This is not a BDF release.	Bandomasis pasiūlymas iš kūrimo kanalo. Tai nėra BDF leidimas.
 	This development build has no update feed configured, so there is nothing to check.	Šioje kūrimo versijoje nenustatytas atnaujinimų kanalas, todėl nėra ką tikrinti.
 	BDF has not checked for updates yet.	BDF dar netikrino atnaujinimų.
+	This document has no comments or form fields to flatten	Šiame dokumente nėra suplokštinamų komentarų ar formos laukų
+	Preview resolution: {level}	Peržiūros skiriamoji geba: {level}

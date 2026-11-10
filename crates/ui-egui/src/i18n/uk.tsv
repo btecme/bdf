@@ -2406,3 +2406,5 @@ animation effects	Off	Вимкнено
 	Test offer from a development feed. This is not a BDF release.	Тестова пропозиція зі стрічки розробника. Це не випуск BDF.
 	This development build has no update feed configured, so there is nothing to check.	У цій збірці для розробки не налаштовано стрічку оновлень, тож перевіряти нічого.
 	BDF has not checked for updates yet.	BDF ще не перевіряв наявність оновлень.
+	This document has no comments or form fields to flatten	Цей документ не має коментарів чи полів форми для зведення
+	Preview resolution: {level}	Роздільна здатність попереднього перегляду: {level}

@@ -2360,3 +2360,5 @@ animation effects	Off	Wyłączone
 	Test offer from a development feed. This is not a BDF release.	Oferta testowa z kanału deweloperskiego. To nie jest wydanie BDF.
 	This development build has no update feed configured, so there is nothing to check.	Ta wersja deweloperska nie ma skonfigurowanego kanału aktualizacji, więc nie ma czego sprawdzać.
 	BDF has not checked for updates yet.	BDF jeszcze nie sprawdzał aktualizacji.
+	This document has no comments or form fields to flatten	Ten dokument nie ma komentarzy ani pól formularza do spłaszczenia
+	Preview resolution: {level}	Rozdzielczość podglądu: {level}
