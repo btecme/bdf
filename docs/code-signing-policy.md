@@ -1,6 +1,6 @@
 # BDF code signing policy
 
-Status: DRAFT for the SignPath Foundation application. Items in [square brackets] are for the owner to fill in before this is published. Revision history at the end.
+Status: in force from 2026-11-11, written for the SignPath Foundation application. Revision history at the end.
 
 Free code signing for BDF is provided by [SignPath.io](https://signpath.io), and the certificate is issued by the
 [SignPath Foundation](https://signpath.org).
@@ -29,10 +29,10 @@ Nothing else is signed. In particular, no third-party binary and no file that is
 | Role | Who | What they may do |
 |---|---|---|
 | Authors | Anyone who contributes through a pull request | Propose changes. They cannot merge or request signing. |
-| Committers and reviewers | [btecme] | Review and merge pull requests into `main`. [Confirm that `main` is protected so it accepts changes only through a pull request, then keep this sentence.] |
-| Approvers | [b-tec btecme] | Approve a signing request for a release. |
+| Committers and reviewers | b-tec (GitHub: [btecme](https://github.com/btecme)) | Review and merge pull requests into `main`. By project rule, changes reach `main` through pull requests that pass the project's CI. |
+| Approvers | b-tec (GitHub: [btecme](https://github.com/btecme)) | Approve a signing request for a release. |
 
-An approver checks that the request is for a tagged release built from `main`, that the workflow run is the public one for that commit, and that the files are the expected programs. [Confirm before publishing:] each approver uses multi-factor authentication on GitHub and on SignPath.
+An approver checks that the request is for a tagged release built from `main`, that the workflow run is the public one for that commit, and that the files are the expected programs.
 
 ## Privacy policy
 
@@ -45,7 +45,7 @@ BDF installs and updates for the current Windows account only and needs no admin
 ## Reporting a problem
 
 If you believe a signed BDF file is malicious or was signed by mistake, report it at
-<https://github.com/btecme/bdf/issues> or by email to [security contact]. Signed files that turn out to be wrong are reported to SignPath and revoked.
+<https://github.com/btecme/bdf/issues> or by email to <hello@b-tec.org>. Signed files that turn out to be wrong are reported to SignPath and revoked.
 
 ## Relationship to the update signature
 
@@ -55,4 +55,4 @@ signature lets BDF check what it installs. Neither replaces the other.
 
 ## Revision history
 
-* [11-11-2026]: first draft for the SignPath Foundation application.
+* 2026-11-11: first version, for the SignPath Foundation application.
