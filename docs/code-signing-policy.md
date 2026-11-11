@@ -1,7 +1,6 @@
 # BDF code signing policy
 
-Status: DRAFT for the SignPath Foundation application. Items in [square brackets] are for the owner to fill in before this is
-published. Revision history at the end.
+Status: DRAFT for the SignPath Foundation application. Items in [square brackets] are for the owner to fill in before this is published. Revision history at the end.
 
 Free code signing for BDF is provided by [SignPath.io](https://signpath.io), and the certificate is issued by the
 [SignPath Foundation](https://signpath.org).
@@ -30,8 +29,8 @@ Nothing else is signed. In particular, no third-party binary and no file that is
 | Role | Who | What they may do |
 |---|---|---|
 | Authors | Anyone who contributes through a pull request | Propose changes. They cannot merge or request signing. |
-| Committers and reviewers | [list GitHub accounts of the maintainers] | Review and merge pull requests into `main`. [Confirm that `main` is protected so it accepts changes only through a pull request, then keep this sentence.] |
-| Approvers | [name and GitHub account of each approver] | Approve a signing request for a release. |
+| Committers and reviewers | [btecme] | Review and merge pull requests into `main`. [Confirm that `main` is protected so it accepts changes only through a pull request, then keep this sentence.] |
+| Approvers | [b-tec btecme] | Approve a signing request for a release. |
 
 An approver checks that the request is for a tagged release built from `main`, that the workflow run is the public one for that commit, and that the files are the expected programs. [Confirm before publishing:] each approver uses multi-factor authentication on GitHub and on SignPath.
 
