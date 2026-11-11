@@ -323,6 +323,29 @@ fn flatten_still_removes_an_empty_field_and_an_unticked_box() {
     }
 }
 
+#[test]
+fn flatten_keeps_the_stored_appearance_of_a_field_whose_other_widget_has_none() {
+    // One field, value 42, shown twice: the first widget stores "USD 42.00", the second stores nothing.
+    let ap = "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /Font << /Helv 7 0 R >> >> /Length 39 >>\nstream\nBT /Helv 12 Tf 2 5 Td (USD 42.00) Tj ET\nendstream";
+    let bytes = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /NeedAppearances true /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".to_string(),
+        "<< /FT /Tx /T (amount) /V (42) /Kids [5 0 R 6 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 250 180 270] /P 3 0 R /AP << /N 8 0 R >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 200 180 220] /P 3 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        ap.to_string(),
+    ]);
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("mixed.pdf", None, bytes).unwrap();
+    assert!(app.execute("doc.flatten"), "both copies can be shown");
+    assert_eq!(counts(&app), (0, 0), "the field is gone");
+    let text = page_text(&app);
+    assert!(text.contains("USD 42.00"), "the stored appearance is kept as it was: {text:?}");
+    assert!(text.matches("42").count() >= 2, "and the widget with none is drawn from the value: {text:?}");
+}
+
 fn with_pending_redaction(app: &mut PdfCraftApp, bytes: Vec<u8>) {
     use pdfcraft_engine::{NewAnnotation, Shape, Style};
     app.open_bytes("marked.pdf", None, bytes).unwrap();

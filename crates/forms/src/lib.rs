@@ -1184,15 +1184,17 @@ fn has_normal_appearance(doc: &Document, widget: ObjRef) -> bool {
 /// Draw the appearance of every text or choice field that holds a value but has a widget with none
 /// stored: what a form filled in by another program, with `/NeedAppearances`, leaves for the viewer
 /// to draw. Flattening needs it, or the value would vanish with the widget. Returns how many fields
-/// were drawn.
+/// were drawn. Only the widgets with none are drawn: one that already has an appearance keeps it
+/// (it may show the value formatted, `USD 42.00` for `42`), as it is part of how the page looks.
 pub fn draw_missing_appearances(doc: &mut Document) -> Result<usize, FormError> {
     let todo: Vec<Field> = fields(doc)
         .into_iter()
-        .filter(|f| {
-            matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List)
-                && f.value.iter().any(|v| !v.is_empty())
-                && f.widgets.iter().any(|w| !has_normal_appearance(doc, w.obj))
+        .filter(|f| matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) && f.value.iter().any(|v| !v.is_empty()))
+        .map(|mut f| {
+            f.widgets.retain(|w| !has_normal_appearance(doc, w.obj));
+            f
         })
+        .filter(|f| !f.widgets.is_empty())
         .collect();
     for f in &todo {
         redraw(doc, f, &f.value, &mut NoScripts)?;
