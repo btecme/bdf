@@ -1175,6 +1175,33 @@ pub fn undrawn_fields(doc: &Document) -> Vec<(String, char)> {
         .collect()
 }
 
+/// Whether a widget stores a normal appearance (`/AP /N`).
+fn has_normal_appearance(doc: &Document, widget: ObjRef) -> bool {
+    let Some(d) = doc.get(widget).as_dict().cloned() else { return false };
+    d.get(b"AP").map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().map(|ap| ap.contains(b"N"))).unwrap_or(false)
+}
+
+/// Draw the appearance of every text or choice field that holds a value but has a widget with none
+/// stored: what a form filled in by another program, with `/NeedAppearances`, leaves for the viewer
+/// to draw. Flattening needs it, or the value would vanish with the widget. Returns how many fields
+/// were drawn. Only the widgets with none are drawn: one that already has an appearance keeps it
+/// (it may show the value formatted, `USD 42.00` for `42`), as it is part of how the page looks.
+pub fn draw_missing_appearances(doc: &mut Document) -> Result<usize, FormError> {
+    let todo: Vec<Field> = fields(doc)
+        .into_iter()
+        .filter(|f| matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) && f.value.iter().any(|v| !v.is_empty()))
+        .map(|mut f| {
+            f.widgets.retain(|w| !has_normal_appearance(doc, w.obj));
+            f
+        })
+        .filter(|f| !f.widgets.is_empty())
+        .collect();
+    for f in &todo {
+        redraw(doc, f, &f.value, &mut NoScripts)?;
+    }
+    Ok(todo.len())
+}
+
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
     let all = fields(doc);

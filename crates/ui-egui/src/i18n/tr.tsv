@@ -2380,3 +2380,5 @@ animation effects	Off	Kapalı
 	Test offer from a development feed. This is not a BDF release.	Bir geliştirme akışından gelen test teklifi. Bu bir BDF sürümü değildir.
 	This development build has no update feed configured, so there is nothing to check.	Bu geliştirme sürümünde yapılandırılmış bir güncelleme akışı yok, bu yüzden denetlenecek bir şey yok.
 	BDF has not checked for updates yet.	BDF henüz güncellemeleri denetlemedi.
+	This document has no comments or form fields to flatten	Bu belgede düzleştirilecek yorum veya form alanı yok
+	Preview resolution: {level}	Önizleme çözünürlüğü: {level}

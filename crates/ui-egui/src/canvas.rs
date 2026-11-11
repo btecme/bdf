@@ -159,6 +159,81 @@ pub fn parse_display_token(value: &str) -> Option<(PageLayout, bool)> {
     }
 }
 
+/// How sharp the Organize pages grid draws its previews. Low is the thumbnail the grid has always
+/// used: cheap on large documents, so it is the default. Medium and High also render the pages in
+/// view at two and three times the size they are drawn, within a byte limit for each page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GridQuality {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+
+impl GridQuality {
+    /// The slider's three positions, lowest first.
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+
+    /// How many times the drawn size a preview is rendered at.
+    pub fn multiplier(self) -> f32 {
+        match self {
+            Self::Low => 1.0,
+            Self::Medium => 2.0,
+            Self::High => 3.0,
+        }
+    }
+
+    /// The slider position, 0 to 2.
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|q| *q == self).unwrap_or(0)
+    }
+
+    /// The level at a slider position; anything past the end is the highest.
+    pub fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::High)
+    }
+
+    /// The name settings use: `low`, `medium` or `high`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    /// The level a settings [`name`](Self::name) says, in any case.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|q| q.name().eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// The level as the interface says it.
+    fn label(self) -> String {
+        match self {
+            Self::Low => tl!("Low"),
+            Self::Medium => tl!("Medium"),
+            Self::High => tl!("High"),
+        }
+        .to_string()
+    }
+}
+
+/// The widest an Organize preview is rendered for Medium or High, as bytes for one page. Many
+/// pages are in view at once, so each stays modest; Low is never capped.
+const GRID_PAGE_BYTES: f32 = 8.0 * 1024.0 * 1024.0;
+
+/// The device-pixel width to render an Organize preview at, for a page drawn `drawn` pixels wide
+/// (`page_w` by `page_h` points). Low is the size drawn. Higher levels multiply it, up to
+/// [`GRID_PAGE_BYTES`] for the page, and never go below the size drawn.
+fn grid_target_width(drawn: f32, page_w: f32, page_h: f32, quality: GridQuality) -> f32 {
+    if !drawn.is_finite() || drawn <= 0.0 || quality == GridQuality::Low {
+        return drawn;
+    }
+    let aspect = (page_h / page_w.max(1.0)).clamp(0.05, 20.0);
+    let cap = (GRID_PAGE_BYTES / (4.0 * aspect)).sqrt();
+    (drawn * quality.multiplier()).min(cap).max(drawn)
+}
+
 /// How a newly opened document is shown (Preferences ▸ Documents and view). A PDF that asks
 /// for its own layout or zoom gets that instead.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -173,12 +248,14 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session.
     pub highlight_fields: bool,
+    /// How sharp the Organize pages previews are; kept for the next document and session.
+    pub grid_quality: GridQuality,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
+        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false, grid_quality: GridQuality::Low }
     }
 }
 
@@ -451,6 +528,8 @@ pub struct DocView {
     pub grid_gap: Option<usize>,
     /// How large the page grid draws its pages (1.0 = the usual thumbnails).
     grid_zoom: f32,
+    /// The Organize preview level; mirrors `ViewDefaults::grid_quality` while the grid is drawn.
+    pub(crate) grid_quality: GridQuality,
     /// A zoom asked for this frame (toolbar, pinch, keys); the grid applies it once it has laid
     /// out, so it can keep the same pages in view.
     grid_zoom_request: Option<f32>,
@@ -650,6 +729,7 @@ impl DocView {
             insert_at: None,
             grid_gap: None,
             grid_zoom: 1.0,
+            grid_quality: defaults.grid_quality,
             grid_zoom_request: None,
             grid_anchor: None,
             grid_pages: HashMap::new(),
@@ -719,6 +799,7 @@ impl DocView {
         fresh.current = self.current;
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
+        fresh.grid_quality = self.grid_quality;
         // Same document id, so the scroll offset egui keeps for it is still this document's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
@@ -2097,7 +2178,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let unobstructed = !app.modal_open() && !app.palette_open;
     let view = &mut app.views[index];
     if view.organize {
+        // The level is one app-wide choice: the grid starts from it and hands a change back.
+        view.grid_quality = app.view_defaults.grid_quality;
         organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        app.view_defaults.grid_quality = view.grid_quality;
         return;
     }
 
@@ -4071,6 +4155,9 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     });
 }
 
+/// The width the organize toolbar needs to hold its page tools and its view controls in one row.
+const ORGANIZE_ONE_ROW: f32 = 1000.0;
+
 /// The organize toolbar: page operations on the selection (Acrobat's Organize Pages bar).
 fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
     egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(16, 4)).show(ui, |ui| {
@@ -4083,7 +4170,8 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
     let n = info.pages.len();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
     egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
-        ui.horizontal(|ui| {
+        // The page tools, then the view controls (page size, preview resolution, Save, Close).
+        let left = |ui: &mut egui::Ui, view: &mut DocView| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let label = match view.selected.len() {
                 0 => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(view.current + 1).to_string()), ("n", &n.to_string())]),
@@ -4151,41 +4239,63 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
                     view.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first + 1 });
                 }
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::ghost_button(ui, "x", tl!("Close")).on_hover_text(tl!("Back to the document")).clicked() {
-                    view.organize = false;
-                }
-                // What the grid shows is what is saved.
-                let save = ui.add_enabled_ui(dirty, |ui| widgets::pill_button(ui, tl!("Save pages"), true)).inner;
-                if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
-                    view.pending_action = Some(ViewAction::Save);
-                }
-                ui.add_space(8.0);
-                // Page size in the grid (right to left: in, the percentage, out).
-                let zoom = view.grid_zoom;
-                if ui
-                    .add_enabled_ui(zoom < *GRID_ZOOM_RANGE.end(), |ui| icons::button(ui, "zoom-in", 30.0, false, tl!("Larger pages")))
-                    .inner
-                    .clicked()
-                {
-                    view.grid_zoom_request = Some(zoom * GRID_ZOOM_STEP);
-                }
-                let percent = egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted))
-                    .frame(false);
-                let percent = ui.add_sized([44.0, 30.0], percent);
-                percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
-                if percent.on_hover_text(tl!("Reset page size")).clicked() {
-                    view.grid_zoom_request = Some(1.0);
-                }
-                if ui
-                    .add_enabled_ui(zoom > *GRID_ZOOM_RANGE.start(), |ui| icons::button(ui, "zoom-out", 30.0, false, tl!("Smaller pages")))
-                    .inner
-                    .clicked()
-                {
-                    view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
-                }
+        };
+        let right = |ui: &mut egui::Ui, view: &mut DocView| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if widgets::ghost_button(ui, "x", tl!("Close")).on_hover_text(tl!("Back to the document")).clicked() {
+                view.organize = false;
+            }
+            // What the grid shows is what is saved.
+            let save = ui.add_enabled_ui(dirty, |ui| widgets::pill_button(ui, tl!("Save pages"), true)).inner;
+            if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
+                view.pending_action = Some(ViewAction::Save);
+            }
+            ui.add_space(8.0);
+            // Page size in the grid (right to left: in, the percentage, out).
+            let zoom = view.grid_zoom;
+            if ui.add_enabled_ui(zoom < *GRID_ZOOM_RANGE.end(), |ui| icons::button(ui, "zoom-in", 30.0, false, tl!("Larger pages"))).inner.clicked() {
+                view.grid_zoom_request = Some(zoom * GRID_ZOOM_STEP);
+            }
+            let percent =
+                egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted)).frame(false);
+            let percent = ui.add_sized([44.0, 30.0], percent);
+            percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
+            if percent.on_hover_text(tl!("Reset page size")).clicked() {
+                view.grid_zoom_request = Some(1.0);
+            }
+            if ui
+                .add_enabled_ui(zoom > *GRID_ZOOM_RANGE.start(), |ui| icons::button(ui, "zoom-out", 30.0, false, tl!("Smaller pages")))
+                .inner
+                .clicked()
+            {
+                view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
+            }
+            ui.add_space(8.0);
+            // Preview resolution (right to left: the slider, then its icon): Low, Medium, High.
+            let mut at = view.grid_quality.index();
+            let tip = crate::i18n::fmt(tl!("Preview resolution: {level}"), &[("level", &view.grid_quality.label())]);
+            let slider = ui.add_sized([56.0, 30.0], egui::Slider::new(&mut at, 0..=GridQuality::ALL.len() - 1).show_value(false).step_by(1.0));
+            slider.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, tip.clone()));
+            slider.on_hover_text(tip);
+            if at != view.grid_quality.index() {
+                view.grid_quality = GridQuality::from_index(at);
+                ui.ctx().request_repaint();
+            }
+            ui.add(icons::image("image", 14.0, t.text_muted));
+        };
+        if ui.available_width() >= ORGANIZE_ONE_ROW {
+            ui.horizontal(|ui| {
+                left(ui, view);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| right(ui, view));
             });
-        });
+        } else {
+            // Too narrow for both groups side by side (a small window, or the Tools pane open): the
+            // page tools wrap, and the view controls take a row of their own, so nothing is drawn
+            // over anything.
+            ui.horizontal_wrapped(|ui| left(ui, view));
+            ui.add_space(4.0);
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 30.0), egui::Layout::right_to_left(egui::Align::Center), |ui| right(ui, view));
+        }
     });
     // Keys act on the selection unless a text field or a dialog has them (Delete under
     // Preferences deleted the selected pages).
@@ -4317,7 +4427,8 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                 ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
                 // A page drawn larger than its thumbnail gets a render at the size drawn, while
                 // it is in view; until that arrives the thumbnail stands in.
-                let want = size.x * ppp;
+                // Medium and High render the preview larger than it is drawn; Low is the size drawn.
+                let want = grid_target_width(size.x * ppp, p.width, p.height, view.grid_quality);
                 let thumb = view.thumbs.get(&i).map(|t| &t.tex);
                 let thumb_ok = thumb.is_some_and(|t| t.size()[0] as f32 >= want * GRID_SHARP.start());
                 let sharp = view.grid_pages.get(&i).filter(|_| !thumb_ok);

@@ -2510,3 +2510,5 @@ animation effects	Off	Desactivados
 	Test offer from a development feed. This is not a BDF release.	Oferta de prueba de un canal de desarrollo. No es una versión de BDF.
 	This development build has no update feed configured, so there is nothing to check.	Esta versión de desarrollo no tiene ningún canal de actualizaciones configurado, así que no hay nada que comprobar.
 	BDF has not checked for updates yet.	BDF aún no ha buscado actualizaciones.
+	This document has no comments or form fields to flatten	Este documento no tiene comentarios ni campos de formulario que acoplar
+	Preview resolution: {level}	Resolución de la vista previa: {level}

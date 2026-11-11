@@ -2513,6 +2513,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_redact::sanitize::sanitize(doc)?;
         }
         Edit::Flatten { comments, fields } => {
+            if *fields {
+                // A filled field another program left for the viewer to draw has nothing to bake in.
+                pdfcraft_forms::draw_missing_appearances(doc)?;
+            }
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
         }

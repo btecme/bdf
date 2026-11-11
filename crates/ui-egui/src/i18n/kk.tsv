@@ -2382,3 +2382,5 @@ animation effects	Off	Өшірулі
 	Test offer from a development feed. This is not a BDF release.	Әзірлеу арнасынан келген сынақ ұсынысы. Бұл BDF шығарылымы емес.
 	This development build has no update feed configured, so there is nothing to check.	Бұл әзірлеу құрастыруында жаңарту арнасы бапталмаған, сондықтан тексеретін ештеңе жоқ.
 	BDF has not checked for updates yet.	BDF жаңартуларды әлі тексермеді.
+	This document has no comments or form fields to flatten	Бұл құжатта жазықтауға жататын түсініктемелер не форма өрістері жоқ
+	Preview resolution: {level}	Алдын ала қарау ажыратымдылығы: {level}

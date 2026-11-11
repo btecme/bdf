@@ -2348,3 +2348,5 @@ animation effects	Off	关
 	Test offer from a development feed. This is not a BDF release.	来自开发源的测试更新。这不是 BDF 的正式发布。
 	This development build has no update feed configured, so there is nothing to check.	此开发版未配置更新源，因此没有可检查的内容。
 	BDF has not checked for updates yet.	BDF 尚未检查更新。
+	This document has no comments or form fields to flatten	本文档没有可拼合的注释或表单域
+	Preview resolution: {level}	预览分辨率：{level}

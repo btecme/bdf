@@ -77,7 +77,7 @@ fn every_registered_command_is_implemented() {
         }
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
+        if spec.id.starts_with("form.") || spec.id == "comment.flatten" || spec.id == "doc.flatten" {
             app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         } else if spec.id == "protect.unlock" {
             // Only a permissions password: opens restricted, and can be unlocked.
@@ -118,7 +118,7 @@ fn every_registered_command_is_implemented() {
                 file: None,
             });
         }
-        if matches!(spec.id, "comment.flatten" | "comment.export" | "comment.summarize") {
+        if matches!(spec.id, "comment.flatten" | "comment.export" | "comment.summarize" | "doc.flatten") {
             use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
             let shape = Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
             app.apply_edit(Edit::AddAnnotation(NewAnnotation {

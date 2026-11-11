@@ -2383,3 +2383,5 @@ animation effects	Off	Ki
 	Test offer from a development feed. This is not a BDF release.	Tesztajánlat egy fejlesztői csatornáról. Ez nem a BDF hivatalos kiadása.
 	This development build has no update feed configured, so there is nothing to check.	Ennek a fejlesztői verziónak nincs beállított frissítési csatornája, ezért nincs mit ellenőrizni.
 	BDF has not checked for updates yet.	A BDF még nem keresett frissítéseket.
+	This document has no comments or form fields to flatten	Ebben a dokumentumban nincs beégethető megjegyzés vagy űrlapmező
+	Preview resolution: {level}	Előnézet felbontása: {level}

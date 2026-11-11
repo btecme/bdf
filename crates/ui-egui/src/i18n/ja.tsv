@@ -2384,3 +2384,5 @@ animation effects	Off	オフ
 	Test offer from a development feed. This is not a BDF release.	開発用フィードからのテスト用の提供です。BDF のリリースではありません。
 	This development build has no update feed configured, so there is nothing to check.	この開発ビルドには更新フィードが設定されていないため、確認するものはありません。
 	BDF has not checked for updates yet.	BDF はまだ更新を確認していません。
+	This document has no comments or form fields to flatten	この文書に統合できる注釈やフォームフィールドはありません
+	Preview resolution: {level}	プレビューの解像度: {level}

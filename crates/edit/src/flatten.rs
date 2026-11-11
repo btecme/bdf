@@ -36,6 +36,15 @@ fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     }
 }
 
+/// The appearance stream and the matrix that places it, when an annotation has both a usable
+/// `/Rect` and an appearance with a non-empty bounding box: what flattening would draw.
+fn drawing(doc: &Document, d: &Dict) -> Option<(ObjRef, [f64; 6])> {
+    let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])])?;
+    let ap = appearance(doc, d)?;
+    let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
+    Some((ap, placement(doc, &form, rect)?))
+}
+
 /// Algorithm 8.1: the matrix that maps the form's bounding box onto the annotation rectangle.
 fn placement(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<[f64; 6]> {
     let bbox = nums(doc, form.get(b"BBox")).filter(|b| b.len() == 4)?;
@@ -64,7 +73,9 @@ fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
     match which {
         Which::Comments { comments, fields } => {
             let widget = subtype == b"Widget";
-            !matches!(subtype, b"Link" | b"Popup") && (!widget || fields) && (widget || comments)
+            // A redaction mark waiting to be applied is an instruction, not ink: baking it into the
+            // page would lose it from the list the person can apply.
+            !matches!(subtype, b"Link" | b"Popup" | b"Redact") && (!widget || fields) && (widget || comments)
         }
         Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
     }
@@ -122,9 +133,76 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
     None
 }
 
+/// The inherited entry `key` of a form field, looking up through its `/Parent` chain.
+fn inherited(doc: &Document, d: &Dict, key: &[u8]) -> Option<Object> {
+    let mut cur = d.clone();
+    for _ in 0..32 {
+        if let Some(v) = cur.get(key) {
+            return Some((*doc.resolve(v)).clone());
+        }
+        let parent = cur.reference(b"Parent")?;
+        cur = doc.get(parent).as_dict().cloned()?;
+    }
+    None
+}
+
+/// Whether a form field holds a value a person would miss: not a signature (an invisible one has
+/// nothing to show), and a non-empty text, a choice, or a check box or radio button that is on.
+fn holds_value(doc: &Document, d: &Dict) -> bool {
+    if inherited(doc, d, b"FT").is_some_and(|t| t.as_name() == Some(b"Sig")) {
+        return false;
+    }
+    match inherited(doc, d, b"V") {
+        Some(Object::String(s)) => !s.bytes.is_empty(),
+        Some(Object::Name(n)) => !n.is_empty() && n.as_slice() != b"Off",
+        Some(Object::Array(a)) => !a.is_empty(),
+        Some(Object::Stream(_)) => true,
+        _ => false,
+    }
+}
+
+/// The first form field flattening would delete without drawing its value: a visible widget that
+/// has a value but no appearance to draw it from (a form another program filled in and left for the
+/// viewer to draw, `/NeedAppearances`). Its page (0-based) and name.
+fn lost_value_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], which: Which) -> Option<(usize, String)> {
+    for &i in pages {
+        let list = all.get(i)?.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        for entry in &list {
+            let Some(d) = doc.resolve(entry).as_dict().cloned() else { continue };
+            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+            if d.name(b"Subtype") != Some(b"Widget") || !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 {
+                continue;
+            }
+            if drawing(doc, &d).is_none() && holds_value(doc, &d) {
+                // The name, joined from the field's own and its parents'.
+                let mut parts: Vec<String> = Vec::new();
+                let mut cur = d.clone();
+                for _ in 0..32 {
+                    if let Some(Object::String(t)) = cur.get(b"T").map(|t| (*doc.resolve(t)).clone()) {
+                        parts.push(String::from_utf8_lossy(&t.bytes).into_owned());
+                    }
+                    let Some(parent) = cur.reference(b"Parent") else { break };
+                    let Some(next) = doc.get(parent).as_dict().cloned() else { break };
+                    cur = next;
+                }
+                parts.reverse();
+                return Some((i, parts.join(".")));
+            }
+        }
+    }
+    None
+}
+
 fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
+    // A filled field with no appearance would be deleted and leave nothing on the page.
+    if let Some((i, name)) = lost_value_on(doc, &all, pages, which) {
+        return Err(EditError::Invalid(format!(
+            "can't flatten the form field {name:?} on page {}: it holds a value but has no appearance to draw it from, and flattening would delete it from the page (nothing was flattened); fill it in again in BDF, or leave the field unflattened",
+            i + 1
+        )));
+    }
     // `?` in an appearance can still be fixed (a field's value, a comment's text are stored as
     // typed, and other viewers redraw form fields); flattened, it would be the page for good.
     if let Some((i, widget, c)) = undrawn_on(doc, &all, pages, which) {
@@ -185,17 +263,13 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             if flags & (HIDDEN | NO_VIEW) != 0 {
                 continue;
             }
-            let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
             let mut drew = false;
-            if let (Some(ap), Some(rect)) = (appearance(doc, d), rect) {
-                let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
-                if let Some(m) = placement(doc, &form, rect) {
-                    let name = xobject_name(&existing_xo, &xobjects, &mut name_n);
-                    content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
-                    xobjects.set(name.into_bytes(), Object::Ref(ap));
-                    drawn += 1;
-                    drew = true;
-                }
+            if let Some((ap, m)) = drawing(doc, d) {
+                let name = xobject_name(&existing_xo, &xobjects, &mut name_n);
+                content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
+                xobjects.set(name.into_bytes(), Object::Ref(ap));
+                drawn += 1;
+                drew = true;
             }
             // A comment whose ink was not written into the page stays. Removing it would drop
             // the annotation (a cloudy square this builder cannot draw, for example) with nothing

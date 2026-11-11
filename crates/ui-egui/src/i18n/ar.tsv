@@ -2405,3 +2405,5 @@ animation effects	Off	معطّلة
 	Test offer from a development feed. This is not a BDF release.	عرض تجريبي من موجز تطوير. هذا ليس إصدارًا من BDF.
 	This development build has no update feed configured, so there is nothing to check.	لم يُضبط في إصدار التطوير هذا أي موجز تحديثات، لذلك لا يوجد ما يمكن فحصه.
 	BDF has not checked for updates yet.	لم يتحقق BDF من التحديثات بعد.
+	This document has no comments or form fields to flatten	هذا المستند لا يحتوي على تعليقات أو حقول نماذج لتسطيحها
+	Preview resolution: {level}	دقة المعاينة: {level}

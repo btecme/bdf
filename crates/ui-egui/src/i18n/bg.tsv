@@ -2347,3 +2347,5 @@ animation effects	Off	Изключени
 	Test offer from a development feed. This is not a BDF release.	Тестово предложение от канал за разработка. Това не е издание на BDF.
 	This development build has no update feed configured, so there is nothing to check.	Тази версия за разработка няма настроен канал за актуализации, така че няма какво да се проверява.
 	BDF has not checked for updates yet.	BDF още не е проверявал за актуализации.
+	This document has no comments or form fields to flatten	Този документ няма коментари или полета на формуляри за сплескване
+	Preview resolution: {level}	Разделителна способност на прегледа: {level}

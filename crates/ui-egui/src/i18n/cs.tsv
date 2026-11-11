@@ -2458,3 +2458,5 @@ animation effects	Off	Vypnuto
 	Test offer from a development feed. This is not a BDF release.	Testovací nabídka z vývojového kanálu. Nejde o vydání BDF.
 	This development build has no update feed configured, so there is nothing to check.	Tato vývojová verze nemá nastaven žádný kanál aktualizací, takže není co kontrolovat.
 	BDF has not checked for updates yet.	BDF zatím nehledal aktualizace.
+	This document has no comments or form fields to flatten	Tento dokument nemá žádné komentáře ani pole formuláře ke sloučení se stránkou
+	Preview resolution: {level}	Rozlišení náhledu: {level}
