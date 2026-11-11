@@ -2,8 +2,9 @@
 
 Status: in force from 2026-11-11, written for the SignPath Foundation application. Revision history at the end.
 
-Free code signing for BDF is provided by [SignPath.io](https://signpath.io), and the certificate is issued by the
-[SignPath Foundation](https://signpath.org).
+BDF has applied for free code signing from [SignPath.io](https://signpath.io), with the certificate issued by the
+[SignPath Foundation](https://signpath.org). Releases are not signed until that application is approved; this policy
+describes how signing will work.
 
 ## What this covers
 
