@@ -99,6 +99,12 @@ impl Drop for Showing {
 }
 
 impl Pickers {
+    /// A picker is open, or its answer is waiting for the next frame to use it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn is_showing(&self) -> bool {
+        self.showing.load(Ordering::SeqCst)
+    }
+
     /// Wait for `pick` on a worker thread and queue its result for the next frame. On macOS
     /// `pick` must already have shown the picker (rfd starts the panel when the future is
     /// created, on the main thread). Returns false when the worker couldn't start.

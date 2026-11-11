@@ -127,6 +127,8 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
+    // An update that was interrupted is undone before anything else touches the folder (BUILD-018).
+    updates::recover_interrupted();
     // Last-resort guard (AGENTS.md §4): commands, edits, opens and saves catch panics and report
     // them; this hook logs every panic, caught or not, with a backtrace when RUST_BACKTRACE is set.
     std::panic::set_hook(Box::new(|info| {
@@ -327,7 +329,8 @@ fn app_creator<'a>(
         {
             app.motion.source = Some(motion::source());
         }
-        app.update_source = Some(std::sync::Arc::new(updates::latest_release));
+        app.update_host = updates::host();
+        app.default_app_host = Some(pdfcraft_ui_egui::default_app::system_host());
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]

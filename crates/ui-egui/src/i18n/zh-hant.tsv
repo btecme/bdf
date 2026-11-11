@@ -2226,3 +2226,31 @@ animation effects	Off	關
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	由 b-tec 打造，是為程式設計代理時代而生、以代理優先的 PDF 應用程式。原因請見我們的第一原則。
 	b-tec website	b-tec 網站
 	b-tec first principles	b-tec 第一原則
+	Update to BDF {v}	更新至 BDF {v}
+	Downloading and checking the update…	正在下載並檢查更新…
+	Couldn't update: {e}	無法更新：{e}
+	You have version {c}.	您目前的版本是 {c}。
+	Releases page	發行頁面
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF 會詢問未儲存的內容，然後關閉、更新並重新開啟您的文件。您的設定會保留。
+	Close BDF and update	關閉 BDF 並更新
+	Download update	下載更新
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	此版本無法驗證更新，因此不會安裝任何更新。請從發行頁面取得最新的可攜式封裝。
+	Update postponed. Choose Update again when you are ready.	更新已延後。準備好後請再次選擇「更新」。
+	Check for updates automatically	自動檢查更新
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	在背景查詢 BDF 的發行來源。檢查失敗絕不會打斷您的工作。
+	Windows integration	Windows 整合
+	Refresh Windows integration	重新整理 Windows 整合
+	Make BDF my default PDF app	將 BDF 設為預設的 PDF 應用程式
+	Preferences ({key})	偏好設定 ({key})
+	Make BDF the default PDF app	將 BDF 設為預設的 PDF 應用程式
+	BDF is registered, but Windows Settings did not open: {why}	BDF 已註冊，但無法開啟 Windows 設定：{why}
+	Remove Windows integration	移除 Windows 整合
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF 已註冊。若要設為預設，請在 Windows 的「預設應用程式」中選擇它。
+	Windows integration removed. Other apps' settings were not touched.	已移除 Windows 整合。其他應用程式的設定未受影響。
+	Development build: updates come from a test feed.	開發版：更新來自測試來源。
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	更新僅來自 BDF 的已簽署發行版。不會傳送任何關於您或您文件的資訊。
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	測試更新
+	Test offer from a development feed. This is not a BDF release.	來自開發來源的測試更新。這不是 BDF 的正式發行版。
+	This development build has no update feed configured, so there is nothing to check.	此開發版未設定更新來源，因此沒有可檢查的內容。
+	BDF has not checked for updates yet.	BDF 尚未檢查更新。

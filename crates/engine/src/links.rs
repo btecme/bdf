@@ -15,6 +15,8 @@ pub const ISSUES: &str = "https://github.com/btecme/bdf/issues";
 pub const BTEC: &str = "https://www.b-tec.org/";
 /// The b-tec first principles, which say why BDF is agent first.
 pub const FIRST_PRINCIPLES: &str = "https://www.b-tec.org/first-principles";
+/// The BDF page on b-tec's site: what the "b-tec Built" mark in the window's top right opens.
+pub const BTEC_BDF: &str = "https://www.b-tec.org/bdf";
 
 /// A link and the registry command that opens it.
 #[derive(Clone, Copy, Debug)]
@@ -35,6 +37,7 @@ pub const LINKS: &[Link] = &[
 /// The "b-tec Built" links of the About dialog. They are not in [`LINKS`] (the home screen shows
 /// that table), but every one is a registered Help command like the others.
 pub const BTEC_LINKS: &[Link] = &[
+    Link { command: "help.btec_bdf", label: "b-tec Built: BDF", url: BTEC_BDF, icon: "globe" },
     Link { command: "help.btec", label: "b-tec website", url: BTEC, icon: "globe" },
     Link { command: "help.principles", label: "b-tec first principles", url: FIRST_PRINCIPLES, icon: "book-open" },
 ];
@@ -545,7 +548,8 @@ mod tests {
         assert_eq!(super::BTEC, "https://www.b-tec.org/");
         assert_eq!(super::FIRST_PRINCIPLES, "https://www.b-tec.org/first-principles");
         let urls: Vec<&str> = super::BTEC_LINKS.iter().map(|l| l.url).collect();
-        assert_eq!(urls, [super::BTEC, super::FIRST_PRINCIPLES]);
+        assert_eq!(urls, [super::BTEC_BDF, super::BTEC, super::FIRST_PRINCIPLES]);
+        assert_eq!(super::BTEC_BDF, "https://www.b-tec.org/bdf");
         for l in super::BTEC_LINKS {
             assert!(crate::commands::command(l.command).is_some(), "{} is a registered command", l.command);
             assert_eq!(super::for_command(l.command).map(|f| f.url), Some(l.url));

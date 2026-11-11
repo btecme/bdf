@@ -154,7 +154,7 @@ impl McpServer {
                 let args = params.get("arguments").cloned().unwrap_or(Value::Null);
                 if self.compact && name == TOOL_SEARCH {
                     check_keys(name, &args, &["query", "category", "name"]).map_err(|e| (INVALID_PARAMS, e))?;
-                    return Ok(match search_tools(&args) {
+                    return Ok(match search_tools(&args, self.automation.software_changes_allowed()) {
                         Ok(found) => call_result(vec![Content::Json(found)]),
                         Err(message) => tool_error(&message),
                     });
@@ -200,7 +200,7 @@ impl McpServer {
 impl McpServer {
     /// What `tools/list` returns: every tool, or in compact mode the core set and the meta tools.
     fn tool_list(&self) -> Vec<Value> {
-        let all = crate::tools();
+        let all = listed_tools(self.automation.software_changes_allowed());
         if !self.compact {
             return all.iter().map(tool_json).collect();
         }
@@ -208,6 +208,12 @@ impl McpServer {
         out.extend(meta_tools());
         out
     }
+}
+
+/// The tools a server lists: the tools that change the installed software or the Windows account only when the
+/// server was started with that authorisation (the call refuses them regardless).
+fn listed_tools(software_allowed: bool) -> Vec<crate::ToolDef> {
+    crate::tools().into_iter().filter(|t| software_allowed || !t.needs_software_authorisation()).collect()
 }
 
 /// The two tools only compact mode lists.
@@ -279,7 +285,7 @@ pub(crate) fn check_keys(tool: &str, args: &Value, allowed: &[&str]) -> Result<(
 }
 
 /// `tool_search`: filter the tool table by query and category, or describe one tool in full.
-fn search_tools(args: &Value) -> Result<Value, String> {
+fn search_tools(args: &Value, software_allowed: bool) -> Result<Value, String> {
     if !(args.is_object() || args.is_null()) {
         return Err(format!("{TOOL_SEARCH} takes an object with optional query, category and name"));
     }
@@ -290,7 +296,7 @@ fn search_tools(args: &Value) -> Result<Value, String> {
         Some(_) => Err(format!("{TOOL_SEARCH}: {key} must be a string")),
     };
     let (query, category, name) = (text("query")?, text("category")?, text("name")?);
-    let all = crate::tools();
+    let all = listed_tools(software_allowed);
     if let Some(name) = name {
         let t =
             all.iter().find(|t| t.name == name).ok_or_else(|| format!("unknown tool {name:?}; call {TOOL_SEARCH} without name to list the tools"))?;

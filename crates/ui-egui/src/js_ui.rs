@@ -381,6 +381,9 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     // The web build has no files on disk to watch.
     #[cfg(not(target_arch = "wasm32"))]
     ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
+    // Updates and Windows integration exist only in the desktop app (BUILD-018).
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::updates::preferences(app, ui);
     ui.horizontal(|ui| {
         ui.label(tl!("Mouse wheel scroll speed"));
         for speed in crate::scroll_speed::ScrollSpeed::ALL {

@@ -117,6 +117,7 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
+pub mod default_app;
 #[cfg(not(target_arch = "wasm32"))]
 mod open_worker;
 pub mod portable;
@@ -544,7 +545,13 @@ pub struct PdfCraftApp {
     pub fill_text_size: f64,
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
-    pub update_source: Option<updates::UpdateSource>,
+    /// How the desktop app checks for, downloads and installs updates (the web build has none).
+    pub update_host: Option<std::sync::Arc<dyn updates::UpdateHost>>,
+    /// Preferences: check for updates in the background (BUILD-018). On unless turned off.
+    pub auto_update_check: bool,
+    /// How the desktop app reads and sets up the default PDF app (Windows integration); none in the web build and in tests.
+    pub default_app_host: Option<std::sync::Arc<dyn default_app::DefaultAppHost>>,
+    pub(crate) default_app: default_app::DefaultApp,
     pub(crate) updates: updates::Updates,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
@@ -910,7 +917,10 @@ impl PdfCraftApp {
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             dialog: None,
-            update_source: None,
+            update_host: None,
+            auto_update_check: true,
+            default_app_host: None,
+            default_app: default_app::DefaultApp::default(),
             updates: updates::Updates::default(),
             printer_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -2117,7 +2127,7 @@ impl PdfCraftApp {
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
-        serde_json::json!({
+        let mut state = serde_json::json!({
             "docking": self.docking,
             "docking_left_open": self.left_open,
             "docking_right": self.right,
@@ -2178,8 +2188,12 @@ impl PdfCraftApp {
             "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
-        })
-        .to_string()
+        });
+        // Beside the object above, which is at the macro's recursion limit.
+        if let Some(object) = state.as_object_mut() {
+            object.insert("auto_update_check".into(), serde_json::Value::Bool(self.auto_update_check));
+        }
+        state.to_string()
     }
 
     /// Restore state written by `persist`. Unknown or malformed data is ignored.
@@ -2209,6 +2223,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["reopen_last_session"].as_bool() {
             self.reopen_last_session = on;
+        }
+        if let Some(on) = v["auto_update_check"].as_bool() {
+            self.auto_update_check = on;
         }
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
         if let Some(on) = v["system_title_bar"].as_bool() {
@@ -2905,6 +2922,7 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.poll_updates();
+        self.poll_default_app();
         self.poll_print();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
@@ -2983,6 +3001,8 @@ impl eframe::App for PdfCraftApp {
         }
         chrome::tab_strip(self, ui);
         chrome::mode_bar(self, ui);
+        // Declared before the side panels so the strip spans the whole window width, right-aligned at its corner.
+        chrome::default_app_footer(self, ui);
         if self.active.is_some() {
             chrome::right_rail(self, ui);
             // Read mode hides the tools, not the navigation panes: the rail stays visible

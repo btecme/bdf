@@ -5,8 +5,14 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     bdf-<version>-windows-<arch>.msi                 per-machine installer (WiX v5)
-    bdf-<version>-windows-<arch>-portable.zip        bdf.exe + bdf-cli.exe + bdf-worker.exe + portable.txt
-                                                     (+ models\ only with -WithOcrModels)
+    bdf-<version>-windows-<arch>-portable.zip        the managed portable package: bdf.exe + bdf-cli.exe + bdf-worker.exe + bdf-updater.exe
+                                                     + portable.txt + notices + bdf-package.json (the list of every file with its
+                                                     size and SHA-256). Built by `cargo xtask portable-package`, checked by
+                                                     `portable-verify` and tested by test-portable-package.ps1
+                                                     (+ models only with -WithOcrModels)
+
+  The update trust root is the BDF_UPDATE_PUBKEY environment variable (the release public key, 130 hex characters). Without it
+  the build carries none, refuses every update and says so; test-portable-package.ps1 expects exactly that.
 
   The core package has no OCR models: OCR is deferred from the BDF v1 core, so nothing is downloaded for it and
   neither the MSI nor the portable zip carries a models folder. -WithOcrModels restores the previous behaviour (fetch
@@ -90,7 +96,7 @@ if (-not $SkipBuild) {
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PDFCRAFT_REQUIRE_WINRES = '1'
   Initialize-RustTarget $Target $Root
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-worker --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-worker -p pdfcraft-updater --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -105,7 +111,7 @@ function Get-PeHeader([string] $Path) {
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($check in @(@('bdf.exe', 2), @('bdf-cli.exe', 3), @('bdf-worker.exe', 3))) {
+foreach ($check in @(@('bdf.exe', 2), @('bdf-cli.exe', 3), @('bdf-worker.exe', 3), @('bdf-updater.exe', 2))) {
   $h = Get-PeHeader (Join-Path $Bin $check[0])
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
@@ -114,7 +120,7 @@ foreach ($check in @(@('bdf.exe', 2), @('bdf-cli.exe', 3), @('bdf-worker.exe', 3
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'bdf.exe'), (Join-Path $Bin 'bdf-cli.exe'), (Join-Path $Bin 'bdf-worker.exe') $Stage
+Copy-Item (Join-Path $Bin 'bdf.exe'), (Join-Path $Bin 'bdf-cli.exe'), (Join-Path $Bin 'bdf-worker.exe'), (Join-Path $Bin 'bdf-updater.exe') $Stage
 # The document icon embeds Lucide artwork: carry its ISC notice and the project licences
 # beside the binaries in both distributions.
 foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
@@ -122,7 +128,7 @@ foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
 }
 Copy-Item (Join-Path $Root 'assets\app-icon\LICENSE-document.txt') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'bdf.exe') (Join-Path $Stage 'bdf-cli.exe') (Join-Path $Stage 'bdf-worker.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'bdf.exe') (Join-Path $Stage 'bdf-cli.exe') (Join-Path $Stage 'bdf-worker.exe') (Join-Path $Stage 'bdf-updater.exe')
 
 # OCR models (#103), only when asked for: the app looks in models\ beside bdf.exe. `cargo xtask models` fetches
 # every ATTRIBUTION.toml `kind = "model"` file (verified by SHA-256) with its licence and ATTRIBUTION.txt; the MSI and the
@@ -162,33 +168,25 @@ Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Ms
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
 # ---- portable zip ------------------------------------------------------------------------------
-$Portable = Join-Path $TargetDir "windows-package\bdf-$Version-windows-$Arch-portable"
-Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $Portable | Out-Null
-Copy-Item (Join-Path $Stage '*.exe') $Portable
-foreach ($f in 'NOTICE', 'LICENSE-document.txt') {
-  Copy-Item (Join-Path $Stage $f) $Portable
-}
-if ($WithOcrModels) { Copy-Item -Recurse $Models (Join-Path $Portable 'models') }
-foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
-  $p = Join-Path $Root $f
-  if (Test-Path $p) { Copy-Item $p $Portable }
-}
-# Builds made with craft-fonts (CRAFT_FONTS_DIR, set for every release) embed its fonts: ship their
-# licences, fonts\<family>\OFL.txt -> OFL-<family>.txt.
-if ($env:CRAFT_FONTS_DIR) {
-  Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-    $ofl = Join-Path $_.FullName 'OFL.txt'
-    if (Test-Path $ofl) { Copy-Item $ofl (Join-Path $Portable "OFL-$($_.Name).txt") }
-  }
-}
-# portable.txt beside bdf.exe switches on portable mode: settings, logs, recovery files and new
-# digital IDs go to BDFData\ next to the exe instead of %APPDATA% (#157; see
-# crates/ui-egui/src/portable.rs).
-Copy-Item (Join-Path $PSScriptRoot 'portable.txt') $Portable
+# The portable package is the managed one the in-app updater and the deployment script understand: one folder holding the
+# four programs (bdf.exe, bdf-cli.exe, bdf-worker.exe, bdf-updater.exe), portable.txt, the notices and bdf-package.json,
+# the list of every file with its size and SHA-256. `cargo xtask portable-package` builds it and `portable-verify` then
+# checks the file that was written, exactly as the updater will read it. A package without the list, or without the
+# updater, is not a product an update can be applied to, so there is no other way to make one here.
 $Zip = Join-Path $Dist "bdf-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
-Compress-Archive -Path $Portable -DestinationPath $Zip
+$PackageArgs = @('--bin-dir', $Stage, '--version', $Version, '--out', $Dist, '--arch', $Arch)
+if ($WithOcrModels) { $PackageArgs += @('--models-dir', $Models) }
+Push-Location $Root
+try {
+  Invoke-Native 'cargo xtask portable-package' { cargo run --locked --quiet -p xtask -- portable-package @PackageArgs }
+  Invoke-Native 'cargo xtask portable-verify' { cargo run --locked --quiet -p xtask -- portable-verify --zip $Zip --version $Version --arch $Arch }
+} finally { Pop-Location }
+# Test the exact file that will be downloaded: its contents, the programs in it, the trust it was built with and a
+# deployment of it. Whether a trust root was given to the build decides what the package must say about itself.
+$ExpectTrust = if ($env:BDF_UPDATE_PUBKEY) { 'configured' } else { 'missing' }
+& (Join-Path $PSScriptRoot 'test-portable-package.ps1') -Zip $Zip -Version $Version -Arch $Arch -ExpectTrust $ExpectTrust
+if ($LASTEXITCODE -ne 0) { throw "test-portable-package failed with exit code $LASTEXITCODE" }
 
 # Smoke-test the CLI when this machine can run it. An ARM64 build made on an x64 runner can't run
 # here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.

@@ -2355,3 +2355,31 @@ animation effects	Off	Ki
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	A b-tec építette ügynök-első PDF-alkalmazásként a kódoló ügynökök korára. Alapelveink megmagyarázzák, miért.
 	b-tec website	A b-tec weboldala
 	b-tec first principles	A b-tec alapelvei
+	Update to BDF {v}	Frissítés BDF {v} verzióra
+	Downloading and checking the update…	A frissítés letöltése és ellenőrzése…
+	Couldn't update: {e}	A frissítés nem sikerült: {e}
+	You have version {c}.	A te verziód: {c}.
+	Releases page	Verziók oldala
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	A BDF rákérdez a nem mentett módosításokra, bezárul, frissít, majd újra megnyitja a dokumentumaidat. A beállításaid megmaradnak.
+	Close BDF and update	BDF bezárása és frissítés
+	Download update	Frissítés letöltése
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Ez a verzió nem tudja ellenőrizni a frissítéseket, ezért nem is telepít egyet sem. Töltsd le a legújabb hordozható csomagot a verziók oldaláról.
+	Update postponed. Choose Update again when you are ready.	A frissítés elhalasztva. Válaszd újra a Frissítés gombot, ha készen állsz.
+	Check for updates automatically	Frissítések automatikus keresése
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	A háttérben lekérdezi a BDF kiadási csatornáját. A sikertelen ellenőrzés sosem szakítja meg a munkádat.
+	Windows integration	Windows-integráció
+	Refresh Windows integration	Windows-integráció frissítése
+	Make BDF my default PDF app	A BDF legyen az alapértelmezett PDF-alkalmazásom
+	Preferences ({key})	Beállítások ({key})
+	Make BDF the default PDF app	A BDF legyen az alapértelmezett PDF-alkalmazás
+	BDF is registered, but Windows Settings did not open: {why}	A BDF regisztrálva van, de a Windows Beállítások nem nyílt meg: {why}
+	Remove Windows integration	Windows-integráció eltávolítása
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	A BDF regisztrálva van. Válaszd ki a Windows Alapértelmezett alkalmazások oldalán, hogy alapértelmezett legyen.
+	Windows integration removed. Other apps' settings were not touched.	A Windows-integráció eltávolítva. Más alkalmazások beállításait nem érintettük.
+	Development build: updates come from a test feed.	Fejlesztői verzió: a frissítések tesztcsatornáról érkeznek.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	A frissítések csak a BDF aláírt kiadásaiból érkeznek. Rólad és a dokumentumaidról semmi sem kerül elküldésre.
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Tesztfrissítés
+	Test offer from a development feed. This is not a BDF release.	Tesztajánlat egy fejlesztői csatornáról. Ez nem a BDF hivatalos kiadása.
+	This development build has no update feed configured, so there is nothing to check.	Ennek a fejlesztői verziónak nincs beállított frissítési csatornája, ezért nincs mit ellenőrizni.
+	BDF has not checked for updates yet.	A BDF még nem keresett frissítéseket.

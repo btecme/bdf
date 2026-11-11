@@ -1,0 +1,31 @@
+[package]
+name = "pdfcraft-updater"
+description = "bdf-updater: applies a verified BDF update to the portable folder after BDF has closed, with rollback (BUILD-018)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "bdf-updater"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+# VERSIONINFO for bdf-updater.exe; build.rs only uses it when targeting Windows.
+winresource = "0.1"
+
+[dependencies]
+# Verification, staging, the journaled replacement and recovery. No network feature: this program never
+# connects to anything.
+pdfcraft-update = { path = "../../crates/update", version = "0.8.0" }
+
+[dev-dependencies]
+# Test signing key and package fixtures (never enabled in a build of the product).
+pdfcraft-update = { path = "../../crates/update", version = "0.8.0", features = ["testing"] }
+tempfile = "3"

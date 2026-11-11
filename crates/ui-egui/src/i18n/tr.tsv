@@ -2352,3 +2352,31 @@ animation effects	Off	Kapalı
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	b-tec tarafından, kodlama ajanları çağı için önce ajanları düşünen bir PDF uygulaması olarak geliştirildi. Nedenini ilk ilkelerimiz açıklıyor.
 	b-tec website	b-tec web sitesi
 	b-tec first principles	b-tec ilk ilkeleri
+	Update to BDF {v}	BDF {v} sürümüne güncelle
+	Downloading and checking the update…	Güncelleme indiriliyor ve denetleniyor…
+	Couldn't update: {e}	Güncellenemedi: {e}
+	You have version {c}.	Sürümünüz {c}.
+	Releases page	Sürümler sayfası
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF kaydedilmemiş değişiklikleri soracak, kapanacak, güncellenecek ve belgelerinizi yeniden açacak. Ayarlarınız korunur.
+	Close BDF and update	BDF'yi kapat ve güncelle
+	Download update	Güncellemeyi indir
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Bu sürüm güncellemeleri doğrulayamaz, bu yüzden hiçbirini yüklemez. En yeni taşınabilir paketi sürümler sayfasından edinin.
+	Update postponed. Choose Update again when you are ready.	Güncelleme ertelendi. Hazır olduğunuzda Güncelle'yi yeniden seçin.
+	Check for updates automatically	Güncellemeleri otomatik denetle
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	Arka planda BDF'nin sürüm akışını sorgular. Başarısız bir denetim çalışmanızı asla kesintiye uğratmaz.
+	Windows integration	Windows tümleştirmesi
+	Refresh Windows integration	Windows tümleştirmesini yenile
+	Make BDF my default PDF app	BDF'yi varsayılan PDF uygulamam yap
+	Preferences ({key})	Tercihler ({key})
+	Make BDF the default PDF app	BDF'yi varsayılan PDF uygulaması yap
+	BDF is registered, but Windows Settings did not open: {why}	BDF kaydedildi, ancak Windows Ayarları açılmadı: {why}
+	Remove Windows integration	Windows tümleştirmesini kaldır
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF kaydedildi. Varsayılan yapmak için Windows'taki Varsayılan uygulamalar'dan seçin.
+	Windows integration removed. Other apps' settings were not touched.	Windows tümleştirmesi kaldırıldı. Diğer uygulamaların ayarlarına dokunulmadı.
+	Development build: updates come from a test feed.	Geliştirme sürümü: güncellemeler bir test akışından gelir.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Güncellemeler yalnızca BDF'nin imzalı sürümlerinden gelir. Sizinle veya belgelerinizle ilgili hiçbir şey gönderilmez.
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Test güncellemesi
+	Test offer from a development feed. This is not a BDF release.	Bir geliştirme akışından gelen test teklifi. Bu bir BDF sürümü değildir.
+	This development build has no update feed configured, so there is nothing to check.	Bu geliştirme sürümünde yapılandırılmış bir güncelleme akışı yok, bu yüzden denetlenecek bir şey yok.
+	BDF has not checked for updates yet.	BDF henüz güncellemeleri denetlemedi.

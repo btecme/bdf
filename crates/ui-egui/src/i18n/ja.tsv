@@ -2356,3 +2356,31 @@ animation effects	Off	オフ
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	b-tec が、コーディングエージェントの時代に向けて、エージェントを第一に考える PDF アプリとして作りました。その理由は私たちの第一原則に書かれています。
 	b-tec website	b-tec のウェブサイト
 	b-tec first principles	b-tec の第一原則
+	Update to BDF {v}	BDF {v} に更新
+	Downloading and checking the update…	更新をダウンロードして確認しています…
+	Couldn't update: {e}	更新できませんでした: {e}
+	You have version {c}.	現在のバージョンは {c} です。
+	Releases page	リリースページ
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF は未保存の作業について確認し、終了して更新し、開いていた書類を開き直します。設定は保持されます。
+	Close BDF and update	BDF を閉じて更新
+	Download update	更新をダウンロード
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	このビルドは更新を検証できないため、更新をインストールしません。最新のポータブル版をリリースページから入手してください。
+	Update postponed. Choose Update again when you are ready.	更新を延期しました。準備ができたら、もう一度「更新」を選んでください。
+	Check for updates automatically	更新を自動的に確認する
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	バックグラウンドで BDF のリリースフィードを確認します。確認に失敗しても作業が中断されることはありません。
+	Windows integration	Windows との連携
+	Refresh Windows integration	Windows との連携を更新
+	Make BDF my default PDF app	BDF を既定の PDF アプリにする
+	Preferences ({key})	環境設定 ({key})
+	Make BDF the default PDF app	BDF を既定の PDF アプリにする
+	BDF is registered, but Windows Settings did not open: {why}	BDF を登録しましたが、Windows の設定を開けませんでした: {why}
+	Remove Windows integration	Windows との連携を解除
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF を登録しました。既定にするには、Windows の「既定のアプリ」で選んでください。
+	Windows integration removed. Other apps' settings were not touched.	Windows との連携を解除しました。ほかのアプリの設定には触れていません。
+	Development build: updates come from a test feed.	開発ビルド: 更新はテスト用フィードから届きます。
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	更新は BDF の署名付きリリースからのみ届きます。あなたや書類に関する情報は送信されません。
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	テスト更新
+	Test offer from a development feed. This is not a BDF release.	開発用フィードからのテスト用の提供です。BDF のリリースではありません。
+	This development build has no update feed configured, so there is nothing to check.	この開発ビルドには更新フィードが設定されていないため、確認するものはありません。
+	BDF has not checked for updates yet.	BDF はまだ更新を確認していません。

@@ -20,6 +20,17 @@ pub struct ToolDef {
     pub destructive: bool,
     /// The registry command this tool automates, if any.
     pub command: Option<&'static str>,
+    /// Acts on the installed software or the Windows account (updates, Windows integration), not on documents.
+    /// Its read-only members (`update_status`, `windows_integration_status`) are always available; the rest need
+    /// the software authorisation (`--allow-software`), which no document grant carries.
+    pub software: bool,
+}
+
+impl ToolDef {
+    /// A tool that changes the installed software or the Windows account, which needs the separate authorisation.
+    pub fn needs_software_authorisation(&self) -> bool {
+        self.software && !self.read_only
+    }
 }
 
 fn doc() -> Value {
@@ -81,15 +92,20 @@ struct T {
     read_only: bool,
     destructive: bool,
     command: Option<&'static str>,
+    software: bool,
 }
 
 const fn t(name: &'static str, title: &'static str, description: &'static str) -> T {
-    T { name, title, description, read_only: false, destructive: false, command: None }
+    T { name, title, description, read_only: false, destructive: false, command: None, software: false }
 }
 
 impl T {
     const fn ro(mut self) -> Self {
         self.read_only = true;
+        self
+    }
+    const fn software(mut self) -> Self {
+        self.software = true;
         self
     }
     const fn destructive(mut self) -> Self {
@@ -109,6 +125,7 @@ impl T {
             read_only: self.read_only,
             destructive: self.destructive,
             command: self.command,
+            software: self.software,
         }
     }
 }
@@ -1263,6 +1280,24 @@ pub fn tools() -> Vec<ToolDef> {
             .ro().with(schema(json!({"doc":doc()}), &[])),
         t("render_preview", "Render a preview", "Render a PNG bounded by max_side (default 1024), without changing or saving the document. Page defaults to 1; doc may be omitted when exactly one document is open.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"max_side":{"type":"integer","minimum":1,"maximum":4096}}), &[])),
+        t("update_status", "Update status", "BDF's update state from what is on disk: version, channel, whether this build can verify updates, whether this copy is a managed portable package, the release on offer, when it was last checked and the last result. Uses no network and changes nothing.")
+            .ro().software().with(schema(json!({}), &[])),
+        t("update_check", "Check for updates", "Ask BDF's release feed for the newest signed release and remember the answer. Contacts the network; changes no installed file. Needs software authorisation.")
+            .software().with(schema(json!({ "manual": { "type": "boolean", "description": "Default true. false behaves like the app's automatic check: it does nothing until the next check is due." } }), &[])),
+        t("update_download", "Download the update", "Download the release on offer and verify its signature, size, hash and every file in it, without installing it. Needs software authorisation.")
+            .software().with(schema(json!({}), &[])),
+        t("update_apply", "Apply the update", "Hand the downloaded, verified update to BDF's updater, which installs it once BDF and the command line have closed, then starts BDF again. Nothing is closed or ended to make room, unsaved documents are never saved over, and the copy is restored if anything fails. Needs software authorisation.")
+            .software().destructive().with(schema(json!({}), &[])),
+        t("update_rollback", "Go back to the previous version", "Hand a return to the version kept before the last update to BDF's updater (applied once BDF has closed, like update_apply). Needs software authorisation.")
+            .software().destructive().with(schema(json!({}), &[])),
+        t("windows_integration_status", "Windows integration status", "Whether this copy of BDF is registered with Windows as a PDF application, whether it is the default PDF app, and what to do next. Reads the registry; changes nothing.")
+            .ro().software().with(schema(json!({}), &[])),
+        t("windows_integration_register", "Register with Windows", "Register this copy (for this Windows account only) so Windows offers it in Open with and Default apps. It never makes BDF the default and never changes other applications' registrations: the person confirms the default in Windows. open_settings also opens that Settings page. Needs software authorisation.")
+            .software().with(schema(json!({ "open_settings": { "type": "boolean", "description": "Also open Windows' Default apps page for BDF (default false)." } }), &[])),
+        t("windows_integration_remove", "Remove Windows integration", "Remove the registration made by this copy of BDF and nothing else. Another BDF copy's registration is refused unless its program no longer exists. Needs software authorisation.")
+            .software().destructive().with(schema(json!({}), &[])),
+        t("windows_open_default_apps", "Open Windows Default apps", "Open Windows' Default apps page for BDF, where the person chooses the default PDF app. Changes nothing itself. Needs software authorisation.")
+            .software().with(schema(json!({}), &[])),
     ]
 }
 

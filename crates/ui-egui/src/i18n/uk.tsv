@@ -2378,3 +2378,31 @@ animation effects	Off	Вимкнено
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	Створено b-tec як PDF-застосунок, орієнтований насамперед на агентів, для епохи агентів програмування. Чому — пояснюють наші перші принципи.
 	b-tec website	Вебсайт b-tec
 	b-tec first principles	Перші принципи b-tec
+	Update to BDF {v}	Оновити до BDF {v}
+	Downloading and checking the update…	Завантаження та перевірка оновлення…
+	Couldn't update: {e}	Не вдалося оновити: {e}
+	You have version {c}.	У вас версія {c}.
+	Releases page	Сторінка версій
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF запитає про незбережені зміни, закриється, оновиться та знову відкриє ваші документи. Ваші налаштування збережуться.
+	Close BDF and update	Закрити BDF і оновити
+	Download update	Завантажити оновлення
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Ця збірка не може перевіряти оновлення, тому не встановить жодного. Завантажте найновіший портативний пакет зі сторінки версій.
+	Update postponed. Choose Update again when you are ready.	Оновлення відкладено. Знову виберіть «Оновити», коли будете готові.
+	Check for updates automatically	Перевіряти оновлення автоматично
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	Запитує стрічку випусків BDF у фоновому режимі. Невдала перевірка ніколи не перериває роботу.
+	Windows integration	Інтеграція з Windows
+	Refresh Windows integration	Оновити інтеграцію з Windows
+	Make BDF my default PDF app	Зробити BDF моєю програмою для PDF за замовчуванням
+	Preferences ({key})	Налаштування ({key})
+	Make BDF the default PDF app	Зробити BDF програмою для PDF за замовчуванням
+	BDF is registered, but Windows Settings did not open: {why}	BDF зареєстровано, але параметри Windows не відкрилися: {why}
+	Remove Windows integration	Видалити інтеграцію з Windows
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF зареєстровано. Виберіть його в розділі «Програми за замовчуванням» Windows, щоб зробити його основним.
+	Windows integration removed. Other apps' settings were not touched.	Інтеграцію з Windows видалено. Налаштування інших програм не змінено.
+	Development build: updates come from a test feed.	Збірка для розробки: оновлення надходять із тестової стрічки.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Оновлення надходять лише з підписаних випусків BDF. Нічого про вас чи ваші документи не надсилається.
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Тестове оновлення
+	Test offer from a development feed. This is not a BDF release.	Тестова пропозиція зі стрічки розробника. Це не випуск BDF.
+	This development build has no update feed configured, so there is nothing to check.	У цій збірці для розробки не налаштовано стрічку оновлень, тож перевіряти нічого.
+	BDF has not checked for updates yet.	BDF ще не перевіряв наявність оновлень.

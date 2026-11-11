@@ -2332,3 +2332,31 @@ animation effects	Off	Wyłączone
 	Built by b-tec as an agent-first PDF app for the age of coding agents. Our first principles explain why.	Stworzona przez b-tec jako aplikacja PDF z agentami na pierwszym miejscu, na czasy agentów programujących. Dlaczego, wyjaśniają nasze podstawowe zasady.
 	b-tec website	Strona internetowa b-tec
 	b-tec first principles	Podstawowe zasady b-tec
+	Update to BDF {v}	Zaktualizuj do BDF {v}
+	Downloading and checking the update…	Pobieranie i sprawdzanie aktualizacji…
+	Couldn't update: {e}	Nie udało się zaktualizować: {e}
+	You have version {c}.	Masz wersję {c}.
+	Releases page	Strona wersji
+	BDF will ask about any unsaved work, close, update, and reopen your documents. Your settings are kept.	BDF zapyta o niezapisane zmiany, zamknie się, zaktualizuje i ponownie otworzy dokumenty. Ustawienia zostaną zachowane.
+	Close BDF and update	Zamknij BDF i zaktualizuj
+	Download update	Pobierz aktualizację
+	This build cannot verify updates, so it will not install any. Get the newest portable package from the releases page.	Ta wersja nie może weryfikować aktualizacji, więc żadnej nie zainstaluje. Pobierz najnowszy pakiet przenośny ze strony wersji.
+	Update postponed. Choose Update again when you are ready.	Aktualizacja odłożona. Wybierz Aktualizuj ponownie, gdy będziesz gotowy.
+	Check for updates automatically	Automatycznie sprawdzaj aktualizacje
+	Asks BDF's release feed in the background. A failed check never interrupts your work.	W tle sprawdza kanał wersji BDF. Nieudane sprawdzenie nigdy nie przerywa pracy.
+	Windows integration	Integracja z Windows
+	Refresh Windows integration	Odśwież integrację z Windows
+	Make BDF my default PDF app	Ustaw BDF jako domyślną aplikację PDF
+	Preferences ({key})	Preferencje ({key})
+	Make BDF the default PDF app	Ustaw BDF jako domyślną aplikację PDF
+	BDF is registered, but Windows Settings did not open: {why}	BDF jest zarejestrowany, ale nie udało się otworzyć Ustawień systemu Windows: {why}
+	Remove Windows integration	Usuń integrację z Windows
+	BDF is registered. Choose it in Windows' Default apps to make it the default.	BDF jest zarejestrowany. Wybierz go w Aplikacjach domyślnych systemu Windows, aby ustawić go jako domyślny.
+	Windows integration removed. Other apps' settings were not touched.	Usunięto integrację z Windows. Ustawienia innych aplikacji nie zostały zmienione.
+	Development build: updates come from a test feed.	Wersja deweloperska: aktualizacje pochodzą z kanału testowego.
+	Updates come only from BDF's own signed releases. Nothing about you or your documents is sent.	Aktualizacje pochodzą tylko z podpisanych wersji BDF. Nic o Tobie ani Twoich dokumentach nie jest wysyłane.
+	b-tec Built: BDF	b-tec Built: BDF
+	Test update	Aktualizacja testowa
+	Test offer from a development feed. This is not a BDF release.	Oferta testowa z kanału deweloperskiego. To nie jest wydanie BDF.
+	This development build has no update feed configured, so there is nothing to check.	Ta wersja deweloperska nie ma skonfigurowanego kanału aktualizacji, więc nie ma czego sprawdzać.
+	BDF has not checked for updates yet.	BDF jeszcze nie sprawdzał aktualizacji.

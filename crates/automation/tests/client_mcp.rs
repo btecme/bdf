@@ -748,3 +748,36 @@ fn a_refusal_that_cannot_be_recorded_stops_the_next_call_like_any_other_failed_r
     assert!(is_error, "{body}");
     assert_eq!(body["error"]["reason"], "audit_unavailable", "{body}");
 }
+
+/// BUILD-018: a grant for every document capability still carries no software or Windows-registration privilege.
+/// The grant-limited server's tool list is the service's operations, and the update and Windows tools are not tools
+/// of that server at all.
+#[test]
+fn a_document_grant_never_reaches_the_software_tools() {
+    let f = Fixture::new("software-boundary");
+    let mut every: Vec<Capability> = Vec::new();
+    for d in DESCRIPTORS.iter() {
+        if !every.contains(&d.capability) {
+            every.push(d.capability);
+        }
+    }
+    let mut server = f.server(Some(f.issue("software-boundary", &every)));
+    assert!(server.is_authorized());
+    let names = tool_names(&mut server);
+    assert!(names.iter().any(|n| n == "doc_open"), "the grant works: {names:?}");
+    for software in [
+        "update_status",
+        "update_check",
+        "update_download",
+        "update_apply",
+        "update_rollback",
+        "windows_integration_status",
+        "windows_integration_register",
+        "windows_integration_remove",
+        "windows_open_default_apps",
+    ] {
+        assert!(!names.iter().any(|n| n == software), "{software} must not be offered to a grant");
+        let reply = rpc(&mut server, 9, "tools/call", json!({ "name": software, "arguments": {} }));
+        assert!(reply.get("error").is_some() || reply["result"]["isError"] == true, "{software} must be refused: {reply}");
+    }
+}
