@@ -29,6 +29,20 @@ Generated previews live under `target/` and are not included in Git synchronizat
 Each preview folder holds `bdf.exe`, `bdf-cli.exe` and `bdf-worker.exe`; its README,
 BUILD.json and verification notes identify the binaries and checks actually performed.
 
+## Download and code signing
+
+Windows downloads (a portable ZIP and an MSI) are published on the
+[releases page](https://github.com/btecme/bdf/releases) with a `SHA256SUMS.txt`. The portable
+build updates itself from the same page, and checks every update against the project's own
+update key before installing it ([how updates work](docs/bdf-portable-updates.md)).
+
+Releases are not yet code-signed. BDF has applied for free code signing from
+[SignPath.io](https://signpath.io) (certificate by the [SignPath Foundation](https://signpath.org));
+once that is approved, this section will say so. Until then Windows SmartScreen may show
+"Windows protected your PC" for a new download: choose *More info*, then *Run anyway*.
+Which files will be signed, who approves a signing request and what BDF sends over the network
+are in the [code signing policy](docs/code-signing-policy.md).
+
 ## Build and contribute
 
 Read [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md). Start from the
