@@ -55,6 +55,14 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained (merged into zbus 6); Linux accessibility and portal code only" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained (merged into zbus 6); Linux accessibility and portal code only" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained (merged into zbus 6); Linux accessibility and portal code only" },
+
+    # chrono (RUSTSEC-2026-0543): an informational "unmaintained" notice for every version: no vulnerability, no
+    # patched version; the advisory suggests jiff or time. BDF reaches chrono in two places: pdfcraft-engine reads the
+    # local UTC offset with one call (`chrono::Local::now().offset()`, crates/engine/src/lib.rs) and the vendored lopdf
+    # uses it to parse and write PDF dates (vendor/lopdf/src/datetime.rs). The entry is for this one ID, so a real
+    # vulnerability in chrono, which would have its own ID, still fails the check. Revisit by replacing the engine call
+    # with `time` or the standard library and moving lopdf's date handling off chrono, then delete this entry.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (no vulnerability): local UTC offset in pdfcraft-engine and PDF date handling in vendored lopdf" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md
