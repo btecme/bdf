@@ -18,6 +18,7 @@ use pdfcraft_update::{Channel, SignedManifest, Trust, Version, hex, package};
 use sha2::{Digest, Sha256};
 
 use crate::gates::root;
+use crate::pe;
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -75,12 +76,49 @@ fn add_tree(dir: &Path, prefix: &str, inputs: &mut Vec<Input>) -> Result<()> {
     Ok(())
 }
 
+/// The four programs a portable package carries.
+const PROGRAMS: [&str; 4] = ["bdf.exe", "bdf-cli.exe", "bdf-worker.exe", "bdf-updater.exe"];
+
+/// Refuse a program that imports the Visual C++ runtime (or is not a readable Windows program). A clean Windows does
+/// not have that runtime, so such a program stops at first launch with "VCRUNTIME140.dll was not found". BDF is built
+/// with the static C runtime so that no program needs it; this makes that true of the files that ship.
+fn needs_no_runtime(name: &str, bytes: &[u8]) -> Result<()> {
+    let dlls = pe::imported_dlls(bytes).map_err(|e| anyhow::anyhow!("{name} is {e}"))?;
+    let needed = pe::runtime_dependencies(&dlls);
+    if needed.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "{name} imports {}: a clean Windows does not have the Visual C++ runtime, so the program would stop at first launch. Build the programs with the static C runtime (-C target-feature=+crt-static), through packaging/windows/package.ps1 or as docs/bdf-portable-updates.md describes",
+        needed.join(", ")
+    )
+}
+
+/// A scratch folder for reading the programs back out of a package; removed when dropped.
+struct Staging(PathBuf);
+
+impl Staging {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        Staging(std::env::temp_dir().join(format!("bdf-portable-verify-{}-{}-{n}", std::process::id(), pdfcraft_update::now_unix())))
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// What every portable package carries: the four programs, portable mode, and the notices.
 const REQUIRED_FILES: [&str; 9] =
     ["bdf.exe", "bdf-cli.exe", "bdf-worker.exe", "bdf-updater.exe", "portable.txt", "README.txt", "NOTICE", "LICENSE-MIT", "LICENSE-APACHE"];
 
 /// `portable-verify --zip FILE --version X.Y.Z [--arch x64]`: check a built package the way the updater will read it
-/// (one folder, safe names, every file against its own list) and that it is the whole product.
+/// (one folder, safe names, every file against its own list), that it is the whole product, and that none of its
+/// programs needs the Visual C++ runtime.
 pub fn portable_verify(args: &[String]) -> Result<()> {
     let zip = PathBuf::from(required(args, "--zip")?);
     let version = Version::parse(&required(args, "--version")?).context("--version must be MAJOR.MINOR.PATCH")?;
@@ -97,6 +135,13 @@ pub fn portable_verify(args: &[String]) -> Result<()> {
     let expected_top = format!("bdf-{version}-windows-{arch}");
     if verified.top != expected_top {
         bail!("the package folder is {}, expected {expected_top}", verified.top);
+    }
+    // The programs must start on a clean Windows: read them back out of the (already verified) package and check their imports.
+    let staging = Staging::new();
+    package::stage(&zip, &verified, &staging.0).map_err(|e| anyhow::anyhow!("{e}"))?;
+    for program in PROGRAMS {
+        let bytes = std::fs::read(package::join_rel(&staging.0, program)).with_context(|| format!("couldn't read {program} from the package"))?;
+        needs_no_runtime(program, &bytes)?;
     }
     println!("{}: {} files, folder {}, {} bytes, sha256 {sha256}", zip.display(), verified.info.files.len(), verified.top, size);
     Ok(())
@@ -116,10 +161,22 @@ pub fn portable_package(args: &[String]) -> Result<()> {
     let arch = flag(args, "--arch").unwrap_or_else(|| "x64".into());
     let root = root();
     let mut inputs = Vec::new();
-    for exe in ["bdf.exe", "bdf-cli.exe", "bdf-worker.exe", "bdf-updater.exe"] {
+    for exe in PROGRAMS {
         let p = bin.join(exe);
         if !p.is_file() {
             bail!("{} is missing; build the release binaries first", p.display());
+        }
+        // Only a warning here (some qualification builds are not static); portable-verify is what refuses it.
+        if let Ok(bytes) = std::fs::read(&p)
+            && let Ok(dlls) = pe::imported_dlls(&bytes)
+        {
+            let needed = pe::runtime_dependencies(&dlls);
+            if !needed.is_empty() {
+                eprintln!(
+                    "warning: {exe} imports {}; portable-verify will refuse this package (build with the static C runtime, see docs/bdf-portable-updates.md)",
+                    needed.join(", ")
+                );
+            }
         }
         inputs.push(Input { rel: exe.into(), source: p });
     }
@@ -284,8 +341,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        for exe in ["bdf.exe", "bdf-cli.exe", "bdf-worker.exe", "bdf-updater.exe"] {
-            std::fs::write(bin.join(exe), exe).unwrap();
+        for exe in PROGRAMS {
+            std::fs::write(bin.join(exe), pe::synthetic(&["KERNEL32.dll", "api-ms-win-crt-heap-l1-1-0.dll"])).unwrap();
         }
         let models = dir.path().join("models");
         std::fs::create_dir_all(models.join("sub")).unwrap();
@@ -328,6 +385,40 @@ mod tests {
         write_package(&partial, "0.8.3", "windows", "x64", &[Input { rel: "bdf.exe".into(), source: src }]).unwrap();
         let err = portable_verify(&[s("--zip"), partial.display().to_string(), s("--version"), s("0.8.3")]).unwrap_err().to_string();
         assert!(err.contains("does not contain"), "{err}");
+    }
+
+    /// R-1 (2026-11-18 audit): the 0.8.1 programs imported VCRUNTIME140.dll and stopped on a clean Windows, while the
+    /// documentation said no Visual C++ runtime was needed. The check that gates the package now refuses such a program,
+    /// and a file that is not a Windows program at all.
+    #[test]
+    fn a_program_that_needs_the_visual_cpp_runtime_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = |v: &str| v.to_string();
+        let build = |name: &str, cli: Vec<u8>| -> PathBuf {
+            let bin = dir.path().join(name).join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            for exe in PROGRAMS {
+                let bytes = if exe == "bdf-cli.exe" { cli.clone() } else { pe::synthetic(&["KERNEL32.dll"]) };
+                std::fs::write(bin.join(exe), bytes).unwrap();
+            }
+            let out = dir.path().join(name).join("out");
+            std::fs::create_dir_all(&out).unwrap();
+            // Packaging itself only warns, so a non-static qualification build still packages.
+            portable_package(&[s("--bin-dir"), bin.display().to_string(), s("--version"), s("0.8.3"), s("--out"), out.display().to_string()])
+                .unwrap();
+            out.join("bdf-0.8.3-windows-x64-portable.zip")
+        };
+        let verify = |zip: &Path| portable_verify(&[s("--zip"), zip.display().to_string(), s("--version"), s("0.8.3")]);
+
+        verify(&build("static", pe::synthetic(&["KERNEL32.dll", "api-ms-win-crt-heap-l1-1-0.dll"]))).unwrap();
+
+        let dynamic = verify(&build("dynamic", pe::synthetic(&["KERNEL32.dll", "VCRUNTIME140.dll"]))).unwrap_err().to_string();
+        assert!(dynamic.contains("bdf-cli.exe") && dynamic.contains("VCRUNTIME140.dll") && dynamic.contains("crt-static"), "{dynamic}");
+        let cpp = verify(&build("cpp", pe::synthetic(&["MSVCP140.dll"]))).unwrap_err().to_string();
+        assert!(cpp.contains("MSVCP140.dll"), "{cpp}");
+
+        let text = verify(&build("text", b"not a program".to_vec())).unwrap_err().to_string();
+        assert!(text.contains("bdf-cli.exe") && text.contains("not a Windows program"), "{text}");
     }
 
     #[test]
