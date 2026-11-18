@@ -2386,3 +2386,7 @@ animation effects	Off	Désactivés
 	BDF has not checked for updates yet.	BDF n'a pas encore recherché de mises à jour.
 	This document has no comments or form fields to flatten	Ce document ne contient aucun commentaire ni champ de formulaire à aplatir
 	Preview resolution: {level}	Résolution de l'aperçu : {level}
+	Duplicate	Dupliquer
+	Paste	Coller
+	Reset rotation	Réinitialiser la rotation
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Faites glisser la poignée ronde au-dessus d’une zone de texte pour la faire pivoter (Maj : pas de 15°). Ctrl+C et Ctrl+V copient et collent une zone, Suppr la supprime ; le clic droit propose la même chose.

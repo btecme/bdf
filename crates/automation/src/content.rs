@@ -85,6 +85,7 @@ impl Automation {
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
+                        v["rotate"] = json!(pdfcraft_engine::normalize_rotation(t.rotation));
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -109,6 +110,9 @@ impl Automation {
         };
         let mut t = AddedText { rect, text: a.str("text")?.to_string(), ..AddedText::default() };
         style(a, &mut t)?;
+        if let Some(degrees) = a.opt_num("rotate")? {
+            t.rotation = pdfcraft_engine::normalize_rotation(degrees);
+        }
         let mut out = self.apply(a, Edit::AddText { page, text: t })?;
         out["index"] = json!(self.doc(a)?.added.iter().filter(|x| x.page == page).count());
         Ok(out)
@@ -156,8 +160,11 @@ impl Automation {
                     t.text = s.to_string();
                 }
                 style(a, t)?;
-                if ["rotate", "flip_h", "flip_v", "crop", "image"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("rotate, flip, crop and image apply to images"));
+                if ["flip_h", "flip_v", "crop", "image"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("flip, crop and image apply to images"));
+                }
+                if let Some(degrees) = a.opt_num("rotate")? {
+                    t.rotation = pdfcraft_engine::normalize_rotation(t.rotation + degrees);
                 }
             }
             AddedContent::Image(i) => {

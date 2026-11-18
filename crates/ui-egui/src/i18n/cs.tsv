@@ -2460,3 +2460,7 @@ animation effects	Off	Vypnuto
 	BDF has not checked for updates yet.	BDF zatím nehledal aktualizace.
 	This document has no comments or form fields to flatten	Tento dokument nemá žádné komentáře ani pole formuláře ke sloučení se stránkou
 	Preview resolution: {level}	Rozlišení náhledu: {level}
+	Duplicate	Duplikovat
+	Paste	Vložit
+	Reset rotation	Obnovit otočení
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Přetažením kulatého úchytu nad textovým polem pole otočíte (Shift: kroky po 15°). Ctrl+C a Ctrl+V pole zkopírují a vloží, Delete jej odstraní; totéž nabídne pravé tlačítko myši.

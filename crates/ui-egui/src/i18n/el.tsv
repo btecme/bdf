@@ -2392,3 +2392,7 @@ animation effects	Off	Ανενεργά
 	BDF has not checked for updates yet.	Το BDF δεν έχει ελέγξει ακόμη για ενημερώσεις.
 	This document has no comments or form fields to flatten	Το έγγραφο δεν έχει σχόλια ή πεδία φόρμας για ενσωμάτωση
 	Preview resolution: {level}	Ανάλυση προεπισκόπησης: {level}
+	Duplicate	Δημιουργία αντιγράφου
+	Paste	Επικόλληση
+	Reset rotation	Επαναφορά περιστροφής
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Σύρετε τη στρογγυλή λαβή πάνω από ένα πλαίσιο κειμένου για να το περιστρέψετε (Shift: βήματα 15°). Τα Ctrl+C και Ctrl+V αντιγράφουν και επικολλούν ένα πλαίσιο, το Delete το διαγράφει· το δεξί κλικ δείχνει τα ίδια.

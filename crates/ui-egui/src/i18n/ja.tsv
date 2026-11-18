@@ -2386,3 +2386,7 @@ animation effects	Off	オフ
 	BDF has not checked for updates yet.	BDF はまだ更新を確認していません。
 	This document has no comments or form fields to flatten	この文書に統合できる注釈やフォームフィールドはありません
 	Preview resolution: {level}	プレビューの解像度: {level}
+	Duplicate	複製
+	Paste	貼り付け
+	Reset rotation	回転をリセット
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	テキストボックスの上にある丸いハンドルをドラッグすると回転できます（Shift：15°ずつ）。Ctrl+C と Ctrl+V でボックスをコピー／貼り付け、Delete で削除できます。右クリックでも同じ操作ができます。

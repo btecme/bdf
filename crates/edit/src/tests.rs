@@ -595,6 +595,66 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
+/// A text box can be turned: the turn is part of the item (it survives a reopen and a retype), is drawn about the
+/// centre of the box, and an upright item is written exactly as before.
+#[test]
+fn added_text_can_be_rotated_about_its_centre_and_stays_editable() {
+    use super::added::normalize_rotation;
+    let mut doc = fixture();
+    let upright = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Turn me".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(upright.clone())).unwrap();
+    let plain = streams(&doc, 0).join(
+        "
+",
+    );
+    assert!(!plain.contains(" cm 1 0 0 1 -"), "an upright item has no rotation in it: {plain}");
+
+    // The box is 228 wide and one 14-point line tall (16.8), so its centre is (186, 691.6).
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { rotation: 90.0, ..upright.clone() })).unwrap();
+    let turned = streams(&doc, 0).join(
+        "
+",
+    );
+    assert!(turned.contains("1 0 0 1 186 691.6 cm 0 1 -1 0 0 0 cm 1 0 0 1 -186 -691.6 cm"), "{turned}");
+    assert!(turned.contains("(Turn me) Tj"), "{turned}");
+
+    let reopened = reopen(&doc);
+    let Content::Text(t) = &list_added(&reopened)[0].content else { panic!() };
+    assert_eq!(t.rotation, 90.0);
+    assert_eq!(t.rect, [72.0, 683.2, 300.0, 700.0], "the stored box is the upright one");
+
+    // Retyping or moving keeps the turn; turning back to upright removes it again.
+    let mut doc = reopened;
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "Turned".into(), rect: [10.0, 100.0, 200.0, 120.0], ..t.clone() })).unwrap();
+    let Content::Text(t2) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!((t2.text.as_str(), t2.rotation), ("Turned", 90.0));
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { rotation: 0.0, ..t2.clone() })).unwrap();
+    assert!(
+        !streams(&doc, 0)
+            .join(
+                "
+"
+            )
+            .contains(" cm 1 0 0 1 -")
+    );
+    let Content::Text(t3) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!(t3.rotation, 0.0);
+
+    // Any angle is a turn in [0, 360); what is not a number is no turn and is refused when written.
+    assert_eq!(normalize_rotation(-90.0), 270.0);
+    assert_eq!(normalize_rotation(450.0), 90.0);
+    assert_eq!(normalize_rotation(f64::NAN), 0.0);
+    assert_eq!(normalize_rotation(f64::INFINITY), 0.0);
+    assert!((0.0..360.0).contains(&normalize_rotation(-1e-300)));
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let before = list_added(&doc);
+        assert!(update_content(&mut doc, 0, 0, &Content::Text(AddedText { rotation: bad, ..upright.clone() })).is_err());
+        assert!(add_content(&mut doc, 0, &Content::Text(AddedText { rotation: bad, ..upright.clone() })).is_err());
+        assert_eq!(list_added(&doc), before, "a refused write changes nothing");
+    }
+    assert!(add_content(&mut doc, 0, &Content::Text(AddedText { rotation: 45.0, ..upright })).is_ok(), "any finite angle is accepted");
+}
+
 #[test]
 fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     let mut doc = fixture();

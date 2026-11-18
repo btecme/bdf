@@ -2384,3 +2384,7 @@ animation effects	Off	Өшірулі
 	BDF has not checked for updates yet.	BDF жаңартуларды әлі тексермеді.
 	This document has no comments or form fields to flatten	Бұл құжатта жазықтауға жататын түсініктемелер не форма өрістері жоқ
 	Preview resolution: {level}	Алдын ала қарау ажыратымдылығы: {level}
+	Duplicate	Көшірмесін жасау
+	Paste	Қою
+	Reset rotation	Бұруды қалпына келтіру
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Мәтін жолағын бұру үшін оның үстіндегі дөңгелек тұтқаны сүйреңіз (Shift: 15° қадаммен). Ctrl+C және Ctrl+V жолақты көшіреді және қояды, Delete оны жояды; тінтуірдің оң жақ түймесі де осыны көрсетеді.

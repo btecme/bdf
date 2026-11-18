@@ -2391,3 +2391,7 @@ animation effects	Off	Izklopljeni
 	BDF has not checked for updates yet.	BDF še ni preverjal posodobitev.
 	This document has no comments or form fields to flatten	Ta dokument nima komentarjev ali polj obrazca za sploščitev
 	Preview resolution: {level}	Ločljivost predogleda: {level}
+	Duplicate	Podvoji
+	Paste	Prilepi
+	Reset rotation	Ponastavi vrtenje
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Povlecite okroglo ročico nad besedilnim poljem, da ga zavrtite (Shift: koraki po 15°). Ctrl+C in Ctrl+V polje kopirata in prilepita, Delete ga izbriše; enako ponuja desni klik.

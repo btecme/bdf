@@ -2295,3 +2295,7 @@ animation effects	Off	ఆఫ్
 	BDF has not checked for updates yet.	BDF ఇంకా అప్‌డేట్‌ల కోసం తనిఖీ చేయలేదు.
 	This document has no comments or form fields to flatten	ఈ పత్రంలో ఫ్లాటెన్ చేయడానికి వ్యాఖ్యలు లేదా ఫారమ్ ఫీల్డ్‌లు లేవు
 	Preview resolution: {level}	ప్రివ్యూ రిజల్యూషన్: {level}
+	Duplicate	నకలు చేయి
+	Paste	అతికించు
+	Reset rotation	తిప్పడాన్ని రీసెట్ చేయి
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	టెక్స్ట్ బాక్స్ పైన ఉన్న గుండ్రని హ్యాండిల్‌ను లాగి దాన్ని తిప్పండి (Shift: 15° అడుగులు). Ctrl+C, Ctrl+V బాక్స్‌ను కాపీ చేసి అతికిస్తాయి, Delete దాన్ని తొలగిస్తుంది; కుడి-క్లిక్ కూడా అదే చూపిస్తుంది.

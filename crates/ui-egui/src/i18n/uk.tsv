@@ -2408,3 +2408,7 @@ animation effects	Off	Вимкнено
 	BDF has not checked for updates yet.	BDF ще не перевіряв наявність оновлень.
 	This document has no comments or form fields to flatten	Цей документ не має коментарів чи полів форми для зведення
 	Preview resolution: {level}	Роздільна здатність попереднього перегляду: {level}
+	Duplicate	Дублювати
+	Paste	Вставити
+	Reset rotation	Скинути поворот
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Перетягніть круглий маркер над текстовим полем, щоб повернути його (Shift: крок 15°). Ctrl+C і Ctrl+V копіюють і вставляють поле, Delete видаляє його; те саме є в контекстному меню.

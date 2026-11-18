@@ -2407,3 +2407,7 @@ animation effects	Off	معطّلة
 	BDF has not checked for updates yet.	لم يتحقق BDF من التحديثات بعد.
 	This document has no comments or form fields to flatten	هذا المستند لا يحتوي على تعليقات أو حقول نماذج لتسطيحها
 	Preview resolution: {level}	دقة المعاينة: {level}
+	Duplicate	تكرار
+	Paste	لصق
+	Reset rotation	إعادة ضبط التدوير
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	اسحب المقبض الدائري فوق مربع النص لتدويره (Shift: خطوات 15°). Ctrl+C وCtrl+V لنسخ المربع ولصقه، وDelete لحذفه؛ والنقر بزر الماوس الأيمن يعرض الخيارات نفسها.

@@ -2400,3 +2400,7 @@ animation effects	Off	Desativados
 	BDF has not checked for updates yet.	O BDF ainda não procurou atualizações.
 	This document has no comments or form fields to flatten	Este documento não tem comentários nem campos de formulário para nivelar
 	Preview resolution: {level}	Resolução da visualização: {level}
+	Duplicate	Duplicar
+	Paste	Colar
+	Reset rotation	Redefinir rotação
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Arraste a alça redonda acima de uma caixa de texto para girá-la (Shift: passos de 15°). Ctrl+C e Ctrl+V copiam e colam uma caixa, Delete a exclui; o clique direito mostra o mesmo.
