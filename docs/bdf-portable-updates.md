@@ -99,8 +99,10 @@ copy runs. The workflow then asserts the artifact holds exactly the MSI and the 
   expects `configured` and the key id of that key.
 * Signing is **owner-activated and publishes nothing**: a manual run on `main` with `sign_release` and the secret
   `BDF_UPDATE_SIGNING_KEY` signs this package's `bdf-update.json`, verifies it like the app does, and uploads it as the artifact
-  `bdf-windows-x64-RELEASE-INFORMATION`. The secret is visible to that one step, is written outside the workspace and deleted.
-  No private key is in the repository and none is created by the workflow.
+  `bdf-windows-x64-RELEASE-INFORMATION`. Signing runs in its own job (`sign-release`, after the build job, in the `release`
+  environment). The signing tool is built in a step that has no secret; only the signing step receives the key, takes it out of
+  its own environment, writes it outside the workspace, runs the finished tool (not `cargo`) and deletes the file. No build
+  script ever runs with the key in its environment. No private key is in the repository and none is created by the workflow.
 
 ## Action1 deployment (Local System)
 
@@ -166,8 +168,11 @@ copy runs. The workflow then asserts the artifact holds exactly the MSI and the 
 1. **Signing key**: run `cargo xtask update-keygen` once on a trusted machine; store the private key file securely (not in this
    repository; the tool refuses a path inside it). In the repository settings add the public key as the **variable**
    `BDF_UPDATE_PUBKEY` and, to let the workflow sign, the private key as the **secret** `BDF_UPDATE_SIGNING_KEY` (the workflow
-   code is in place; no secret has been added by this work). A protected `release` environment with a required reviewer is a
-   sensible extra.
+   code is in place; no secret has been added by this work). The signing job names the **`release` environment**: in Settings ▸
+   Environments create `release`, set its deployment branches to `main`, add yourself as a required reviewer, and store the
+   secret **in that environment** rather than as a repository secret, so no other workflow run can read the key. (Without the
+   environment settings the job still runs, but the key is then as widely available as a repository secret.) Or keep signing
+   offline on your own machine, which keeps the key out of CI entirely.
 2. **Release hosting**: publish releases on `btecme/bdf` (assumed), with the three files above.
 3. **Two minutes at a Windows 11 desktop** for the one flow a hosted runner cannot do: in Preferences ▸ Windows integration choose
    *Make BDF my default PDF app*, choose BDF for `.pdf` on the Settings page that opens, and double-click a PDF. The rest of the

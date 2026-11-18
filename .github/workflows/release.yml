@@ -5,7 +5,8 @@
 # Apple and Windows signing secrets, and created a draft GitHub Release. BDF has no signing identity of
 # its own yet, so this one:
 #   * runs only by hand, or as a dry run when the packaging inputs change in a pull request;
-#   * declares read-only repository permissions and is given no secrets, so it cannot sign or publish;
+#   * declares read-only repository permissions and the build job is given no secrets, so it cannot sign or publish (only the
+#     separate, owner-activated `sign-release` job below can read the update signing key, and it publishes nothing either);
 #   * produces the MSI and the portable zip, checks the MSI statically (test-msi.ps1, inside
 #     package.ps1) and by really installing, running and uninstalling it (install-test.ps1);
 #   * the portable zip is the managed package the in-app updater and the Action1 script understand (BUILD-018): the
@@ -130,12 +131,47 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # Owner activation, off by default, publishes nothing. When the repository holds the signing key as the secret
-      # BDF_UPDATE_SIGNING_KEY and the matching public key as the variable BDF_UPDATE_PUBKEY, a manual run on main with
-      # `sign_release` set signs this exact package's release information and checks it the way the app will. The
-      # secret is visible to this step only, is written to a temporary file outside the workspace and is deleted after.
-      - name: Sign the release information (owner-activated)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && github.ref == 'refs/heads/main' && github.repository == 'btecme/bdf' }}
+  # Owner activation, off by default, publishes nothing. When the update signing key is held as the secret
+  # BDF_UPDATE_SIGNING_KEY and the matching public key as the variable BDF_UPDATE_PUBKEY, a manual run on main with
+  # `sign_release` set signs the release information of the package the job above built, and checks it the way the app
+  # will.
+  #
+  # Why this is its own job (security audit 2026-11-18, finding F-1): the key used to be an environment variable of a step
+  # that also ran `cargo run -p xtask`, so every build script and procedural macro of xtask's dependency tree was compiled
+  # with the key in its environment. Now:
+  #   * the signing tool is built in a step that has no secret, from the locked dependency graph, with no cache restored;
+  #   * the key reaches only the signing step, which runs the finished binary directly (no cargo, so no build script), takes
+  #     the key out of its own environment first, writes it to a file outside the workspace and deletes it after;
+  #   * the job names the `release` environment. Give that environment a required reviewer and limit its deployment
+  #     branches to `main` (repository Settings > Environments), and move the secret into it, so the key is not available to
+  #     any other workflow run. The workflow does not depend on those settings to work; they are what make it a boundary.
+  #   * the job has read-only permissions and the checkout keeps no token in .git/config.
+  # A pull request run never reaches this job: its `if` needs a manual dispatch on main.
+  sign-release:
+    name: Sign the release information (owner-activated)
+    needs: windows-x64
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && github.ref == 'refs/heads/main' && github.repository == 'btecme/bdf' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.0 # keep in step with rust-toolchain.toml
+      # The exact package the job above built and tested, not a rebuild.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bdf-windows-x64-UNSIGNED
+          path: dist/x64
+      - name: Build the signing tool (no secret is available to this step)
+        shell: pwsh
+        run: cargo build --locked -p xtask
+      - name: Sign the release information
         shell: pwsh
         env:
           BDF_UPDATE_SIGNING_KEY: ${{ secrets.BDF_UPDATE_SIGNING_KEY }}
@@ -144,21 +180,28 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:BDF_UPDATE_SIGNING_KEY) -or [string]::IsNullOrWhiteSpace($env:BDF_UPDATE_PUBKEY)) {
             throw 'Signing needs the secret BDF_UPDATE_SIGNING_KEY and the variable BDF_UPDATE_PUBKEY (see docs/releasing.md). Nothing was signed.'
           }
+          # Out of the process environment at once, so no program started below can inherit it.
+          $key = $env:BDF_UPDATE_SIGNING_KEY.Trim()
+          Remove-Item Env:BDF_UPDATE_SIGNING_KEY
           $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
           $zip = "dist/x64/bdf-$version-windows-x64-portable.zip"
+          $xtask = Join-Path $env:GITHUB_WORKSPACE 'target\debug\xtask.exe'
+          if (-not (Test-Path -LiteralPath $zip)) { throw "the package $zip is missing from the artifact" }
+          if (-not (Test-Path -LiteralPath $xtask)) { throw 'the signing tool was not built' }
+          # Shown so the owner can compare it with SHA256SUMS.txt in the build job before approving the result.
+          Write-Output ("package sha256: " + (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant())
           $keyFile = Join-Path $env:RUNNER_TEMP 'bdf-update-signing.key'
           try {
-            [IO.File]::WriteAllText($keyFile, $env:BDF_UPDATE_SIGNING_KEY.Trim() + "`n")
-            cargo run --locked --quiet -p xtask -- update-sign --zip $zip --version $version --key $keyFile --out dist/signed --channel stable --expect-pubkey $env:BDF_UPDATE_PUBKEY
+            [IO.File]::WriteAllText($keyFile, $key + "`n")
+            & $xtask update-sign --zip $zip --version $version --key $keyFile --out dist/signed --channel stable --expect-pubkey $env:BDF_UPDATE_PUBKEY
             if ($LASTEXITCODE) { throw 'update-sign failed' }
-            cargo run --locked --quiet -p xtask -- update-verify --release dist/signed/bdf-update.json --zip $zip --pubkey $env:BDF_UPDATE_PUBKEY
+            & $xtask update-verify --release dist/signed/bdf-update.json --zip $zip --pubkey $env:BDF_UPDATE_PUBKEY
             if ($LASTEXITCODE) { throw 'the signed release did not verify' }
           } finally {
             Remove-Item -LiteralPath $keyFile -Force -ErrorAction SilentlyContinue
           }
           Get-Content dist/signed/SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && github.ref == 'refs/heads/main' && github.repository == 'btecme/bdf' }}
         with:
           name: bdf-windows-x64-RELEASE-INFORMATION
           path: |
