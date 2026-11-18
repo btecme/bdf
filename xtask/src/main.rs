@@ -11,6 +11,7 @@ mod gates;
 mod layers;
 mod macos_integration;
 mod parity;
+mod pe;
 mod pins;
 mod release;
 mod screenshots;

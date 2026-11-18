@@ -71,12 +71,22 @@ server (`mcp --client`) has a fixed tool list that contains none of them (tested
 ```sh
 cargo xtask update-keygen --out C:\secure\bdf-update-signing.key        # once; keep the file secret and backed up; prints the public key
 $env:BDF_UPDATE_PUBKEY = "<the printed public key>"                     # release builds only; never BDF_UPDATE_CHANNEL
-cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-worker -p pdfcraft-updater
-cargo xtask portable-package --bin-dir target\release --version 0.8.0 --out dist
+$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = "-C target-feature=+crt-static"   # static C runtime, scoped to the target (see below)
+cargo build --release --locked --target x86_64-pc-windows-msvc -p pdfcraft -p pdfcraft-cli -p pdfcraft-worker -p pdfcraft-updater
+cargo xtask portable-package --bin-dir target\x86_64-pc-windows-msvc\release --version 0.8.0 --out dist
+cargo xtask portable-verify --zip dist\bdf-0.8.0-windows-x64-portable.zip --version 0.8.0   # refuses a program that needs the Visual C++ runtime
 cargo xtask update-sign --zip dist\bdf-0.8.0-windows-x64-portable.zip --version 0.8.0 --key C:\secure\bdf-update-signing.key `
   --expect-pubkey $env:BDF_UPDATE_PUBKEY --notes release-notes.txt --out dist\release
 cargo xtask update-verify --release dist\release\bdf-update.json --zip dist\release\bdf-0.8.0-windows-x64-portable.zip --pubkey $env:BDF_UPDATE_PUBKEY
 ```
+
+**Static C runtime.** The programs must be built with `-C target-feature=+crt-static`; otherwise they import `VCRUNTIME140.dll`,
+which a clean Windows does not have, and stop at first launch ("VCRUNTIME140.dll was not found"). Release 0.8.1 shipped that way
+because the recipe above built with a plain `cargo build --release`. The flag is set for the target only (`--target` plus the
+`CARGO_TARGET_..._RUSTFLAGS` variable), so build scripts and procedural macros, which run on the host, are unaffected; that is what
+`packaging/windows/package.ps1` does, and it is the preferred route (the hosted build uses it). `portable-package` warns about a
+program that imports the Visual C++ runtime, and `portable-verify` refuses the package, so a dynamic build cannot be signed by
+mistake as long as the verify step is run.
 
 Upload `bdf-0.8.0-windows-x64-portable.zip`, `bdf-update.json` and `SHA256SUMS.txt` to the GitHub Release `v0.8.0` of
 `btecme/bdf`; BDF reads `https://github.com/btecme/bdf/releases/latest/download/bdf-update.json`. A published `latest` release
