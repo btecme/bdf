@@ -2512,3 +2512,7 @@ animation effects	Off	Desactivados
 	BDF has not checked for updates yet.	BDF aún no ha buscado actualizaciones.
 	This document has no comments or form fields to flatten	Este documento no tiene comentarios ni campos de formulario que acoplar
 	Preview resolution: {level}	Resolución de la vista previa: {level}
+	Duplicate	Duplicar
+	Paste	Pegar
+	Reset rotation	Restablecer giro
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Arrastra el tirador redondo situado sobre un cuadro de texto para girarlo (Mayús: pasos de 15°). Ctrl+C y Ctrl+V copian y pegan un cuadro, Supr lo elimina; el clic derecho muestra lo mismo.

@@ -3504,10 +3504,22 @@ fn adding_content_through_tools() {
     ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "image": "logo.png" }));
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["dirty"], true);
     assert!(matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 2, "rotate": 45 })), Err(ToolError::InvalidArgs(_))));
+    // Text turns by any angle about its centre (relative, counter-clockwise) and reports it; flips and crops are for images.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "rotate": 90 }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "rotate": 300 }));
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    assert_eq!(list["items"][0]["rotate"], 30.0, "90 + 300 turns to 30");
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "rotate": -30 }));
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][0]["rotate"], 0.0);
     assert!(
-        matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 1, "rotate": 90 })), Err(ToolError::InvalidArgs(_))),
-        "text doesn't rotate"
+        matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 1, "flip_h": true })), Err(ToolError::InvalidArgs(_))),
+        "text doesn't flip"
     );
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Slanted", "at": [60, 300], "rotate": 45 }));
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    assert_eq!(list["items"].as_array().and_then(|v| v.last()).map(|i| i["rotate"].clone()), Some(json!(45.0)));
+    // Take the extra box away again: the image is index 2 and the checks below expect the original two.
+    ok(&mut a, "content_delete", json!({ "doc": doc, "page": 1, "index": 3 }));
     ok(&mut a, "content_delete", json!({ "doc": doc, "page": 1, "index": 2 }));
     assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 1);
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));

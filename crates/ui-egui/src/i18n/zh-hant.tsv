@@ -2256,3 +2256,7 @@ animation effects	Off	關
 	BDF has not checked for updates yet.	BDF 尚未檢查更新。
 	This document has no comments or form fields to flatten	本文件沒有可拼合的註解或表單欄位
 	Preview resolution: {level}	預覽解析度：{level}
+	Duplicate	重複
+	Paste	貼上
+	Reset rotation	重設旋轉
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	拖曳文字方塊上方的圓形控點即可旋轉（Shift：每次 15°）。Ctrl+C 與 Ctrl+V 可複製並貼上文字方塊，Delete 可刪除；右鍵選單也提供相同操作。

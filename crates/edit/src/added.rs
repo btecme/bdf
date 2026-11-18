@@ -114,6 +114,9 @@ pub struct AddedText {
     pub size: f64,
     pub color: [f64; 3],
     pub align: Align,
+    /// Degrees counter-clockwise in display space, about the centre of the box; 0 is upright. Always read through
+    /// [`normalize_rotation`], which maps anything that is not a finite number to 0.
+    pub rotation: f64,
 }
 
 impl Default for AddedText {
@@ -127,8 +130,19 @@ impl Default for AddedText {
             size: 12.0,
             color: [0.0; 3],
             align: Align::Left,
+            rotation: 0.0,
         }
     }
+}
+
+/// An angle in degrees as a turn in `[0, 360)`; a value that is not a finite number is no turn.
+pub fn normalize_rotation(degrees: f64) -> f64 {
+    if !degrees.is_finite() {
+        return 0.0;
+    }
+    let d = degrees.rem_euclid(360.0);
+    // rem_euclid can return 360.0 for a tiny negative input once rounded.
+    if d >= 360.0 { 0.0 } else { d }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -704,6 +718,28 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
     let mut out = format!("q {} {} {} {} {} {} cm\n", n(view[0]), n(view[1]), n(view[2]), n(view[3]), n(view[4]), n(view[5])).into_bytes();
     match c {
         Content::Text(t) => {
+            // A rotated item turns about the centre of its box (display space, counter-clockwise).
+            let degrees = normalize_rotation(t.rotation);
+            if degrees != 0.0 {
+                let b = text_rect(t);
+                let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+                let (sin, cos) = degrees.to_radians().sin_cos();
+                out.extend(
+                    format!(
+                        "1 0 0 1 {} {} cm {} {} {} {} 0 0 cm 1 0 0 1 {} {} cm
+",
+                        n(cx),
+                        n(cy),
+                        n(cos),
+                        n(sin),
+                        n(-sin),
+                        n(cos),
+                        n(-cx),
+                        n(-cy)
+                    )
+                    .bytes(),
+                );
+            }
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);
             let mut font = Dict::new();
@@ -798,6 +834,10 @@ fn params(c: &Content) -> Dict {
                 }),
             );
             d.set(b"Rect".to_vec(), arr(&text_rect(t)));
+            let degrees = normalize_rotation(t.rotation);
+            if degrees != 0.0 {
+                d.set(b"Rotate".to_vec(), Object::Real(degrees));
+            }
         }
         Content::Image(i) => {
             d.set(b"Kind".to_vec(), Object::name("Image"));
@@ -841,6 +881,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                     Some(3) => Align::Justify,
                     _ => Align::Left,
                 },
+                rotation: normalize_rotation(d.get(b"Rotate").and_then(Object::as_f64).unwrap_or(0.0)),
             }))
         }
         b"Image" => {
@@ -937,6 +978,9 @@ fn validate(c: &Content) -> Result<(), EditError> {
         Content::Text(t) => {
             if t.text.trim().is_empty() {
                 return Err(EditError::Invalid("type some text first".into()));
+            }
+            if !t.rotation.is_finite() {
+                return Err(EditError::Invalid("the rotation must be a number".into()));
             }
             if !(t.size.is_finite() && (1.0..=500.0).contains(&t.size)) {
                 return Err(EditError::Invalid("the font size must be between 1 and 500 points".into()));

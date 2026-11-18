@@ -2385,3 +2385,7 @@ animation effects	Off	Ki
 	BDF has not checked for updates yet.	A BDF még nem keresett frissítéseket.
 	This document has no comments or form fields to flatten	Ebben a dokumentumban nincs beégethető megjegyzés vagy űrlapmező
 	Preview resolution: {level}	Előnézet felbontása: {level}
+	Duplicate	Megkettőzés
+	Paste	Beillesztés
+	Reset rotation	Forgatás visszaállítása
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Húzza a szövegdoboz feletti kerek fogantyút a forgatáshoz (Shift: 15°-os lépések). A Ctrl+C és a Ctrl+V másol és beilleszt egy dobozt, a Delete törli; a jobb gombos menü ugyanezt kínálja.

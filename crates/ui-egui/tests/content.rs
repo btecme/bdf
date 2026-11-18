@@ -360,3 +360,185 @@ fn released_text_does_not_jump_back_before_the_page_is_redrawn() {
     let (old, new) = ink_at(&mut h, from, to);
     assert!(new > 20 && old == 0, "the redrawn page has the text in its new place ({old} old, {new} new)");
 }
+
+/// Types `text` on the page, finishes it and leaves it selected. Returns its display-space box.
+fn add_text(h: &mut Harness<'static, PdfCraftApp>, text: &str, y: f32) -> [f64; 4] {
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(h, 40.0, y);
+    click(h, p);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    added(h).last().expect("the text was added").content.rect()
+}
+
+fn right_click(h: &mut Harness<'static, PdfCraftApp>, p: Pos2) {
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+}
+
+fn rotations(h: &Harness<'static, PdfCraftApp>) -> Vec<f64> {
+    added(h)
+        .into_iter()
+        .filter_map(|a| match a.content {
+            pdfcraft_engine::AddedContent::Text(t) => Some(t.rotation),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A selected text box has a round handle above it: dragging it round turns the box about its centre, the turn is one
+/// undoable change, and the text is drawn turned.
+#[test]
+fn a_selected_text_box_is_turned_with_its_rotate_grip() {
+    let mut h = harness();
+    let rect = add_text(&mut h, "MMMMMMMM", 300.0);
+    assert_eq!(rotations(&h), [0.0]);
+    let from = item_on_screen(&h, rect);
+    let mut before = 0;
+    for _ in 0..100 {
+        h.run_steps(2);
+        before = ink(&h.render().unwrap(), from.shrink2(egui::vec2(0.0, 1.0)));
+        if before > 20 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(before > 20, "the text is on the page ({before} dark pixels)");
+
+    // The grip is 26 points above the top edge, in the middle. Drag it from straight above the centre to the right of
+    // it: a quarter turn clockwise on screen, which is 270 degrees counter-clockwise.
+    let grip = pos2(from.center().x, from.min.y - 26.0);
+    h.hover_at(grip);
+    h.run_steps(1);
+    h.drag_at(grip);
+    h.run_steps(1);
+    let end = pos2(from.center().x + 90.0, from.center().y);
+    h.hover_at(end);
+    h.run_steps(2);
+    assert_eq!(rotations(&h), [0.0], "nothing is applied before release");
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [270.0]);
+    assert_eq!(added(&h)[0].content.rect(), rect, "the stored box stays the upright one");
+    {
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Edit content"));
+    }
+    // Drawn turned: the old left end of the box is bare, and the middle has ink.
+    let mut after = (usize::MAX, 0);
+    for _ in 0..100 {
+        h.run_steps(2);
+        let pixels = h.render().unwrap();
+        let ends = egui::Rect::from_min_max(from.left_top(), pos2(from.left() + from.width() * 0.2, from.bottom()));
+        let middle = egui::Rect::from_center_size(from.center(), egui::vec2(from.height() * 0.8, from.width() * 0.5));
+        after = (ink(&pixels, ends), ink(&pixels, middle));
+        if after.0 == 0 && after.1 > 20 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(after.0 == 0 && after.1 > 20, "the text stands on its end ({} ink at the old end, {} in the middle)", after.0, after.1);
+    // Undo puts it upright again.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [0.0]);
+}
+
+/// Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste a text box with its style, a little down and right of the original;
+/// text copied from elsewhere becomes a new box; Delete removes the selected box.
+#[test]
+fn text_boxes_are_copied_cut_pasted_and_deleted_from_the_keyboard() {
+    let mut h = harness();
+    let rect = add_text(&mut h, "Copy me", 300.0);
+    h.get_by_label("B").click();
+    h.run_steps(3);
+    // Copy, then paste twice: each paste lands a step further along and is the selected box.
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    assert_eq!(texts(&h), ["Copy me"], "copying changes nothing");
+    h.event(egui::Event::Paste("Copy me".into()));
+    h.run_steps(3);
+    h.event(egui::Event::Paste("Copy me".into()));
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["Copy me", "Copy me", "Copy me"]);
+    let items = added(&h);
+    let moved = |i: usize| items[i].content.rect().map(|v| v.round());
+    assert_eq!(moved(1), [rect[0] + 14.0, rect[1] - 14.0, rect[2] + 14.0, rect[3] - 14.0].map(f64::round));
+    assert_eq!(moved(2), [rect[0] + 28.0, rect[1] - 28.0, rect[2] + 28.0, rect[3] - 28.0].map(f64::round));
+    assert!(items.iter().all(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.bold)), "the style comes with it");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 2)), "the last paste is selected");
+    // Cut takes the selected box out; paste brings it back.
+    h.event(egui::Event::Cut);
+    h.run_steps(3);
+    assert_eq!(texts(&h).len(), 2);
+    h.event(egui::Event::Paste("Copy me".into()));
+    h.run_steps(3);
+    assert_eq!(texts(&h).len(), 3);
+    // Text from anywhere else makes a new box in the current style.
+    h.event(egui::Event::Paste("Words from another program".into()));
+    h.run_steps(3);
+    assert_eq!(texts(&h).last().map(String::as_str), Some("Words from another program"));
+    assert_eq!(texts(&h).len(), 4);
+    // Delete removes the selected one, and only it.
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(texts(&h).len(), 3);
+    assert!(!texts(&h).iter().any(|t| t.starts_with("Words")));
+    // Escape clears the selection, and with nothing selected Delete does nothing.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].content.selected, None);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(2);
+    assert_eq!(texts(&h).len(), 3);
+}
+
+/// Right-click on a text box: Duplicate, Rotate and Delete act on it; right-click on the page offers Paste where the click was.
+#[test]
+fn the_right_click_menu_duplicates_turns_pastes_and_deletes_text_boxes() {
+    let mut h = harness();
+    let rect = add_text(&mut h, "Menu text", 300.0);
+    let on_item = item_on_screen(&h, rect).center();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].content.selected, None);
+    // Right-click selects the box under the pointer and opens the menu.
+    right_click(&mut h, on_item);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    h.get_by_label_contains("Duplicate").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["Menu text", "Menu text"]);
+    // Rotate the copy (now selected) a quarter turn clockwise, from its own menu.
+    let copy = item_on_screen(&h, added(&h)[1].content.rect()).center();
+    right_click(&mut h, copy);
+    h.get_by_label_contains("Rotate Clockwise").click();
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [0.0, 270.0]);
+    right_click(&mut h, copy);
+    h.get_by_label_contains("Reset rotation").click();
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [0.0, 0.0]);
+    // Copy from the menu, then Paste from the menu on an empty spot: the copy's top-left corner is where the click was.
+    right_click(&mut h, on_item);
+    h.get_by_label_contains("Copy").click();
+    h.run_steps(2);
+    let empty = at(&h, 40.0, 40.0);
+    right_click(&mut h, empty);
+    h.get_by_label_contains("Paste").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h).len(), 3);
+    let placed = item_on_screen(&h, added(&h)[2].content.rect());
+    assert!((placed.left_top() - empty).length() < 3.0, "pasted at the click: {placed:?} for {empty:?}");
+    // Delete from the menu.
+    right_click(&mut h, placed.center());
+    h.get_by_label("Delete Del").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h).len(), 2);
+}

@@ -2630,3 +2630,5 @@ key	Space	Tarpas
 	BDF has not checked for updates yet.	BDF dar netikrino atnaujinimų.
 	This document has no comments or form fields to flatten	Šiame dokumente nėra suplokštinamų komentarų ar formos laukų
 	Preview resolution: {level}	Peržiūros skiriamoji geba: {level}
+	Reset rotation	Atkurti pasukimą
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Vilkite apvalią rankenėlę virš teksto langelio, kad jį pasuktumėte (Shift: 15° žingsniais). Ctrl+C ir Ctrl+V nukopijuoja ir įdeda langelį, Delete jį pašalina; dešiniojo pelės mygtuko meniu rodo tą patį.

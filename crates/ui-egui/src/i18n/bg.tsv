@@ -2349,3 +2349,7 @@ animation effects	Off	Изключени
 	BDF has not checked for updates yet.	BDF още не е проверявал за актуализации.
 	This document has no comments or form fields to flatten	Този документ няма коментари или полета на формуляри за сплескване
 	Preview resolution: {level}	Разделителна способност на прегледа: {level}
+	Duplicate	Дублирай
+	Paste	Постави
+	Reset rotation	Нулирай завъртането
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Плъзнете кръглата дръжка над текстовото поле, за да го завъртите (Shift: стъпки от 15°). Ctrl+C и Ctrl+V копират и поставят полето, Delete го премахва; десният бутон показва същото.

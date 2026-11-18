@@ -2395,3 +2395,7 @@ animation effects	Off	Disattivati
 	BDF has not checked for updates yet.	BDF non ha ancora cercato aggiornamenti.
 	This document has no comments or form fields to flatten	Questo documento non ha commenti o campi modulo da appiattire
 	Preview resolution: {level}	Risoluzione dell'anteprima: {level}
+	Duplicate	Duplica
+	Paste	Incolla
+	Reset rotation	Reimposta rotazione
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Trascina la maniglia tonda sopra una casella di testo per ruotarla (Maiusc: passi di 15°). Ctrl+C e Ctrl+V copiano e incollano una casella, Canc la elimina; il clic destro mostra le stesse azioni.

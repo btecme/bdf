@@ -2387,3 +2387,7 @@ animation effects	Off	Aus
 	BDF has not checked for updates yet.	BDF hat noch nicht nach Updates gesucht.
 	This document has no comments or form fields to flatten	Dieses Dokument hat keine Kommentare oder Formularfelder zum Reduzieren
 	Preview resolution: {level}	Vorschauauflösung: {level}
+	Duplicate	Duplizieren
+	Paste	Einfügen
+	Reset rotation	Drehung zurücksetzen
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Ziehen Sie den runden Griff über einem Textfeld, um es zu drehen (Umschalt: 15°-Schritte). Strg+C und Strg+V kopieren und fügen ein Feld ein, Entf löscht es; dasselbe zeigt das Kontextmenü (Rechtsklick).

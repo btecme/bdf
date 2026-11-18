@@ -2784,6 +2784,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let image_owns_pointer = tool == QuickTool::EditText && crate::edit_text_ui::image_owns_pointer(ui, &xf, i, info, view);
             let on_objects =
                 !image_owns_pointer && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(ui, &resp, &xf, i, doc, view);
+            if resp.secondary_clicked() {
+                // Set again below when added content takes the click.
+                view.content.menu_at = None;
+            }
             let on_content = !on_objects && editing_content && can_modify && {
                 crate::content_ui::page_input(ui, &resp, &xf, i, info, &added, tool == QuickTool::AddText, &text_style, view)
                     || tool == QuickTool::AddText
@@ -3194,6 +3198,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 return;
             }
+            // Edit mode: added text and images have their own menu (Copy, Paste, turn, Delete).
+            if editing_content && view.comments.selected.is_none() && crate::content_ui::context_menu(ui, view, info, &added, can_modify) {
+                return;
+            }
             // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
             let mut copy_image = None;
             if view.comments.selected.is_none()
@@ -3373,7 +3381,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         crate::prepare::keys(ui.ctx(), view);
     }
     if editing_content {
-        crate::content_ui::keys(ui.ctx(), view);
+        crate::content_ui::keys(ui.ctx(), view, info, &added, &text_style);
     }
     if tool == QuickTool::Link {
         crate::link_ui::keys(ui.ctx(), view);

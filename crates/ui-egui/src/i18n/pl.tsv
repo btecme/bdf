@@ -2362,3 +2362,7 @@ animation effects	Off	Wyłączone
 	BDF has not checked for updates yet.	BDF jeszcze nie sprawdzał aktualizacji.
 	This document has no comments or form fields to flatten	Ten dokument nie ma komentarzy ani pól formularza do spłaszczenia
 	Preview resolution: {level}	Rozdzielczość podglądu: {level}
+	Duplicate	Powiel
+	Paste	Wklej
+	Reset rotation	Zresetuj obrót
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Przeciągnij okrągły uchwyt nad polem tekstowym, aby je obrócić (Shift: kroki co 15°). Ctrl+C i Ctrl+V kopiują i wklejają pole, Delete je usuwa; to samo pokazuje menu prawego przycisku myszy.

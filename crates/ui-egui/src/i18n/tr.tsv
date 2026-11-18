@@ -2382,3 +2382,7 @@ animation effects	Off	Kapalı
 	BDF has not checked for updates yet.	BDF henüz güncellemeleri denetlemedi.
 	This document has no comments or form fields to flatten	Bu belgede düzleştirilecek yorum veya form alanı yok
 	Preview resolution: {level}	Önizleme çözünürlüğü: {level}
+	Duplicate	Çoğalt
+	Paste	Yapıştır
+	Reset rotation	Döndürmeyi sıfırla
+	Drag the round handle above a text box to turn it (Shift: 15° steps). Ctrl+C and Ctrl+V copy and paste a box, Delete removes it; right-click shows the same.	Bir metin kutusunu döndürmek için üstündeki yuvarlak tutamacı sürükleyin (Shift: 15° adımlar). Ctrl+C ve Ctrl+V kutuyu kopyalar ve yapıştırır, Delete siler; sağ tık da aynısını gösterir.

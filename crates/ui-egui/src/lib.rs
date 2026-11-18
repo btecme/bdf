@@ -2755,6 +2755,12 @@ impl PdfCraftApp {
         if !copy || ctx.egui_wants_keyboard_input() {
             return;
         }
+        // A selected added item copies as itself (see content_ui::keys), not as the page text behind it.
+        let editing_content =
+            (self.left_open && self.left == LeftPanel::Tool("edit")) || matches!(self.quick_tool, QuickTool::AddText | QuickTool::EditText);
+        if editing_content && self.views.get(i).is_some_and(|v| v.content.selected.is_some()) {
+            return;
+        }
         let Some((id, text)) = self.views.get(i).and_then(|v| Some((v.id, v.selected_text()?))) else { return };
         if self.may_copy(id) {
             ctx.copy_text(text);
