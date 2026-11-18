@@ -426,6 +426,14 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
+/// A row of buttons at the right edge, one button tall. `ui.with_layout(right_to_left(Center))` centres its buttons in all
+/// the height that is left, and in a dialog that is the whole window: the dialog grew taller on every frame until it ran
+/// off the top and bottom of the app.
+fn buttons_right(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), add_contents);
+}
+
 #[derive(PartialEq, Eq)]
 enum Action {
     None,
@@ -454,7 +462,7 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
             ui.label(tl!("Downloading and checking the update…"));
             ui.add(egui::ProgressBar::new(fraction).text(format!("{:.1} / {:.1} MB", got as f64 / 1e6, total as f64 / 1e6)));
             ui.add_space(8.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            buttons_right(ui, |ui| {
                 if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                     action = Action::CancelDownload;
                 }
@@ -495,7 +503,7 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
             if !s.managed {
                 ui.label(egui::RichText::new(s.managed_note.clone().unwrap_or_default()).color(t.text_muted));
                 ui.add_space(8.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                buttons_right(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Releases page"), true).clicked() {
                         action = Action::Releases;
                     }
@@ -511,7 +519,7 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
                     .color(t.text_muted),
                 );
                 ui.add_space(8.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                buttons_right(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Close BDF and update"), true).clicked() {
                         action = Action::Install;
                     }
@@ -520,7 +528,7 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
                     }
                 });
             } else {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                buttons_right(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Download update"), true).clicked() {
                         action = Action::Download;
                     }
@@ -554,7 +562,7 @@ fn body(app: &PdfCraftApp, ui: &mut egui::Ui, t: &theme::Tokens, current: &str) 
                 _ => {}
             }
             ui.add_space(8.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            buttons_right(ui, |ui| {
                 if widgets::pill_button(ui, tl!("Close"), true).clicked() {
                     action = Action::Close;
                 }

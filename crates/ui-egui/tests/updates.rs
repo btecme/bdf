@@ -541,3 +541,27 @@ fn the_dialog_says_what_actually_happened_not_up_to_date_for_everything() {
     assert_eq!(say("not_configured", None, false, false), ["cannot verify updates"]);
     assert_eq!(say("failed", Some("couldn't reach the update server"), true, false), ["Couldn't update"]);
 }
+
+/// The update window is as tall as its contents and no taller, in every state, frame after frame: it opened
+/// and then ran off the top and bottom of the app.
+#[test]
+fn the_update_window_stays_as_tall_as_its_contents() {
+    for (name, s) in [
+        ("an offer to download", status(true, true, true, false)),
+        ("an offer ready to install", status(true, true, true, true)),
+        ("an offer in a copy that cannot update itself", status(true, false, true, false)),
+        ("up to date", status(false, true, true, false)),
+    ] {
+        let fake = Fake::new(s);
+        let mut h = harness(Some(fake.clone()));
+        open_dialog(&mut h, &fake);
+        let mut heights = Vec::new();
+        for _ in 0..40 {
+            h.run_steps(1);
+            heights.push(h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("updates").with("card"))).map(|r| r.height()));
+        }
+        let last = heights.last().copied().flatten().unwrap_or_else(|| panic!("{name}: the dialog is not showing"));
+        assert!(last < 360.0, "{name}: the window is {last} points tall for a few lines of text ({heights:?})");
+        assert!(heights.iter().skip(5).all(|x| x.is_some_and(|x| (x - last).abs() < 1.0)), "{name}: the window kept changing height {heights:?}");
+    }
+}
